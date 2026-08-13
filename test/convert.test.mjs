@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -279,4 +279,56 @@ test('convertChatgptJson: 无 cwd（ChatGPT 是聊天，不归组工作区）', 
   const out = convertChatgptJson(load('chatgpt-export.json'))
   const c1 = out.conversations.find((c) => c.meta.id === 'import-conv-001')
   assert.equal(c1.meta.cwd, undefined)
+})
+
+// ---- Cursor agent transcript ----
+
+test('convertCursorJsonl: 简单问答、user_query 剥离、平衡回合', () => {
+  const out = convertCursorJsonl(load('cursor-simple.jsonl'), { cursorId: 'abc123' })
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.messages, 3) // user + assistant×2
+  assert.equal(out.toolCalls, 0)
+  assert.equal(out.meta.id, 'import-abc123') // cursorId 传入
+  const types = out.events.map((e) => e.type)
+  assert.equal(types.filter((t) => t === 'turn/end').length, 1)
+  out.events.forEach((e, i) => assert.equal(e.seq, i))
+  // user_query 标签被剥离
+  const user = out.events.find((e) => e.type === 'user/message').data
+  assert.equal(user.content[0].text, 'Create a basic python interpreter in rust.')
+  // provider
+  const asst = out.events.find((e) => e.type === 'assistant/message').data.message
+  assert.deepEqual(asst.source, { kind: 'model', provider: 'cursor', model: 'cursor' })
+})
+
+test('convertCursorJsonl: tool_use → tool/call（无 tool_result），input 对象序列化', () => {
+  const out = convertCursorJsonl(load('cursor-tool.jsonl'))
+  assert.equal(out.toolCalls, 2)
+  const calls = out.events.filter((e) => e.type === 'tool/call')
+  assert.equal(calls[0].data.name, 'Glob')
+  assert.equal(calls[0].data.arguments, '{"target_directory":".","glob_pattern":"**/*.rs"}')
+  assert.equal(calls[1].data.name, 'Read')
+  // transcript 不含 tool_result：没有 tool/result 事件
+  assert.equal(out.events.filter((e) => e.type === 'tool/result').length, 0)
+  // 平衡：最后（非 title）事件是 turn/end
+  const types = out.events.map((e) => e.type)
+  assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
+})
+
+test('convertCursorJsonl: [REDACTED] 哨兵过滤', () => {
+  const out = convertCursorJsonl(load('cursor-redacted.jsonl'))
+  assert.equal(out.turns.length, 1)
+  const texts = out.events.filter((e) => e.type === 'assistant/message').map((e) => e.data.message.content[0].text)
+  // 整段 [REDACTED] 被丢弃；含前缀的保留前缀
+  assert.deepEqual(texts, ['Applied the refactor.'])
+  assert.equal(out.messages, 2) // user + 一条有效 assistant
+})
+
+test('convertCursorJsonl: 多轮切分、畸形行计数、无 cursorId 回退时间戳 id', () => {
+  const out = convertCursorJsonl('not json\n' + load('cursor-multi-turn.jsonl'), {})
+  assert.equal(out.skipped, 1)
+  assert.equal(out.turns.length, 2)
+  const starts = out.events.filter((e) => e.type === 'turn/start')
+  assert.equal(starts.length, 2)
+  // 无 cursorId 时 id 仍合法（时间戳回退）
+  assert.match(out.meta.id, /^import-\d+$/)
 })

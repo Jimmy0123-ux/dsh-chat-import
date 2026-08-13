@@ -94,12 +94,12 @@ function makeCtx(tree) {
   return { ctx, persistence, attached, registered }
 }
 
-test('apply 注册 import_claude / import_codex / import_chatgpt 工具（single + batch 输出 schema）', () => {
+test('apply 注册 import_claude / import_codex / import_chatgpt / import_cursor 工具（single + batch 输出 schema）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 3)
+  assert.equal(registered.length, 4)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['import_chatgpt', 'import_claude', 'import_codex'])
+  assert.deepEqual(names, ['import_chatgpt', 'import_claude', 'import_codex', 'import_cursor'])
   for (const def of registered) {
     // 输出 schema 是 oneOf（单文件 / 批量）
     assert.ok(Array.isArray(def.output.schema.oneOf))
@@ -379,6 +379,58 @@ test('import_chatgpt 非法 JSON：计入 skipped 而非 failed', async () => {
   assert.equal(value.skipped, 1)
   assert.equal(value.failed, 0)
   assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+// ---- import_cursor 集成 ----
+
+test('import_cursor 单文件：composer id 从文件名派生、落盘、schema 校验', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\cursor\\composer-abc.jsonl': load('cursor-simple.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_cursor')
+  const value = await def.execute({ path: 'D:\\demo\\cursor\\composer-abc.jsonl' })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-composer-abc') // 文件名（去 .jsonl）→ composer id
+  assert.equal(value.turns, 1)
+  assert.equal(value.messages, 3)
+  assert.equal(value.alreadyImported, false)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get('import-composer-abc')
+  assert.ok(saved)
+  assert.equal(saved.events.at(-1).type, 'turn/end') // Cursor 无 title，事件以 turn/end 收尾
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+})
+
+test('import_cursor 幂等：同名 composer 文件不重复落盘', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\cursor\\composer-abc.jsonl': load('cursor-simple.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_cursor')
+  const first = await def.execute({ path: 'D:\\demo\\cursor\\composer-abc.jsonl' })
+  const second = await def.execute({ path: 'D:\\demo\\cursor\\composer-abc.jsonl' })
+  assert.equal(first.alreadyImported, false)
+  assert.equal(second.alreadyImported, true)
+  assert.equal(persistence.sessions.size, 1)
+})
+
+test('import_cursor 目录模式：递归扫描 .jsonl、逐文件独立会话', async () => {
+  const tree = {
+    'D:\\demo\\cursor': 'dir',
+    'D:\\demo\\cursor\\composer-a.jsonl': load('cursor-simple.jsonl'),
+    'D:\\demo\\cursor\\sub': 'dir',
+    'D:\\demo\\cursor\\sub\\composer-b.jsonl': load('cursor-tool.jsonl'),
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_cursor')
+  const value = await def.execute({ path: 'D:\\demo\\cursor' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  const ids = [...persistence.sessions.keys()].sort()
+  assert.deepEqual(ids, ['import-composer-a', 'import-composer-b'])
 })
 
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）

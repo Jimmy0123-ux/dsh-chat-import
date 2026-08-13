@@ -7,7 +7,7 @@
 // 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson } from './convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl } from './convert.mjs'
 
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
@@ -78,7 +78,8 @@ async function persistSession(ctx, meta, events) {
 }
 
 // 批量导入：把目录下每个 .jsonl 都作为独立会话导入。
-async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel) {
+// deriveArgs(target) 允许按文件派生转换参数（如 Cursor 从文件名取 composer id）。
+async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel, deriveArgs) {
   const files = []
   await collectJsonlFiles(ctx, dirTarget, files, recursive !== false)
   const results = []
@@ -90,7 +91,7 @@ async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel) 
     const path = target.displayPath || ctx.fs.processPath(target)
     try {
       const raw = await ctx.fs.readText(target)
-      const { meta, events, turns, messages, toolCalls, skipped: badLines } = convert(raw, {})
+      const { meta, events, turns, messages, toolCalls, skipped: badLines } = convert(raw, deriveArgs ? deriveArgs(target) : {})
       if (turns.length === 0 && events.length === 0) {
         // 不是对应源格式的 transcript（没有可导入内容）
         skipped++
@@ -178,9 +179,11 @@ async function importChatgptDirectory(ctx, dirTarget, recursive) {
 // 两个导入工具共享的 schema / render / execute 骨架，只差名称、描述、转换器与导入函数。
 // importFile/importDir 默认走单会话路径（importTranscript/importDirectory）；
 // ChatGPT 导出（一文件多会话）注入自己的实现，且 alwaysBatch（单文件也返回批量形态）。
-function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch }) {
+// deriveArgs(target) 按文件派生转换参数（Cursor 需要 composer id 做幂等 id）。
+function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs }) {
+  const derive = deriveArgs || (() => ({}))
   const importSingle = importFile || ((c, t, a) => importTranscript(c, t, a, convert))
-  const importBatch = importDir || ((c, d, r) => importDirectory(c, d, r, convert, sourceLabel))
+  const importBatch = importDir || ((c, d, r) => importDirectory(c, d, r, convert, sourceLabel, derive))
   return defineTool({
     name: toolName,
     description,
@@ -259,14 +262,17 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
       render: (args, value) => {
         if (value.mode === 'batch') {
           const bits = []
-          bits.push('共扫描 ' + value.total + ' 个 .jsonl')
+          bits.push('共扫描 ' + value.total + ' 个文件')
           if (value.imported) bits.push('新增 ' + value.imported + ' 个会话')
           if (value.alreadyImported) bits.push('已存在 ' + value.alreadyImported + ' 个')
           if (value.skipped) bits.push('跳过 ' + value.skipped + ' 个（非 ' + sourceLabel + ' transcript）')
           if (value.failed) bits.push('失败 ' + value.failed + ' 个')
+          // 错误处理打磨：失败/跳过原因要可见，不只计数（最多展示 5 条）
+          const problems = (value.results || []).filter((r) => r.status === 'failed' || r.status === 'skipped').slice(0, 5)
+          const detail = problems.map((r) => '  - ' + r.path + (r.error ? '：' + r.error : r.reason ? '：' + r.reason : ''))
           return [{
             type: 'text',
-            text: '批量导入完成：' + bits.join('，') + '。',
+            text: '批量导入完成：' + bits.join('，') + (detail.length ? '\n' + detail.join('\n') : ''),
           }]
         }
         return [{
@@ -284,12 +290,14 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         const batch = await importBatch(ctx, target, args.recursive)
         return { mode: 'batch', ...batch }
       }
+      // 单文件：合并按文件派生的转换参数（如 Cursor 的 composer id）
+      const fileArgs = { ...args, ...derive(target) }
       if (alwaysBatch) {
         // ChatGPT 导出：单文件也含多个会话，恒返回批量形态
-        const batch = await importSingle(ctx, target, args)
+        const batch = await importSingle(ctx, target, fileArgs)
         return { mode: 'batch', ...batch }
       }
-      const single = await importSingle(ctx, target, args)
+      const single = await importSingle(ctx, target, fileArgs)
       return { mode: 'single', ...single }
     },
   })
@@ -330,6 +338,23 @@ function apply(ctx) {
       'path 可以是该 .json 文件，也可以是包含多个 .json 的目录（目录模式递归扫描）。' +
       '解析 mapping 主线程（占位节点/系统消息跳过）、合成会话事件并持久化；重复导入同一会话会幂等跳过。' +
       '返回批量统计与逐会话明细。',
+  }))
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_cursor',
+    sourceLabel: 'Cursor',
+    convert: convertCursorJsonl,
+    // Cursor 行内无会话 id：用文件名（composer uuid）作稳定 id，保证幂等
+    deriveArgs: (target) => {
+      const p = target.displayPath || ctx.fs.processPath(target)
+      const base = String(p).split(/[\\/]/).pop() || ''
+      return { cursorId: base.replace(/\.jsonl$/i, '') }
+    },
+    description:
+      '从 Cursor 的 agent transcript JSONL 导入历史对话为可继续的 DSH 会话（' +
+      '~/.cursor/projects/<slug>/agent-transcripts/<composer-id>/<composer-id>.jsonl）。' +
+      'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
+      '解析 user/assistant 文本与 tool_use 调用（transcript 不含 tool_result，仅导入调用历史）；' +
+      '过滤 [REDACTED] 哨兵；重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
   }))
 }
 

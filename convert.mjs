@@ -453,3 +453,80 @@ function chatgptMessageText(msg) {
   }
   return texts.join('\n').trim()
 }
+
+// Cursor agent transcript JSONL → DSH 会话。
+//
+// 存储：~/.cursor/projects/<slug>/agent-transcripts/<composer-uuid>/<composer-uuid>.jsonl。
+// 行结构：{ role: 'user'|'assistant', message: { content: [...] } }，无 envelope。
+// content 只有 text / tool_use 两种块（input 已是解析后的对象，非 JSON 字符串）。
+// 与 Claude 的差异：
+//   - 用户首条消息包在 <user_query>…</user_query> 里（剥离标签）；
+//   - transcript 不含 tool_result（工具结果只在 bubble store 里）→ 只发 tool/call；
+//   - assistant 文本常有 "[REDACTED]" 哨兵（客户端隐私剥离）→ 过滤；
+//   - 无时间戳 / model / cwd（composer id 即会话 id）。
+export function convertCursorJsonl(raw, args = {}) {
+  const recs = []
+  let skipped = 0
+  for (const line of raw.split('\n')) {
+    const t = line.trim()
+    if (!t) continue
+    try { recs.push(JSON.parse(t)) } catch (_) { skipped++ }
+  }
+
+  const turns = []
+  let cur = null
+  let lastStep = null
+  for (const rec of recs) {
+    if (!rec || (rec.role !== 'user' && rec.role !== 'assistant')) continue
+    const content = Array.isArray(rec.message?.content) ? rec.message.content : []
+    if (rec.role === 'user') {
+      // 提取文本块（剥离 <user_query> 包裹），合成用户提问 → 新轮
+      const texts = []
+      for (const block of content) {
+        if (block && block.type === 'text' && typeof block.text === 'string') {
+          const t = block.text.replace(/<\/?user_query>/g, '').trim()
+          if (t) texts.push(t)
+        }
+      }
+      const prompt = texts.join('\n').trim()
+      if (prompt) {
+        cur = { prompt, steps: [] }
+        turns.push(cur)
+        lastStep = null
+      }
+    } else if (rec.role === 'assistant' && cur) {
+      const step = { content: [], toolCalls: [], toolResults: [] }
+      for (const block of content) {
+        if (!block) continue
+        if (block.type === 'text' && typeof block.text === 'string') {
+          const t = cursorText(block.text)
+          if (t) step.content.push({ type: 'text', text: t })
+        } else if (block.type === 'tool_use') {
+          const mapped = {
+            id: block.id || 'cursor-' + turns.length + '-' + (cur.steps.length + 1),
+            name: block.name || 'unknown',
+            arguments: JSON.stringify(block.input ?? {}),
+          }
+          step.content.push({ type: 'tool-call', ...mapped })
+          step.toolCalls.push(mapped)
+        }
+      }
+      if (step.content.length > 0 || step.toolCalls.length > 0) {
+        cur.steps.push(step)
+        lastStep = step
+      }
+    }
+  }
+
+  // Cursor 无时间戳 / 会话内 id：会话 id 由 index 层从文件名（composer uuid）传入 args.cursorId，
+  // 保证幂等；未传入时退化为时间戳（单文件手工导入仍可用）。
+  const finalId = args.sessionId || mintSessionId(args.cursorId)
+  const meta = { version: SESSION_FORMAT_VERSION, id: finalId, createdAt: Date.now() }
+  return synthesizeSession({ meta, turns, title: undefined, provider: 'cursor', model: 'cursor', skipped, records: recs.length })
+}
+
+// 过滤 Cursor 的 "[REDACTED]" 哨兵文本；整段被剥离后返回空串。
+function cursorText(text) {
+  const cleaned = text.replace(/\[REDACTED\]/g, '').trim()
+  return cleaned
+}
