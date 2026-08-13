@@ -43,7 +43,7 @@
 
 ## 构建
 
-纯 ESM，无编译步骤：`index.mjs` 即 Host 插件，无需 `tsc` / 打包。
+纯 ESM，无编译步骤：`index.mjs` 即 Host 插件入口（转换核心在无依赖的 `convert.mjs`，可独立单测），无需 `tsc` / 打包。
 
 ## 安装
 

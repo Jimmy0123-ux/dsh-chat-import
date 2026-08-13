@@ -12,8 +12,10 @@
   },
   "files": [
     "index.mjs",
+    "convert.mjs",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dsh": {
     "bundle": {
