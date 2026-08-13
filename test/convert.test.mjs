@@ -10,7 +10,7 @@ const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
 
 test('convertClaudeJsonl: 简单问答合成平衡回合', () => {
-  const out = convertClaudeJsonl(load('simple.jsonl'))
+  const out = convertClaudeJsonl(load('sess-simple-001.jsonl'))
   assert.equal(out.turns.length, 1)
   assert.equal(out.messages, 2)
   assert.equal(out.toolCalls, 0)
@@ -31,7 +31,7 @@ test('convertClaudeJsonl: 简单问答合成平衡回合', () => {
 })
 
 test('convertClaudeJsonl: 工具历史（tool/call + tool/result + thinking + 多步）', () => {
-  const out = convertClaudeJsonl(load('tool.jsonl'))
+  const out = convertClaudeJsonl(load('sess-tool-001.jsonl'))
   assert.equal(out.turns.length, 1)
   assert.equal(out.toolCalls, 1)
   const types = out.events.map((e) => e.type)
@@ -63,7 +63,7 @@ test('convertClaudeJsonl: 工具历史（tool/call + tool/result + thinking + �
 })
 
 test('convertClaudeJsonl: 多步回合（一步一个 assistant 消息）', () => {
-  const out = convertClaudeJsonl(load('multi-step.jsonl'))
+  const out = convertClaudeJsonl(load('sess-multi-001.jsonl'))
   assert.equal(out.turns.length, 1)
   assert.equal(out.turns[0].steps.length, 2)
   const steps = out.events.filter((e) => e.type === 'step/start')
@@ -80,7 +80,7 @@ test('convertClaudeJsonl: 多步回合（一步一个 assistant 消息）', () =
 })
 
 test('convertClaudeJsonl: ai-title → session/title 事件', () => {
-  const out = convertClaudeJsonl(load('title.jsonl'))
+  const out = convertClaudeJsonl(load('sess-title-001.jsonl'))
   assert.equal(out.title, '项目问题讨论')
   const titleEv = out.events.find((e) => e.type === 'session/title')
   assert.ok(titleEv)
@@ -90,14 +90,14 @@ test('convertClaudeJsonl: ai-title → session/title 事件', () => {
 })
 
 test('convertClaudeJsonl: 畸形行计数', () => {
-  const out = convertClaudeJsonl(load('malformed.jsonl'))
+  const out = convertClaudeJsonl(load('sess-bad-001.jsonl'))
   assert.equal(out.skipped, 1)
   assert.equal(out.records, 2)
   assert.equal(out.turns.length, 1)
 })
 
 test('convertClaudeJsonl: 未回答的提问也成回合', () => {
-  const out = convertClaudeJsonl(load('unanswered.jsonl'))
+  const out = convertClaudeJsonl(load('sess-empty-001.jsonl'))
   assert.equal(out.turns.length, 1)
   assert.equal(out.messages, 1)
   const types = out.events.map((e) => e.type)
@@ -105,7 +105,7 @@ test('convertClaudeJsonl: 未回答的提问也成回合', () => {
 })
 
 test('convertClaudeJsonl: sessionId 覆盖参数生效', () => {
-  const out = convertClaudeJsonl(load('simple.jsonl'), { sessionId: 'custom-id' })
+  const out = convertClaudeJsonl(load('sess-simple-001.jsonl'), { sessionId: 'custom-id' })
   assert.equal(out.meta.id, 'custom-id')
   const ids = out.events.filter((e) => e.type === 'user/message').map((e) => e.data.id)
   assert.ok(ids[0].startsWith('import:custom-id:u1'))
@@ -115,6 +115,30 @@ test('convertClaudeJsonl: 空输入不产生事件', () => {
   const out = convertClaudeJsonl('')
   assert.equal(out.events.length, 0)
   assert.equal(out.turns.length, 0)
+})
+
+test('convertClaudeJsonl: 主 transcript（fileStem 与 sessionId 一致）正常导入', () => {
+  const out = convertClaudeJsonl(load('sess-simple-001.jsonl'), { fileStem: 'sess-simple-001' })
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.meta.id, 'import-sess-simple-001')
+  assert.equal(out.skipReason, undefined)
+})
+
+test('convertClaudeJsonl: 辅助 transcript（fileStem ≠ sessionId）跳过并给原因', () => {
+  // 辅助 transcript（如 subagents/agent-*.jsonl）记录携带父 sessionId，
+  // 文件名与之不一致：不得按记录 sessionId 建会话（会与主 transcript 撞 id）
+  const out = convertClaudeJsonl(load('sess-simple-001.jsonl'), { fileStem: 'agent-abc123' })
+  assert.equal(out.meta, null)
+  assert.equal(out.events.length, 0)
+  assert.equal(out.turns.length, 0)
+  assert.ok(out.skipReason.includes('auxiliary'))
+  assert.ok(out.skipReason.includes('sess-simple-001'))
+})
+
+test('convertClaudeJsonl: 无 fileStem 参数保持原行为（纯函数直接调用不受限）', () => {
+  const out = convertClaudeJsonl(load('sess-simple-001.jsonl'))
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.meta.id, 'import-sess-simple-001')
 })
 
 test('mintSessionId: 清理非法字符并截断', () => {

@@ -32,9 +32,11 @@ async function attachToWorkspace(ctx, meta) {
 async function importTranscript(ctx, target, args, convert) {
   const raw = await ctx.fs.readText(target)
   const out = convert(raw, args)
-  // 无可导入内容（空文件 / 非目标格式）：计入 skipped，不落盘空会话
+  // 无可导入内容（空文件 / 非目标格式 / 辅助 transcript）：计入 skipped，不落盘空会话
   if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
-    return { sessionId: 'none', turns: 0, messages: 0, toolCalls: 0, skipped: 1, alreadyImported: false }
+    const res = { sessionId: 'none', turns: 0, messages: 0, toolCalls: 0, skipped: 1, alreadyImported: false }
+    if (out.skipReason) res.skipReason = out.skipReason
+    return res
   }
   const { meta, events, turns, messages, toolCalls, skipped } = out
   const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
@@ -105,11 +107,11 @@ async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel, 
     try {
       const raw = await ctx.fs.readText(target)
       const derived = deriveArgs ? await deriveArgs(target) : {}
-      const { meta, events, turns, messages, toolCalls, skipped: badLines } = convert(raw, derived)
+      const { meta, events, turns, messages, toolCalls, skipped: badLines, skipReason } = convert(raw, derived)
       if (turns.length === 0 && events.length === 0) {
-        // 不是对应源格式的 transcript（没有可导入内容）
+        // 非对应源格式 / 辅助 transcript（无用户回合）：跳过并说明原因，不落盘空会话
         skipped++
-        results.push({ path, status: 'skipped', reason: 'not a ' + sourceLabel + ' transcript (no user turns)' })
+        results.push({ path, status: 'skipped', reason: skipReason || ('not a ' + sourceLabel + ' transcript (no user turns)') })
         continue
       }
       const added = await persistSession(ctx, meta, events)
@@ -233,6 +235,7 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
               messages: { type: 'integer', required: true },
               toolCalls: { type: 'integer', required: true },
               skipped: { type: 'integer' },
+              skipReason: { type: 'string' },
               alreadyImported: { type: 'boolean', required: true },
             },
           },
@@ -280,7 +283,7 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
           bits.push('共扫描 ' + value.total + ' 个文件')
           if (value.imported) bits.push('新增 ' + value.imported + ' 个会话')
           if (value.alreadyImported) bits.push('已存在 ' + value.alreadyImported + ' 个')
-          if (value.skipped) bits.push('跳过 ' + value.skipped + ' 个（非 ' + sourceLabel + ' transcript）')
+          if (value.skipped) bits.push('跳过 ' + value.skipped + ' 个')
           if (value.failed) bits.push('失败 ' + value.failed + ' 个')
           // 错误处理打磨：失败/跳过原因要可见，不只计数（最多展示 5 条）
           const problems = (value.results || []).filter((r) => r.status === 'failed' || r.status === 'skipped').slice(0, 5)
@@ -288,6 +291,12 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
           return [{
             type: 'text',
             text: '批量导入完成：' + bits.join('，') + (detail.length ? '\n' + detail.join('\n') : ''),
+          }]
+        }
+        if (value.skipped && value.sessionId === 'none') {
+          return [{
+            type: 'text',
+            text: '跳过导入：' + (value.skipReason || '非 ' + sourceLabel + ' transcript'),
           }]
         }
         return [{
@@ -323,6 +332,13 @@ function apply(ctx) {
     toolName: 'import_claude',
     sourceLabel: 'Claude Code',
     convert: convertClaudeJsonl,
+    // 文件名 stem 传给转换器做「主 transcript」判定：subagent/workflow 辅助 transcript
+    // 记录携带父 sessionId，按它建会话会与主 transcript 撞 id 导致主内容被跳过
+    deriveArgs: (target) => {
+      const p = target.displayPath || ctx.fs.processPath(target)
+      const base = String(p).split(/[\\/]/).pop() || ''
+      return { fileStem: base.replace(/\.jsonl$/i, '') }
+    },
     description:
       '从 Claude Code 的 JSONL transcript 导入历史对话为可继续的 DSH 会话。' +
       'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +

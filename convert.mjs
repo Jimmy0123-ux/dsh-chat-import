@@ -212,6 +212,19 @@ export function convertClaudeJsonl(raw, args = {}) {
     }
   }
 
+  // 只有主 transcript（文件名 = <sessionId>.jsonl）是独立会话。Claude Code 项目目录里
+  // `<sessionId>/subagents/**` 的辅助 transcript（agent-*.jsonl 等）记录携带父 sessionId，
+  // 若按它建会话会与主 transcript 撞 id：先扫描到的文件占会话、主内容被幂等跳过而丢失。
+  // 文件名与记录 sessionId 不一致的一律跳过并给原因（单文件/目录模式一致）。
+  const fileStem = typeof args.fileStem === 'string' ? args.fileStem : null
+  if (fileStem && sourceId && fileStem !== sourceId) {
+    return {
+      meta: null, events: [], turns: [], title: null, messages: 0, toolCalls: 0,
+      skipped: 0, records: recs.length,
+      skipReason: 'auxiliary transcript (file "' + fileStem + '" does not match sessionId "' + sourceId + '"); only the main <sessionId>.jsonl becomes a session',
+    }
+  }
+
   const sessionId = args.sessionId || mintSessionId(sourceId)
   const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: createdAt ?? Date.now() }
   if (cwd) meta.cwd = cwd

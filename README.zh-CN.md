@@ -19,7 +19,7 @@
 
 ## 功能
 
-- **导入 Claude Code transcript**：读取 `~/.claude/projects/<slug>/<sessionId>.jsonl`，解析 user / assistant / tool / thinking 消息。
+- **导入 Claude Code transcript**：读取 `~/.claude/projects/<slug>/<sessionId>.jsonl`，解析 user / assistant / tool / thinking 消息。只有主 transcript（文件名 = 记录中的 `sessionId`）会导入为会话：`<sessionId>/subagents/**` 下的辅助片段 transcript（如 `agent-*.jsonl`）记录携带父 `sessionId`，会被跳过并注明原因，绝不会顶替或并入主会话。
 - **导入 Codex / ChatGPT rollout**：读取 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`（OpenAI Codex CLI 已并入 ChatGPT，格式不变），解析 `response_item` 的 message / function_call / custom_tool_call / reasoning。
 - **导入 ChatGPT 网页导出**：读取导出 ZIP 解压出的 `conversations.json`（一个文件含全部会话），沿 mapping 主线程重建对话。
 - **导入 Cursor agent transcript**：读取 `~/.cursor/projects/<slug>/agent-transcripts/<composer-id>/<composer-id>.jsonl`，解析 text / tool_use，过滤 `[REDACTED]` 哨兵。
@@ -30,7 +30,7 @@
 - **保留会话元数据**：源 `sessionId`、`cwd`、`ai-title`（Claude，钉为 `session/title`，不被自动标题覆盖）、真实 model 名（源有记录时）、创建时间。
 - **自动挂接工作区**：导入后按 `cwd` 解析/创建工作区并 `attachSession`，会话归组正确（不再「未分组」）；ChatGPT 导出与 Cursor transcript 无 `cwd` 字段，不归组。
 - **幂等导入**：目标会话已存在时跳过，不重复写入；畸形 JSONL 行计数上报，不中断。
-- **批量导入**：`path` 传目录时递归扫描 `.jsonl`（Claude / Codex / Cursor / Reasonix）或 `.json`（ChatGPT / Gemini），每个文件导入为独立会话（ChatGPT 文件内每个会话独立），返回逐文件/逐会话汇总。
+- **批量导入**：`path` 传目录时递归扫描 `.jsonl`（Claude / Codex / Cursor / Reasonix）或 `.json`（ChatGPT / Gemini），每个文件导入为独立会话（ChatGPT 文件内每个会话独立），返回逐文件/逐会话汇总。Claude 辅助 transcript（文件名 ≠ 记录中的 `sessionId`）跳过，不会并入主会话。
 
 ## 设计
 
@@ -60,6 +60,8 @@
 | `{ type: "assistant", content: [{ type: "tool_use", … }] }` | `tool/call` + `tool-call` content block |
 | `{ type: "user", content: [{ type: "tool_result", … }] }` | `tool/result`（`sourceEventSeqs` 关联 `tool/call`） |
 | 轮次结束 | `step/end` + `turn/end` |
+
+存储：主 transcript 在 `~/.claude/projects/<slug>/<sessionId>.jsonl`；同级 `<sessionId>/subagents/**` 目录存放辅助片段 transcript（`agent-*.jsonl`、workflow journal），其记录复用父 `sessionId`。导入只把主 transcript（文件名 = 记录中的 `sessionId`）当作会话——辅助文件跳过并注明原因，而不是当作（或并入）主会话，否则先被扫描到的文件会顶掉完整主对话。
 
 ### Codex / ChatGPT CLI rollout
 
@@ -195,14 +197,14 @@ import_gemini({ path: "C:\\Users\\<you>\\.gemini\\history" })
 import_reasonix({ path: "C:\\Users\\<you>\\.reasonix\\sessions" })
 ```
 
-目录模式递归扫描（`recursive: false` 可只扫顶层）所有 `.jsonl`（Claude / Codex / Cursor / Reasonix）或 `.json`（ChatGPT / Gemini）；每个文件独立导入为一个会话（ChatGPT 文件内每个会话独立导入）；非 transcript / 空文件跳过，Reasonix V2 WAL 伴生文件（`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`）排除。返回 `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`，`results` 每项含 `path`、`status`（`imported` / `already-imported` / `skipped` / `failed`）及会话统计。
+目录模式递归扫描（`recursive: false` 可只扫顶层）所有 `.jsonl`（Claude / Codex / Cursor / Reasonix）或 `.json`（ChatGPT / Gemini）；每个文件独立导入为一个会话（ChatGPT 文件内每个会话独立导入）；非 transcript / 空文件跳过，Claude 辅助 transcript（文件名 ≠ 记录中的 `sessionId`）跳过并注明原因，Reasonix V2 WAL 伴生文件（`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`）排除。返回 `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`，`results` 每项含 `path`、`status`（`imported` / `already-imported` / `skipped` / `failed`）及会话统计。
 
 ## 范围边界
 
 - 源 transcript 只读，绝不原地改写；DSH 历史事件同样 append-only（deep-frozen），只新增、不改写。
 - 不修改 DSH 引擎、apiproxy 或官方 UI 包；不发布任何服务，无需 isolate realm。
 - 读取工作区之外的 transcript 路径时，要求会话沙箱允许访问该路径。
-- 已知边界：不导入 `permission`、`summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃其 `message.content` 之外的附加字段；Codex 的 `reasoning` 内容加密不可读，跳过（计划 v1.2 补全）；ChatGPT 导出只重建主线程（分支取最后 child），工具消息按文本挂最近一步、不还原工具参数结构；Cursor transcript 不含 `tool_result`（工具结果只在 UI bubble store），仅导入 `tool/call` 历史，且 `[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方未发布稳定 schema），`thoughts` 映射 `reasoning`、内联工具结果有则导入；Reasonix 读取 `.jsonl` 转录 checkpoint（V2 的 `.events.jsonl` WAL 被排除——晚于 checkpoint 的仅事件日志会话不在覆盖范围）；目前支持 Claude Code JSONL、Codex/ChatGPT rollout、ChatGPT 网页导出、Cursor agent transcript、Gemini CLI 会话与 Reasonix 会话六种源格式。
+- 已知边界：不导入 `permission`、`summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃其 `message.content` 之外的附加字段；Claude 的 subagent / workflow 片段 transcript（文件名 ≠ 记录中的 `sessionId`）跳过，只有主 `<sessionId>.jsonl` 会成为会话；Codex 的 `reasoning` 内容加密不可读，跳过（计划 v1.2 补全）；ChatGPT 导出只重建主线程（分支取最后 child），工具消息按文本挂最近一步、不还原工具参数结构；Cursor transcript 不含 `tool_result`（工具结果只在 UI bubble store），仅导入 `tool/call` 历史，且 `[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方未发布稳定 schema），`thoughts` 映射 `reasoning`、内联工具结果有则导入；Reasonix 读取 `.jsonl` 转录 checkpoint（V2 的 `.events.jsonl` WAL 被排除——晚于 checkpoint 的仅事件日志会话不在覆盖范围）；目前支持 Claude Code JSONL、Codex/ChatGPT rollout、ChatGPT 网页导出、Cursor agent transcript、Gemini CLI 会话与 Reasonix 会话六种源格式。
 
 ## 测试
 

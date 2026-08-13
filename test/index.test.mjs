@@ -108,11 +108,11 @@ test('apply 注册六个导入工具（single + batch 输出 schema）', () => {
 })
 
 test('单文件导入：落盘、归组、返回值符合 schema', async () => {
-  const simple = load('simple.jsonl')
-  const { ctx, persistence, attached } = makeCtx({ 'D:\\demo\\proj\\simple.jsonl': simple })
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence, attached } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
   apply(ctx)
   const def = ctx.tools.register.calls ?? registeredDef(ctx)
-  const value = await def.execute({ path: 'D:\\demo\\proj\\simple.jsonl' })
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
 
   assert.equal(value.mode, 'single')
   assert.equal(value.sessionId, 'import-sess-simple-001')
@@ -138,22 +138,22 @@ test('单文件导入：落盘、归组、返回值符合 schema', async () => {
 })
 
 test('幂等：重复导入同一文件返回 alreadyImported 且不重复落盘', async () => {
-  const simple = load('simple.jsonl')
-  const { ctx, persistence } = makeCtx({ 'D:\\demo\\proj\\simple.jsonl': simple })
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
   apply(ctx)
   const def = registeredDef(ctx)
-  const first = await def.execute({ path: 'D:\\demo\\proj\\simple.jsonl' })
-  const second = await def.execute({ path: 'D:\\demo\\proj\\simple.jsonl' })
+  const first = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  const second = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
   assert.equal(first.alreadyImported, false)
   assert.equal(second.alreadyImported, true)
   assert.equal(persistence.sessions.size, 1)
 })
 
 test('单文件导入工具历史：tool/result 带 sourceEventSeqs', async () => {
-  const { ctx } = makeCtx({ 'D:\\demo\\proj\\tool.jsonl': load('tool.jsonl') })
+  const { ctx } = makeCtx({ 'D:\\demo\\proj\\sess-tool-001.jsonl': load('sess-tool-001.jsonl') })
   apply(ctx)
   const def = registeredDef(ctx)
-  const value = await def.execute({ path: 'D:\\demo\\proj\\tool.jsonl' })
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-tool-001.jsonl' })
   assert.equal(value.mode, 'single')
   assert.equal(value.toolCalls, 1)
   assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
@@ -162,11 +162,11 @@ test('单文件导入工具历史：tool/result 带 sourceEventSeqs', async () =
 test('目录批量导入：扫描 .jsonl、逐文件独立会话、跳过非 transcript、汇总符合 schema', async () => {
   const tree = {
     'D:\\demo\\proj': 'dir',
-    'D:\\demo\\proj\\a.jsonl': load('simple.jsonl'),
-    'D:\\demo\\proj\\b.jsonl': load('tool.jsonl'),
+    'D:\\demo\\proj\\sess-simple-001.jsonl': load('sess-simple-001.jsonl'),
+    'D:\\demo\\proj\\sess-tool-001.jsonl': load('sess-tool-001.jsonl'),
     'D:\\demo\\proj\\notes.txt': 'not a transcript',
     'D:\\demo\\proj\\sub': 'dir',
-    'D:\\demo\\proj\\sub\\c.jsonl': load('title.jsonl'),
+    'D:\\demo\\proj\\sub\\sess-title-001.jsonl': load('sess-title-001.jsonl'),
   }
   const { ctx, persistence, attached } = makeCtx(tree)
   apply(ctx)
@@ -193,23 +193,23 @@ test('目录批量导入：扫描 .jsonl、逐文件独立会话、跳过非 tra
 test('目录批量导入：递归参数（false 时不进子目录）', async () => {
   const tree = {
     'D:\\demo\\proj': 'dir',
-    'D:\\demo\\proj\\a.jsonl': load('simple.jsonl'),
+    'D:\\demo\\proj\\sess-simple-001.jsonl': load('sess-simple-001.jsonl'),
     'D:\\demo\\proj\\sub': 'dir',
-    'D:\\demo\\proj\\sub\\c.jsonl': load('title.jsonl'),
+    'D:\\demo\\proj\\sub\\sess-title-001.jsonl': load('sess-title-001.jsonl'),
   }
   const { ctx } = makeCtx(tree)
   apply(ctx)
   const def = registeredDef(ctx)
   const value = await def.execute({ path: 'D:\\demo\\proj', recursive: false })
   assert.equal(value.mode, 'batch')
-  assert.equal(value.total, 1) // 只扫顶层 a.jsonl
+  assert.equal(value.total, 1) // 只扫顶层 sess-simple-001.jsonl
   assert.deepEqual(value.results.map((r) => r.sessionId), ['import-sess-simple-001'])
 })
 
 test('目录批量导入：已存在会话计入 alreadyImported', async () => {
   const tree = {
     'D:\\demo\\proj': 'dir',
-    'D:\\demo\\proj\\a.jsonl': load('simple.jsonl'),
+    'D:\\demo\\proj\\sess-simple-001.jsonl': load('sess-simple-001.jsonl'),
   }
   const { ctx, persistence } = makeCtx(tree)
   apply(ctx)
@@ -235,6 +235,54 @@ test('批量导入：空文件/无内容文件计入 skipped 而非 failed', asy
   assert.equal(value.total, 1)
   assert.equal(value.skipped, 1)
   assert.equal(value.results[0].status, 'skipped')
+})
+
+test('目录批量导入：subagent 辅助 transcript 跳过，主 transcript 完整导入', async () => {
+  // Claude Code 项目目录：<sessionId>.jsonl 主 transcript + <sessionId>/subagents/agent-*.jsonl
+  // 辅助 transcript（记录携带父 sessionId）。辅助文件不得建会话（否则与主 transcript 撞 id、
+  // 先扫描者胜导致主内容丢失），只导入主 transcript。
+  const tree = {
+    'D:\\demo\\proj': 'dir',
+    'D:\\demo\\proj\\sess-simple-001.jsonl': load('sess-simple-001.jsonl'),
+    'D:\\demo\\proj\\sess-simple-001': 'dir',
+    'D:\\demo\\proj\\sess-simple-001\\subagents': 'dir',
+    'D:\\demo\\proj\\sess-simple-001\\subagents\\agent-abc123.jsonl': load('sess-simple-001.jsonl'),
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const value = await def.execute({ path: 'D:\\demo\\proj' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 1)
+  assert.equal(value.skipped, 1)
+  assert.equal(value.failed, 0)
+  const skipped = value.results.find((r) => r.status === 'skipped')
+  assert.ok(skipped)
+  assert.ok(skipped.reason.includes('auxiliary'))
+  assert.ok(skipped.path.includes('agent-abc123.jsonl'))
+  // 只有主 transcript 落盘，且内容完整（user + assistant 各 1）
+  assert.equal(persistence.sessions.size, 1)
+  const saved = persistence.sessions.get('import-sess-simple-001')
+  assert.ok(saved)
+  assert.equal(saved.events.filter((e) => e.type === 'user/message').length, 1)
+  assert.equal(saved.events.filter((e) => e.type === 'assistant/message').length, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('单文件导入辅助 transcript：跳过并返回 skipReason', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\proj\\agent-abc123.jsonl': load('sess-simple-001.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const value = await def.execute({ path: 'D:\\demo\\proj\\agent-abc123.jsonl' })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'none')
+  assert.equal(value.turns, 0)
+  assert.equal(value.skipped, 1)
+  assert.ok(value.skipReason.includes('auxiliary'))
+  assert.equal(persistence.sessions.size, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
 })
 
 // ---- import_codex 集成 ----
