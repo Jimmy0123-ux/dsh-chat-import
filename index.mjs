@@ -1,219 +1,16 @@
 // index.mjs — Claude Code JSONL transcript → DSH 会话导入器
 //
 // 消费 host 的 sessionPersistence / fs / tools / workspaceRegistry 服务，注册
-// `import_claude` 工具：读取 Claude Code 的 .jsonl transcript，把对话合成 DSH
-// 事件日志（turn/start、step/start、user/message、assistant/message、tool/call、
-// tool/result、step/end、turn/end），经 sessionPersistence.create + append 落盘，
-// 再挂接到其 cwd 对应的工作区。
+// `import_claude` 工具：读取 Claude Code 的 .jsonl transcript（单个文件或整个
+// 目录），把对话合成 DSH 事件日志（turn/start、step/start、user/message、
+// assistant/message、tool/call、tool/result、step/end、turn/end），经
+// sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { convertClaudeJsonl } from './convert.mjs'
 
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
-
-const SESSION_FORMAT_VERSION = 0
-
-function parseTime(iso) {
-  if (typeof iso === 'string') {
-    const n = Date.parse(iso)
-    if (Number.isFinite(n)) return n
-  }
-  return Date.now()
-}
-
-// 把源 sessionId 折成合法的 DSH SessionId 片段。
-function mintSessionId(sourceId) {
-  const slug = String(sourceId || '')
-    .replace(/[^a-zA-Z0-9_-]/g, '')
-    .slice(0, 64)
-  return 'import-' + (slug || String(Date.now()))
-}
-
-// Claude content block → DSH content block。文本→text、思考→reasoning、工具调用→tool-call。
-function mapContentBlock(block) {
-  if (!block) return null
-  if (block.type === 'text' && typeof block.text === 'string') return { type: 'text', text: block.text }
-  if (block.type === 'thinking' && typeof block.thinking === 'string') return { type: 'reasoning', text: block.thinking }
-  if (block.type === 'tool_use') {
-    return { type: 'tool-call', id: block.id, name: block.name, arguments: JSON.stringify(block.input ?? {}) }
-  }
-  return null
-}
-
-// 逐行解析 JSONL：直连人类提问（type==='user' 且 content 为字符串）开新轮；每条
-// assistant 消息 = 一步；其后的 tool_result 挂到最近一步。产出 { meta, events, … }。
-function convertClaudeJsonl(raw, args) {
-  const recs = []
-  let skipped = 0
-  for (const line of raw.split('\n')) {
-    const t = line.trim()
-    if (!t) continue
-    try { recs.push(JSON.parse(t)) } catch (_) { skipped++ }
-  }
-
-  let sourceId = null
-  let title = null
-  let cwd = null
-  let createdAt = null
-  let model = null
-
-  const turns = []
-  let cur = null
-  let lastStep = null
-
-  for (const rec of recs) {
-    if (rec && typeof rec.sessionId === 'string' && !sourceId) sourceId = rec.sessionId
-    if (rec && typeof rec.cwd === 'string' && !cwd) cwd = rec.cwd
-    if (rec && typeof rec.timestamp === 'string' && createdAt === null) createdAt = parseTime(rec.timestamp)
-    if (rec && rec.type === 'ai-title' && typeof rec.aiTitle === 'string' && !title) title = rec.aiTitle
-    const recModel = rec ? (rec.message?.model ?? rec.model) : undefined
-    if (typeof recModel === 'string' && !model) model = recModel
-
-    if (rec && rec.type === 'user' && rec.message && typeof rec.message.content === 'string') {
-      // 直连人类提问 → 新轮
-      cur = { prompt: rec.message.content, steps: [] }
-      turns.push(cur)
-      lastStep = null
-    } else if (rec && rec.type === 'assistant' && cur) {
-      // 一条 assistant 消息 = 一步
-      const step = { content: [], toolCalls: [], toolResults: [] }
-      if (Array.isArray(rec.message?.content)) {
-        for (const block of rec.message.content) {
-          const mapped = mapContentBlock(block)
-          if (!mapped) continue
-          if (mapped.type === 'tool-call') {
-            step.content.push(mapped)   // 助手内容里的 tool-call block
-            step.toolCalls.push(mapped) // 同时作为 tool/call 事件
-          } else {
-            step.content.push(mapped)   // text / reasoning block
-          }
-        }
-      } else if (typeof rec.message?.content === 'string') {
-        step.content.push({ type: 'text', text: rec.message.content })
-      }
-      cur.steps.push(step)
-      lastStep = step
-    } else if (rec && rec.type === 'user' && Array.isArray(rec.message?.content) && cur && lastStep) {
-      // 工具结果：挂在最近一步
-      for (const block of rec.message.content) {
-        if (block && block.type === 'tool_result') {
-          const inner = (Array.isArray(block.content) ? block.content : [])
-            .map(mapContentBlock)
-            .filter(Boolean)
-          lastStep.toolResults.push({
-            toolCallId: block.tool_use_id,
-            content: inner,
-            isError: block.is_error === true,
-          })
-        }
-      }
-    }
-  }
-
-  const sessionId = args.sessionId || mintSessionId(sourceId)
-  const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: createdAt ?? Date.now() }
-  if (cwd) meta.cwd = cwd
-
-  const events = []
-  let seq = 0
-  let turn = 0
-  const push = (type, data, surface, sourceEventSeqs) => {
-    const ev = { type, seq: seq++, time: meta.createdAt, data }
-    if (surface) ev.surfaceOp = 'append'
-    if (sourceEventSeqs) ev.sourceEventSeqs = sourceEventSeqs
-    events.push(ev)
-    return ev
-  }
-
-  const provider = 'claude-code'
-  const mname = model || 'claude-code'
-
-  for (const t of turns) {
-    turn += 1
-    push('turn/start', { turn })
-    if (t.steps.length === 0) {
-      // 只有提问、没有回复的轮次
-      push('user/message', {
-        id: 'import:' + sessionId + ':u' + turn,
-        role: 'user',
-        content: [{ type: 'text', text: t.prompt }],
-        source: { kind: 'user' },
-      }, true)
-    } else {
-      for (let i = 0; i < t.steps.length; i++) {
-        const stepNum = i + 1
-        const step = t.steps[i]
-        push('step/start', { turn, step: stepNum })
-        if (i === 0) {
-          push('user/message', {
-            id: 'import:' + sessionId + ':u' + turn,
-            role: 'user',
-            content: [{ type: 'text', text: t.prompt }],
-            source: { kind: 'user' },
-          }, true)
-        }
-        push('assistant/message', {
-          turn,
-          step: stepNum,
-          message: {
-            id: 'import:' + sessionId + ':a' + turn + ':' + stepNum,
-            role: 'assistant',
-            content: step.content,
-            source: { kind: 'model', provider, model: mname },
-          },
-        }, true)
-        const callSeqByCallId = {}
-        for (const tc of step.toolCalls) {
-          const ev = push('tool/call', {
-            turn,
-            step: stepNum,
-            callId: tc.id,
-            name: tc.name,
-            arguments: tc.arguments,
-          })
-          callSeqByCallId[tc.id] = ev.seq
-        }
-        for (const tr of step.toolResults) {
-          const callSeq = callSeqByCallId[tr.toolCallId]
-          push('tool/result', {
-            turn,
-            step: stepNum,
-            message: {
-              id: 'import:' + sessionId + ':t' + turn + ':' + stepNum + ':' + tr.toolCallId,
-              role: 'user',
-              content: [{
-                type: 'tool-result',
-                toolCallId: tr.toolCallId,
-                content: tr.content,
-                ...(tr.isError ? { isError: true } : {}),
-              }],
-              source: { kind: 'tool', callId: tr.toolCallId },
-            },
-          }, true, callSeq !== undefined ? [callSeq] : undefined)
-        }
-        push('step/end', { turn, step: stepNum })
-      }
-    }
-    push('turn/end', { turn, reason: { kind: 'completed' } })
-  }
-
-  // 标题：ai-title → session/title 事件（钉住，避免自动回退标题覆盖）。
-  const normalizedTitle = (title || '').trim()
-  if (normalizedTitle.length > 0) {
-    push('session/title', { title: normalizedTitle, messageSeqs: [], source: { kind: 'user' } })
-  }
-
-  return {
-    meta,
-    events,
-    turns,
-    title,
-    messages: events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result').length,
-    toolCalls: events.filter((e) => e.type === 'tool/call').length,
-    skipped,
-    records: recs.length,
-  }
-}
 
 // 把导入的会话挂到其 cwd 对应的工作区（否则会显示为"未分组"）。
 async function attachToWorkspace(ctx, meta) {
@@ -231,54 +28,185 @@ async function attachToWorkspace(ctx, meta) {
   }
 }
 
-function apply(ctx) {
-  ctx.tools.register(defineTool({
-    name: 'import_claude',
-    description:
-      '从 Claude Code 的 JSONL transcript 导入一条历史对话为可继续的 DSH 会话。' +
-      '读取 .jsonl 文件、解析 user/assistant/tool 消息、合成会话事件并持久化，返回新会话 id 与统计。',
-    parameters: {
-      path: {
-        type: 'string',
-        required: true,
-        description: 'Claude Code transcript (.jsonl) 的绝对路径。',
-      },
-      sessionId: {
-        type: 'string',
-        description: '可选：目标 DSH 会话 id（默认 import-<源sessionId>）。',
-      },
-    },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          sessionId: { type: 'string', required: true },
-          turns: { type: 'integer', required: true },
-          messages: { type: 'integer', required: true },
-          toolCalls: { type: 'integer', required: true },
-          skipped: { type: 'integer' },
-          alreadyImported: { type: 'boolean' },
-        },
-      },
-      render: (_args, value) => [{
-        type: 'text',
-        text: value.alreadyImported
-          ? '会话 ' + value.sessionId + ' 已存在，跳过导入（' + value.turns + ' 轮、' + value.toolCalls + ' 次工具调用）。'
-          : '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId + (value.skipped ? '（跳过 ' + value.skipped + ' 行畸形记录）' : ''),
-      }],
-    },
-    async execute(args) {
-      const target = await ctx.fs.resolve(args.path)
+// 解析单个 transcript：读取 → 转换 → 幂等落盘 → 归组。返回单文件统计。
+async function importTranscript(ctx, target, args) {
+  const raw = await ctx.fs.readText(target)
+  const { meta, events, turns, messages, toolCalls, skipped } = convertClaudeJsonl(raw, args)
+  const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
+  if (!exists) {
+    await ctx.sessionPersistence.create(meta)
+    await ctx.sessionPersistence.append(meta.id, events)
+    await attachToWorkspace(ctx, meta)
+  }
+  return { sessionId: meta.id, turns: turns.length, messages, toolCalls, skipped, alreadyImported: exists }
+}
+
+// 递归收集目录下的 .jsonl 文件（按名称稳定排序）。
+async function collectJsonlFiles(ctx, dirTarget, out, recursive) {
+  const entries = await ctx.fs.listDir(dirTarget)
+  for (const entry of entries) {
+    if (entry.type === 'directory') {
+      if (recursive) await collectJsonlFiles(ctx, entry.target, out, recursive)
+    } else if (entry.type === 'file' && /\.jsonl$/i.test(entry.name)) {
+      out.push(entry.target)
+    }
+  }
+}
+
+// 批量导入：把目录下每个 .jsonl 都作为独立会话导入。
+async function importDirectory(ctx, dirTarget, recursive) {
+  const files = []
+  await collectJsonlFiles(ctx, dirTarget, files, recursive !== false)
+  const results = []
+  let imported = 0
+  let alreadyImported = 0
+  let skipped = 0
+  let failed = 0
+  for (const target of files) {
+    const path = target.displayPath || ctx.fs.processPath(target)
+    try {
       const raw = await ctx.fs.readText(target)
-      const { meta, events, turns, messages, toolCalls, skipped } = convertClaudeJsonl(raw, args)
+      const { meta, events, turns, messages, toolCalls, skipped: badLines } = convertClaudeJsonl(raw, {})
+      if (turns.length === 0 && events.length === 0) {
+        // 不是 Claude transcript（没有可导入内容）
+        skipped++
+        results.push({ path, status: 'skipped', reason: 'not a Claude transcript (no user turns)' })
+        continue
+      }
       const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
       if (!exists) {
         await ctx.sessionPersistence.create(meta)
         await ctx.sessionPersistence.append(meta.id, events)
         await attachToWorkspace(ctx, meta)
+        imported++
+      } else {
+        alreadyImported++
       }
-      return { sessionId: meta.id, turns, messages, toolCalls, skipped, alreadyImported: exists }
+      results.push({
+        path,
+        status: exists ? 'already-imported' : 'imported',
+        sessionId: meta.id,
+        turns: turns.length,
+        messages,
+        toolCalls,
+        skipped: badLines,
+      })
+    } catch (err) {
+      failed++
+      results.push({ path, status: 'failed', error: String((err && err.message) || err) })
+    }
+  }
+  return { total: files.length, imported, alreadyImported, skipped, failed, results }
+}
+
+function apply(ctx) {
+  ctx.tools.register(defineTool({
+    name: 'import_claude',
+    description:
+      '从 Claude Code 的 JSONL transcript 导入历史对话为可继续的 DSH 会话。' +
+      'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
+      '解析 user/assistant/tool 消息、合成会话事件并持久化；重复导入同一会话会幂等跳过。' +
+      '返回新会话 id（或批量统计）与明细。',
+    parameters: {
+      path: {
+        type: 'string',
+        required: true,
+        description: 'Claude Code transcript (.jsonl) 的文件路径，或包含多个 .jsonl 的目录路径。',
+      },
+      sessionId: {
+        type: 'string',
+        description: '可选：目标 DSH 会话 id（仅单文件导入时生效，默认 import-<源sessionId>；目录模式忽略）。',
+      },
+      recursive: {
+        type: 'boolean',
+        description: '可选：目录模式是否递归子目录（默认 true）。',
+      },
+    },
+    output: {
+      schema: {
+        oneOf: [
+          // 单文件模式
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              mode: { type: 'string', enum: ['single'], required: true },
+              sessionId: { type: 'string', required: true },
+              turns: { type: 'integer', required: true },
+              messages: { type: 'integer', required: true },
+              toolCalls: { type: 'integer', required: true },
+              skipped: { type: 'integer' },
+              alreadyImported: { type: 'boolean', required: true },
+            },
+          },
+          // 目录（批量）模式
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              mode: { type: 'string', enum: ['batch'], required: true },
+              total: { type: 'integer', required: true },
+              imported: { type: 'integer', required: true },
+              alreadyImported: { type: 'integer', required: true },
+              skipped: { type: 'integer', required: true },
+              failed: { type: 'integer', required: true },
+              results: {
+                type: 'array',
+                required: true,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    path: { type: 'string', required: true },
+                    status: {
+                      type: 'string',
+                      required: true,
+                      enum: ['imported', 'already-imported', 'skipped', 'failed'],
+                    },
+                    sessionId: { type: 'string' },
+                    turns: { type: 'integer' },
+                    messages: { type: 'integer' },
+                    toolCalls: { type: 'integer' },
+                    skipped: { type: 'integer' },
+                    reason: { type: 'string' },
+                    error: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+      render: (args, value) => {
+        if (value.mode === 'batch') {
+          const bits = []
+          bits.push('共扫描 ' + value.total + ' 个 .jsonl')
+          if (value.imported) bits.push('新增 ' + value.imported + ' 个会话')
+          if (value.alreadyImported) bits.push('已存在 ' + value.alreadyImported + ' 个')
+          if (value.skipped) bits.push('跳过 ' + value.skipped + ' 个（非 transcript）')
+          if (value.failed) bits.push('失败 ' + value.failed + ' 个')
+          return [{
+            type: 'text',
+            text: '批量导入完成：' + bits.join('，') + '。',
+          }]
+        }
+        return [{
+          type: 'text',
+          text: value.alreadyImported
+            ? '会话 ' + value.sessionId + ' 已存在，跳过导入（' + value.turns + ' 轮、' + value.toolCalls + ' 次工具调用）。'
+            : '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId + (value.skipped ? '（跳过 ' + value.skipped + ' 行畸形记录）' : ''),
+        }]
+      },
+    },
+    async execute(args) {
+      const target = await ctx.fs.resolve(args.path)
+      const info = await ctx.fs.stat(target)
+      if (info && info.type === 'directory') {
+        const batch = await importDirectory(ctx, target, args.recursive)
+        return { mode: 'batch', ...batch }
+      }
+      const single = await importTranscript(ctx, target, args)
+      return { mode: 'single', ...single }
     },
   }))
 }
