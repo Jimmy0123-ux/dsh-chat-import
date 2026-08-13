@@ -669,8 +669,22 @@ function geminiToolResultText(tc) {
 //       v2：{ id, name, arguments(JSON 字符串) }（扁平）
 //   - tool：{ role, tool_call_id, name, content: string } → 挂到最近一步的
 //     tool/result，按 tool_call_id 与 assistant 的 tool_calls[].id 配对。
-// createdAt 是 unix 毫秒（v2 新增）；会话 id 用文件名 stem（index 层传
-// args.reasonixId），保证幂等。
+// createdAt 是 unix 毫秒（v2 新增）；缺省回退见 reasonixStemTime。
+// Reasonix 会话 id 取文件名 stem（index 层传 args.reasonixId），保证幂等；
+// stem 内嵌会话创建时刻（desktop-YYYYMMDDHHMM-N / subagent-sub-N-YYYYMMDDHHMM，
+// 本地时间）。转录行与 meta 都没有时间戳时回退到它，避免把导入时刻当会话创建时间。
+export function reasonixStemTime(stem) {
+  const m = String(stem || '').match(/(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})/)
+  if (!m) return null
+  const month = +m[2]
+  const day = +m[3]
+  const hour = +m[4]
+  const minute = +m[5]
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null
+  const t = new Date(+m[1], month - 1, day, hour, minute)
+  return Number.isNaN(t.getTime()) ? null : t.getTime()
+}
+
 export function convertReasonixJsonl(raw, args = {}) {
   const recs = []
   let skipped = 0
@@ -744,7 +758,7 @@ export function convertReasonixJsonl(raw, args = {}) {
   const meta = {
     version: SESSION_FORMAT_VERSION,
     id: finalId,
-    createdAt: args.createdAt || firstCreatedAt || Date.now(),
+    createdAt: args.createdAt || firstCreatedAt || reasonixStemTime(args.reasonixId) || Date.now(),
   }
   if (args.cwd) meta.cwd = args.cwd
   return synthesizeSession({ meta, turns, title: args.title, provider: 'reasonix', model: 'reasonix', skipped, records: recs.length })

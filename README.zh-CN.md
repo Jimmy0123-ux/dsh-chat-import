@@ -118,7 +118,7 @@
 
 ### Reasonix 会话 JSONL
 
-存储：`~/.reasonix/sessions/<stem>.jsonl`（`desktop-*` 桌面会话 / `subagent-sub-*` 子代理会话），每文件一个会话。行是 OpenAI 风格消息（无 envelope），兼容两代格式：v1 的 `tool_calls` 是嵌套 `{ id, type: "function", function: { name, arguments } }`，v2 是扁平 `{ id, name, arguments }` 且消息可带 `createdAt`（unix 毫秒）。工具结果（`role: "tool"` 带 `tool_call_id`）按 `tool_calls[].id` 配对。同目录 `<stem>.meta.json` 提供 `workspace` → `cwd` 与 `summary` → 钉住标题。V2 的 WAL 伴生文件（`<stem>.events.jsonl`、`.conflicts.jsonl`、`.guardian.jsonl`）是追加日志而非会话，目录扫描时排除。
+存储：`~/.reasonix/sessions/<stem>.jsonl`（`desktop-*` 桌面会话 / `subagent-sub-*` 子代理会话），每文件一个会话。行是 OpenAI 风格消息（无 envelope），兼容两代格式：v1 的 `tool_calls` 是嵌套 `{ id, type: "function", function: { name, arguments } }`，v2 是扁平 `{ id, name, arguments }` 且消息可带 `createdAt`（unix 毫秒）。工具结果（`role: "tool"` 带 `tool_call_id`）按 `tool_calls[].id` 配对。同目录 `<stem>.meta.json` 提供 `workspace` → `cwd` 与 `summary` → 钉住标题。转录与 meta 均无时间戳时，会话创建时间回退到文件名内嵌的时刻（`desktop-YYYYMMDDHHMM-*` / `subagent-sub-*-YYYYMMDDHHMM`）。V2 的 WAL 伴生文件（`<stem>.events.jsonl`、`.conflicts.jsonl`、`.guardian.jsonl`）是追加日志而非会话，目录扫描时排除。
 
 | Reasonix JSONL | DSH SessionEvent |
 | --- | --- |
@@ -130,7 +130,7 @@
 | `<stem>.meta.json`（`workspace` / `summary`） | `cwd` / `session/title` |
 | 轮次结束 | `step/end` + `turn/end` |
 
-会话头 `SessionHeader`：`version: 0`、`id: import-<源sessionId>`、`createdAt`（源时间戳，Cursor 无则取导入时刻）、`cwd`（源工作目录，ChatGPT 导出与 Cursor transcript 无）。
+会话头 `SessionHeader`：`version: 0`、`id: import-<源sessionId>`、`createdAt`（源时间戳；Reasonix 回退文件名内嵌时刻，两者皆无如 Cursor 才取导入时刻）、`cwd`（源工作目录，ChatGPT 导出与 Cursor transcript 无）。
 
 ## 构建
 

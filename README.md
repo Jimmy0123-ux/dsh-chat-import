@@ -118,7 +118,7 @@ Storage: `~/.gemini/history/<slot>/chats/session-*.json` — one JSON object per
 
 ### Reasonix session JSONL
 
-Storage: `~/.reasonix/sessions/<stem>.jsonl` (`desktop-*` desktop sessions / `subagent-sub-*` sub-agent sessions), one session per file. Lines are OpenAI-style messages without an envelope, and both format generations are accepted: v1 `tool_calls` use the nested `{ id, type: "function", function: { name, arguments } }` shape, v2 uses the flat `{ id, name, arguments }` shape and may carry a `createdAt` (unix ms). Tool results (`role: "tool"` with `tool_call_id`) pair with the assistant `tool_calls[].id`. A sibling `<stem>.meta.json` provides `workspace` → `cwd` and `summary` → pinned title. V2 WAL sidecars (`<stem>.events.jsonl`, `.conflicts.jsonl`, `.guardian.jsonl`) are append-only logs, not transcripts, and are excluded from directory scans.
+Storage: `~/.reasonix/sessions/<stem>.jsonl` (`desktop-*` desktop sessions / `subagent-sub-*` sub-agent sessions), one session per file. Lines are OpenAI-style messages without an envelope, and both format generations are accepted: v1 `tool_calls` use the nested `{ id, type: "function", function: { name, arguments } }` shape, v2 uses the flat `{ id, name, arguments }` shape and may carry a `createdAt` (unix ms). Tool results (`role: "tool"` with `tool_call_id`) pair with the assistant `tool_calls[].id`. A sibling `<stem>.meta.json` provides `workspace` → `cwd` and `summary` → pinned title. When neither the transcript nor the meta carries a timestamp, the session creation time falls back to the one embedded in the file name (`desktop-YYYYMMDDHHMM-*` / `subagent-sub-*-YYYYMMDDHHMM`). V2 WAL sidecars (`<stem>.events.jsonl`, `.conflicts.jsonl`, `.guardian.jsonl`) are append-only logs, not transcripts, and are excluded from directory scans.
 
 | Reasonix JSONL | DSH SessionEvent |
 | --- | --- |
@@ -130,7 +130,7 @@ Storage: `~/.reasonix/sessions/<stem>.jsonl` (`desktop-*` desktop sessions / `su
 | `<stem>.meta.json` (`workspace` / `summary`) | `cwd` / `session/title` |
 | turn ends | `step/end` + `turn/end` |
 
-`SessionHeader`: `version: 0`, `id: import-<source sessionId>`, `createdAt` (source timestamp; import time when the source has none, e.g. Cursor), `cwd` (source working directory; absent for ChatGPT exports and Cursor transcripts).
+`SessionHeader`: `version: 0`, `id: import-<source sessionId>`, `createdAt` (source timestamp; for Reasonix the file-name timestamp, import time when the source has neither, e.g. Cursor), `cwd` (source working directory; absent for ChatGPT exports and Cursor transcripts).
 
 ## Build
 

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -483,4 +483,17 @@ test('convertReasonixJsonl: 多轮切分、畸形行计数', () => {
   assert.equal(starts.length, 2)
   // 无 reasonixId 时退化为时间戳 id（仍合法）
   assert.match(out.meta.id, /^import-\d+$/)
+})
+
+test('convertReasonixJsonl: 转录无 createdAt 时回退文件名内嵌时间戳', () => {
+  const out = convertReasonixJsonl(load('reasonix-v1.jsonl'), { reasonixId: 'desktop-202606020721-1' })
+  // stem 内嵌 202606020721（本地时间）→ 2026-06-02 07:21，不再取导入时刻
+  assert.equal(out.meta.createdAt, new Date(2026, 5, 2, 7, 21).getTime())
+})
+
+test('reasonixStemTime: desktop/subagent 命名解析、无或非法时间戳回退 null', () => {
+  assert.equal(reasonixStemTime('desktop-202607020158-1'), new Date(2026, 6, 2, 1, 58).getTime())
+  assert.equal(reasonixStemTime('subagent-sub-1-202606030923'), new Date(2026, 5, 3, 9, 23).getTime())
+  assert.equal(reasonixStemTime('code-tmp'), null)
+  assert.equal(reasonixStemTime('desktop-202613990000-1'), null) // 非法月份
 })
