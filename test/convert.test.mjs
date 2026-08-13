@@ -141,6 +141,25 @@ test('convertClaudeJsonl: 无 fileStem 参数保持原行为（纯函数直接�
   assert.equal(out.meta.id, 'import-sess-simple-001')
 })
 
+test('convertClaudeJsonl: 跨 step 的 tool/result 仍用 sourceEventSeqs 关联其 tool/call', () => {
+  // 异步工具：调用在 step1，结果随后续 step2 到达；sourceEventSeqs 必须跨 step 关联
+  const raw = [
+    '{"sessionId":"sess-cross-001","type":"user","message":{"role":"user","content":"请查一下"}}',
+    '{"sessionId":"sess-cross-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"好"},{"type":"tool_use","id":"toolu_01","name":"fs_read","input":{}}]}}',
+    '{"sessionId":"sess-cross-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"继续"}]}}',
+    '{"sessionId":"sess-cross-001","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":[{"type":"text","text":"结果"}]}]}}',
+  ].join('\n')
+  const out = convertClaudeJsonl(raw, { fileStem: 'sess-cross-001' })
+  const call = out.events.find((e) => e.type === 'tool/call')
+  const result = out.events.find((e) => e.type === 'tool/result')
+  assert.ok(call)
+  assert.ok(result)
+  assert.equal(call.data.step, 1)
+  assert.equal(result.data.step, 2)
+  assert.deepEqual(result.sourceEventSeqs, [call.seq])
+  assert.equal(result.surfaceOp, 'append')
+})
+
 test('mintSessionId: 清理非法字符并截断', () => {
   assert.equal(mintSessionId('abc_123-def'), 'import-abc_123-def')
   // 全非法字符时回退为时间戳（仍是合法 id）

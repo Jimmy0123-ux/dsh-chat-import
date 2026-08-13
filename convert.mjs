@@ -55,6 +55,10 @@ function synthesizeSession({ meta, turns, title, provider, model, skipped, recor
 
   const mname = model || provider
 
+  // 会话级 callId → seq 索引：异步工具的 tool_result 可能晚于其 tool/call 一个或多个
+  // step 到达；按 step 重建索引会让跨 step 的结果丢失 sourceEventSeqs 关联
+  const callSeqByCallId = {}
+
   for (const t of turns) {
     turn += 1
     push('turn/start', { turn })
@@ -89,7 +93,6 @@ function synthesizeSession({ meta, turns, title, provider, model, skipped, recor
             source: { kind: 'model', provider, model: mname },
           },
         }, true)
-        const callSeqByCallId = {}
         for (const tc of step.toolCalls) {
           const ev = push('tool/call', {
             turn,
