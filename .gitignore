@@ -11,3 +11,7 @@ node_modules/
 
 # 兜底：根目录若再出现本地会话快照，同样不入库
 .prev-session*.jsonl
+
+# 编辑器 / 系统噪音
+.DS_Store
+*.log
