@@ -1,2 +1,8 @@
 # 本地交接/内部笔记 —— 不进公开仓库
 HANDOFF.md
+
+# 本地调试产物（导入测试留下的会话快照）—— 不进公开仓库
+.prev-session*.jsonl
+
+# 本地测试用的 node_modules（junction 到 DSH profile）—— 不进公开仓库
+node_modules/

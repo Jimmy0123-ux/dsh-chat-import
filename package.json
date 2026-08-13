@@ -20,5 +20,8 @@
       "patch": "./cordis.patch.yml"
     }
   },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
   "license": "MIT"
 }
