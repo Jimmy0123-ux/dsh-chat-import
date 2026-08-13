@@ -1,13 +1,13 @@
-// index.mjs — Claude Code JSONL transcript → DSH 会话导入器
+// index.mjs — 外部聊天记录（Claude Code / Codex-ChatGPT）→ DSH 会话导入器
 //
 // 消费 host 的 sessionPersistence / fs / tools / workspaceRegistry 服务，注册
-// `import_claude` 工具：读取 Claude Code 的 .jsonl transcript（单个文件或整个
-// 目录），把对话合成 DSH 事件日志（turn/start、step/start、user/message、
-// assistant/message、tool/call、tool/result、step/end、turn/end），经
-// sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区。
+// `import_claude` 与 `import_codex` 两个工具：读取各自源格式的 .jsonl transcript
+// （单个文件或整个目录），把对话合成 DSH 事件日志（turn/start、step/start、
+// user/message、assistant/message、tool/call、tool/result、step/end、turn/end），
+// 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { convertClaudeJsonl } from './convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl } from './convert.mjs'
 
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
@@ -29,9 +29,9 @@ async function attachToWorkspace(ctx, meta) {
 }
 
 // 解析单个 transcript：读取 → 转换 → 幂等落盘 → 归组。返回单文件统计。
-async function importTranscript(ctx, target, args) {
+async function importTranscript(ctx, target, args, convert) {
   const raw = await ctx.fs.readText(target)
-  const { meta, events, turns, messages, toolCalls, skipped } = convertClaudeJsonl(raw, args)
+  const { meta, events, turns, messages, toolCalls, skipped } = convert(raw, args)
   const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
   if (!exists) {
     await ctx.sessionPersistence.create(meta)
@@ -54,7 +54,7 @@ async function collectJsonlFiles(ctx, dirTarget, out, recursive) {
 }
 
 // 批量导入：把目录下每个 .jsonl 都作为独立会话导入。
-async function importDirectory(ctx, dirTarget, recursive) {
+async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel) {
   const files = []
   await collectJsonlFiles(ctx, dirTarget, files, recursive !== false)
   const results = []
@@ -66,11 +66,11 @@ async function importDirectory(ctx, dirTarget, recursive) {
     const path = target.displayPath || ctx.fs.processPath(target)
     try {
       const raw = await ctx.fs.readText(target)
-      const { meta, events, turns, messages, toolCalls, skipped: badLines } = convertClaudeJsonl(raw, {})
+      const { meta, events, turns, messages, toolCalls, skipped: badLines } = convert(raw, {})
       if (turns.length === 0 && events.length === 0) {
-        // 不是 Claude transcript（没有可导入内容）
+        // 不是对应源格式的 transcript（没有可导入内容）
         skipped++
-        results.push({ path, status: 'skipped', reason: 'not a Claude transcript (no user turns)' })
+        results.push({ path, status: 'skipped', reason: 'not a ' + sourceLabel + ' transcript (no user turns)' })
         continue
       }
       const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
@@ -99,19 +99,16 @@ async function importDirectory(ctx, dirTarget, recursive) {
   return { total: files.length, imported, alreadyImported, skipped, failed, results }
 }
 
-function apply(ctx) {
-  ctx.tools.register(defineTool({
-    name: 'import_claude',
-    description:
-      '从 Claude Code 的 JSONL transcript 导入历史对话为可继续的 DSH 会话。' +
-      'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
-      '解析 user/assistant/tool 消息、合成会话事件并持久化；重复导入同一会话会幂等跳过。' +
-      '返回新会话 id（或批量统计）与明细。',
+// 两个导入工具共享的 schema / render / execute 骨架，只差名称、描述、转换器。
+function makeImportTool(ctx, { toolName, sourceLabel, convert, description }) {
+  return defineTool({
+    name: toolName,
+    description,
     parameters: {
       path: {
         type: 'string',
         required: true,
-        description: 'Claude Code transcript (.jsonl) 的文件路径，或包含多个 .jsonl 的目录路径。',
+        description: sourceLabel + ' transcript (.jsonl) 的文件路径，或包含多个 .jsonl 的目录路径。',
       },
       sessionId: {
         type: 'string',
@@ -183,7 +180,7 @@ function apply(ctx) {
           bits.push('共扫描 ' + value.total + ' 个 .jsonl')
           if (value.imported) bits.push('新增 ' + value.imported + ' 个会话')
           if (value.alreadyImported) bits.push('已存在 ' + value.alreadyImported + ' 个')
-          if (value.skipped) bits.push('跳过 ' + value.skipped + ' 个（非 transcript）')
+          if (value.skipped) bits.push('跳过 ' + value.skipped + ' 个（非 ' + sourceLabel + ' transcript）')
           if (value.failed) bits.push('失败 ' + value.failed + ' 个')
           return [{
             type: 'text',
@@ -202,12 +199,36 @@ function apply(ctx) {
       const target = await ctx.fs.resolve(args.path)
       const info = await ctx.fs.stat(target)
       if (info && info.type === 'directory') {
-        const batch = await importDirectory(ctx, target, args.recursive)
+        const batch = await importDirectory(ctx, target, args.recursive, convert, sourceLabel)
         return { mode: 'batch', ...batch }
       }
-      const single = await importTranscript(ctx, target, args)
+      const single = await importTranscript(ctx, target, args, convert)
       return { mode: 'single', ...single }
     },
+  })
+}
+
+function apply(ctx) {
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_claude',
+    sourceLabel: 'Claude Code',
+    convert: convertClaudeJsonl,
+    description:
+      '从 Claude Code 的 JSONL transcript 导入历史对话为可继续的 DSH 会话。' +
+      'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
+      '解析 user/assistant/tool 消息、合成会话事件并持久化；重复导入同一会话会幂等跳过。' +
+      '返回新会话 id（或批量统计）与明细。',
+  }))
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_codex',
+    sourceLabel: 'Codex/ChatGPT',
+    convert: convertCodexJsonl,
+    description:
+      '从 Codex / ChatGPT CLI 的 rollout JSONL 导入历史对话为可继续的 DSH 会话（' +
+      '~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl）。' +
+      'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
+      '解析 user/assistant/function_call/custom_tool_call 消息、合成会话事件并持久化；重复导入同一会话会幂等跳过。' +
+      '返回新会话 id（或批量统计）与明细。',
   }))
 }
 

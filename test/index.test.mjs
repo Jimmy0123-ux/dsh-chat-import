@@ -89,20 +89,21 @@ function makeCtx(tree) {
       register(def) { registered.push(def); return () => {} },
     },
   }
-  // 测试辅助：取出注册的工具定义
-  ctx.tools.registered = () => registered[0]
+  // 测试辅助：按名字取出注册的工具定义
+  ctx.tools.registered = (toolName) => registered.find((d) => d.name === toolName)
   return { ctx, persistence, attached, registered }
 }
 
-test('apply 注册 import_claude 工具（single + batch 输出 schema）', () => {
+test('apply 注册 import_claude 与 import_codex 工具（single + batch 输出 schema）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 1)
-  const def = registered[0]
-  assert.equal(def.name, 'import_claude')
-  // 输出 schema 是 oneOf（单文件 / 批量）
-  assert.ok(Array.isArray(def.output.schema.oneOf))
-  assert.equal(def.output.schema.oneOf.length, 2)
+  assert.equal(registered.length, 2)
+  for (const def of registered) {
+    assert.ok(['import_claude', 'import_codex'].includes(def.name))
+    // 输出 schema 是 oneOf（单文件 / 批量）
+    assert.ok(Array.isArray(def.output.schema.oneOf))
+    assert.equal(def.output.schema.oneOf.length, 2)
+  }
 })
 
 test('单文件导入：落盘、归组、返回值符合 schema', async () => {
@@ -235,7 +236,81 @@ test('批量导入：空文件/无内容文件计入 skipped 而非 failed', asy
   assert.equal(value.results[0].status, 'skipped')
 })
 
-// 辅助：从 ctx.tools 取回定义（apply 内部调用 register）
-function registeredDef(ctx) {
-  return ctx.tools.registered()
+// ---- import_codex 集成 ----
+
+test('import_codex 单文件导入：落盘、归组、返回值符合 schema', async () => {
+  const { ctx, persistence, attached } = makeCtx({ 'D:\\demo\\codex\\simple.jsonl': load('codex-simple.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_codex')
+  const value = await def.execute({ path: 'D:\\demo\\codex\\simple.jsonl' })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-019e3b3f-636d-7cb3-aaab-0255eb45ad4f')
+  assert.equal(value.turns, 1)
+  assert.equal(value.messages, 2)
+  assert.equal(value.toolCalls, 0)
+  assert.equal(value.alreadyImported, false)
+
+  const violations = validateJsonSchemaValue(def.output.schema, value)
+  assert.deepEqual(violations, [])
+
+  const saved = persistence.sessions.get('import-019e3b3f-636d-7cb3-aaab-0255eb45ad4f')
+  assert.ok(saved)
+  assert.equal(saved.meta.cwd, 'D:\\demo\\codex-proj')
+  assert.equal(saved.events.at(-1).type, 'turn/end')
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+  assert.equal(attached.length, 1)
+  assert.equal(attached[0].id, 'import-019e3b3f-636d-7cb3-aaab-0255eb45ad4f')
+})
+
+test('import_codex 工具历史：tool/result 带 sourceEventSeqs 且 output 落盘', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\codex\\tool.jsonl': load('codex-tool.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_codex')
+  const value = await def.execute({ path: 'D:\\demo\\codex\\tool.jsonl' })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.toolCalls, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get(value.sessionId)
+  const result = saved.events.find((e) => e.type === 'tool/result')
+  assert.ok(result)
+  assert.equal(result.data.message.content[0].content[0].text, 'README.md\nsrc\n')
+})
+
+test('import_codex 目录批量导入：递归扫描、逐文件独立会话、schema 校验', async () => {
+  const tree = {
+    'D:\\demo\\codex': 'dir',
+    'D:\\demo\\codex\\a.jsonl': load('codex-simple.jsonl'),
+    'D:\\demo\\codex\\b.jsonl': load('codex-tool.jsonl'),
+  }
+  const { ctx, persistence, attached } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_codex')
+  const value = await def.execute({ path: 'D:\\demo\\codex' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.equal(value.alreadyImported, 0)
+  assert.equal(value.failed, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  assert.equal(persistence.sessions.size, 2)
+  assert.equal(attached.length, 2)
+})
+
+test('import_codex 幂等：重复导入同一文件已存在则跳过', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\codex\\a.jsonl': load('codex-simple.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_codex')
+  const first = await def.execute({ path: 'D:\\demo\\codex\\a.jsonl' })
+  const second = await def.execute({ path: 'D:\\demo\\codex\\a.jsonl' })
+  assert.equal(first.alreadyImported, false)
+  assert.equal(second.alreadyImported, true)
+  assert.equal(persistence.sessions.size, 1)
+})
+
+// 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）
+function registeredDef(ctx, toolName = 'import_claude') {
+  return ctx.tools.registered(toolName)
 }

@@ -1,7 +1,9 @@
-// convert.mjs — Claude Code JSONL transcript → DSH 会话事件（纯函数，无宿主依赖）
+// convert.mjs — 外部聊天记录 → DSH 会话事件（纯函数，无宿主依赖）
 //
-// 与 index.mjs 分离是为了可独立单元测试：本模块不 import 任何 DSH 包，
-// 输入原始 JSONL 文本 + 参数，输出 { meta, events, turns, title, … }。
+// 与 index.mjs 分离是为了可独立单元测试：本模块不 import 任何 DSH 包。
+// 每个源格式一个 `convertXxxJsonl(raw, args)`：把原始 JSONL 文本解析成统一
+// 的回合中间结构，再交给共享的 synthesizeSession 合成 DSH 事件日志，
+// 保证所有源（Claude Code / Codex-ChatGPT）事件纪律一致。
 
 export const SESSION_FORMAT_VERSION = 0
 
@@ -32,8 +34,112 @@ export function mapContentBlock(block) {
   return null
 }
 
+// 把「回合中间结构」合成平衡的 DSH 事件日志（seq 从 0 连续；surface 事件带
+// surfaceOp:'append'；tool/result 用 sourceEventSeqs 关联其 tool/call）。
+// turns: [{ prompt, steps: [{ content, toolCalls, toolResults }] }]
+function synthesizeSession({ meta, turns, title, provider, model, skipped, records }) {
+  const events = []
+  let seq = 0
+  let turn = 0
+  const push = (type, data, surface, sourceEventSeqs) => {
+    const ev = { type, seq: seq++, time: meta.createdAt, data }
+    if (surface) ev.surfaceOp = 'append'
+    if (sourceEventSeqs) ev.sourceEventSeqs = sourceEventSeqs
+    events.push(ev)
+    return ev
+  }
+
+  const mname = model || provider
+
+  for (const t of turns) {
+    turn += 1
+    push('turn/start', { turn })
+    if (t.steps.length === 0) {
+      // 只有提问、没有回复的轮次
+      push('user/message', {
+        id: 'import:' + meta.id + ':u' + turn,
+        role: 'user',
+        content: [{ type: 'text', text: t.prompt }],
+        source: { kind: 'user' },
+      }, true)
+    } else {
+      for (let i = 0; i < t.steps.length; i++) {
+        const stepNum = i + 1
+        const step = t.steps[i]
+        push('step/start', { turn, step: stepNum })
+        if (i === 0) {
+          push('user/message', {
+            id: 'import:' + meta.id + ':u' + turn,
+            role: 'user',
+            content: [{ type: 'text', text: t.prompt }],
+            source: { kind: 'user' },
+          }, true)
+        }
+        push('assistant/message', {
+          turn,
+          step: stepNum,
+          message: {
+            id: 'import:' + meta.id + ':a' + turn + ':' + stepNum,
+            role: 'assistant',
+            content: step.content,
+            source: { kind: 'model', provider, model: mname },
+          },
+        }, true)
+        const callSeqByCallId = {}
+        for (const tc of step.toolCalls) {
+          const ev = push('tool/call', {
+            turn,
+            step: stepNum,
+            callId: tc.id,
+            name: tc.name,
+            arguments: tc.arguments,
+          })
+          callSeqByCallId[tc.id] = ev.seq
+        }
+        for (const tr of step.toolResults) {
+          const callSeq = callSeqByCallId[tr.toolCallId]
+          push('tool/result', {
+            turn,
+            step: stepNum,
+            message: {
+              id: 'import:' + meta.id + ':t' + turn + ':' + stepNum + ':' + tr.toolCallId,
+              role: 'user',
+              content: [{
+                type: 'tool-result',
+                toolCallId: tr.toolCallId,
+                content: tr.content,
+                ...(tr.isError ? { isError: true } : {}),
+              }],
+              source: { kind: 'tool', callId: tr.toolCallId },
+            },
+          }, true, callSeq !== undefined ? [callSeq] : undefined)
+        }
+        push('step/end', { turn, step: stepNum })
+      }
+    }
+    push('turn/end', { turn, reason: { kind: 'completed' } })
+  }
+
+  // 标题：ai-title → session/title 事件（钉住，避免自动回退标题覆盖）。
+  const normalizedTitle = (title || '').trim()
+  if (normalizedTitle.length > 0) {
+    push('session/title', { title: normalizedTitle, messageSeqs: [], source: { kind: 'user' } })
+  }
+
+  return {
+    meta,
+    events,
+    turns,
+    title,
+    messages: events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result').length,
+    toolCalls: events.filter((e) => e.type === 'tool/call').length,
+    skipped,
+    records,
+  }
+}
+
 // 逐行解析 JSONL：直连人类提问（type==='user' 且 content 为字符串）开新轮；每条
-// assistant 消息 = 一步；其后的 tool_result 挂到最近一步。产出 { meta, events, … }。
+// assistant 消息 = 一步；其后的 tool_result 挂到最近一步。
 export function convertClaudeJsonl(raw, args = {}) {
   const recs = []
   let skipped = 0
@@ -106,103 +212,135 @@ export function convertClaudeJsonl(raw, args = {}) {
   const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: createdAt ?? Date.now() }
   if (cwd) meta.cwd = cwd
 
-  const events = []
-  let seq = 0
-  let turn = 0
-  const push = (type, data, surface, sourceEventSeqs) => {
-    const ev = { type, seq: seq++, time: meta.createdAt, data }
-    if (surface) ev.surfaceOp = 'append'
-    if (sourceEventSeqs) ev.sourceEventSeqs = sourceEventSeqs
-    events.push(ev)
-    return ev
+  return synthesizeSession({ meta, turns, title, provider: 'claude-code', model, skipped, records: recs.length })
+}
+
+// Codex / ChatGPT CLI rollout JSONL → 统一的回合中间结构。
+//
+// 行 envelope：{ timestamp, type, payload }。只消费 response_item（模型产物）与
+// session_meta / turn_context（元数据）；event_msg 的 user_message / agent_message
+// 是 response_item 的重复（schema 笔记明确警告会重复计数），一律忽略。
+// 用户消息里以 `<` 开头的块（<environment_context>、<user_instructions>、
+// <system-reminder> 等）是 harness 注入，不是人类输入，跳过。
+export function convertCodexJsonl(raw, args = {}) {
+  const recs = []
+  let skipped = 0
+  for (const line of raw.split('\n')) {
+    const t = line.trim()
+    if (!t) continue
+    try { recs.push(JSON.parse(t)) } catch (_) { skipped++ }
   }
 
-  const provider = 'claude-code'
-  const mname = model || 'claude-code'
+  let sourceId = null
+  let cwd = null
+  let createdAt = null
+  let model = null
+  let title = null
 
-  for (const t of turns) {
-    turn += 1
-    push('turn/start', { turn })
-    if (t.steps.length === 0) {
-      // 只有提问、没有回复的轮次
-      push('user/message', {
-        id: 'import:' + sessionId + ':u' + turn,
-        role: 'user',
-        content: [{ type: 'text', text: t.prompt }],
-        source: { kind: 'user' },
-      }, true)
-    } else {
-      for (let i = 0; i < t.steps.length; i++) {
-        const stepNum = i + 1
-        const step = t.steps[i]
-        push('step/start', { turn, step: stepNum })
-        if (i === 0) {
-          push('user/message', {
-            id: 'import:' + sessionId + ':u' + turn,
-            role: 'user',
-            content: [{ type: 'text', text: t.prompt }],
-            source: { kind: 'user' },
-          }, true)
-        }
-        push('assistant/message', {
-          turn,
-          step: stepNum,
-          message: {
-            id: 'import:' + sessionId + ':a' + turn + ':' + stepNum,
-            role: 'assistant',
-            content: step.content,
-            source: { kind: 'model', provider, model: mname },
-          },
-        }, true)
-        const callSeqByCallId = {}
-        for (const tc of step.toolCalls) {
-          const ev = push('tool/call', {
-            turn,
-            step: stepNum,
-            callId: tc.id,
-            name: tc.name,
-            arguments: tc.arguments,
-          })
-          callSeqByCallId[tc.id] = ev.seq
-        }
-        for (const tr of step.toolResults) {
-          const callSeq = callSeqByCallId[tr.toolCallId]
-          push('tool/result', {
-            turn,
-            step: stepNum,
-            message: {
-              id: 'import:' + sessionId + ':t' + turn + ':' + stepNum + ':' + tr.toolCallId,
-              role: 'user',
-              content: [{
-                type: 'tool-result',
-                toolCallId: tr.toolCallId,
-                content: tr.content,
-                ...(tr.isError ? { isError: true } : {}),
-              }],
-              source: { kind: 'tool', callId: tr.toolCallId },
-            },
-          }, true, callSeq !== undefined ? [callSeq] : undefined)
-        }
-        push('step/end', { turn, step: stepNum })
-      }
+  // callId → 它所属的 step（跨行配对 function_call_output）
+  const callSteps = new Map()
+
+  const turns = []
+  let cur = null
+  let lastStep = null
+
+  // 新开一个「用户提问」回合。
+  const openTurn = (prompt) => {
+    cur = { prompt, steps: [] }
+    turns.push(cur)
+    lastStep = null
+  }
+
+  // 追加一步 assistant 产物（文本 / 工具调用）；没有当前回合时忽略。
+  const openStep = () => {
+    const step = { content: [], toolCalls: [], toolResults: [] }
+    cur.steps.push(step)
+    lastStep = step
+    return step
+  }
+
+  for (const rec of recs) {
+    const env = rec && rec.type
+    const payload = rec && rec.payload
+    if (env === 'session_meta' && payload) {
+      if (!sourceId && typeof payload.id === 'string') sourceId = payload.id
+      if (!cwd && typeof payload.cwd === 'string') cwd = payload.cwd
+      if (createdAt === null) createdAt = parseTime(payload.timestamp ?? rec.timestamp)
+      continue
     }
-    push('turn/end', { turn, reason: { kind: 'completed' } })
+    if (env === 'turn_context' && payload) {
+      if (!model && typeof payload.model === 'string') model = payload.model
+      continue
+    }
+    if (env !== 'response_item' || !payload) continue
+
+    if (payload.type === 'message') {
+      if (payload.role === 'user' && Array.isArray(payload.content)) {
+        // 过滤 harness 注入，剩余文本合并为用户提问
+        const parts = []
+        for (const block of payload.content) {
+          if (block && block.type === 'input_text' && typeof block.text === 'string') {
+            if (!block.text.startsWith('<')) parts.push(block.text)
+          }
+        }
+        const prompt = parts.join('\n').trim()
+        if (prompt) openTurn(prompt)
+      } else if (payload.role === 'assistant' && cur) {
+        const step = openStep()
+        for (const block of payload.content) {
+          if (block && block.type === 'output_text' && typeof block.text === 'string') {
+            step.content.push({ type: 'text', text: block.text })
+          }
+        }
+      }
+      // developer（系统注入）忽略
+    } else if ((payload.type === 'function_call' || payload.type === 'custom_tool_call') && cur) {
+      // 挂到最近的 assistant 步骤（一步 = assistant 消息 + 其工具调用）；没有则新开一步
+      const step = lastStep || openStep()
+      const callId = payload.call_id
+      let argumentsText
+      if (payload.type === 'function_call') {
+        argumentsText = typeof payload.arguments === 'string' ? payload.arguments : JSON.stringify(payload.arguments ?? {})
+      } else {
+        // custom_tool_call（如 apply_patch）：arguments 是自由格式 input
+        argumentsText = JSON.stringify(payload.input ?? {})
+      }
+      const mapped = {
+        id: callId,
+        name: payload.name || 'unknown',
+        arguments: argumentsText,
+      }
+      step.toolCalls.push(mapped)
+      if (callId) callSteps.set(callId, step)
+    } else if ((payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') && cur) {
+      const callId = payload.call_id
+      const step = callSteps.get(callId) || lastStep || openStep()
+      // output 可能是纯字符串，也可能是 {"output": "...", "metadata": {...}} JSON 字符串
+      let text
+      const out = payload.output
+      if (typeof out === 'string') {
+        let parsed = null
+        try { parsed = JSON.parse(out) } catch (_) { /* 纯文本 */ }
+        text = parsed && typeof parsed === 'object' && typeof parsed.output === 'string'
+          ? parsed.output
+          : out
+      } else if (out && typeof out === 'object' && typeof out.output === 'string') {
+        text = out.output
+      } else {
+        text = typeof out === 'string' ? out : JSON.stringify(out ?? '')
+      }
+      step.toolResults.push({
+        toolCallId: callId,
+        content: [{ type: 'text', text }],
+        isError: false,
+      })
+    }
+    // reasoning（内容加密，通常不可读）与其余事件忽略
   }
 
-  // 标题：ai-title → session/title 事件（钉住，避免自动回退标题覆盖）。
-  const normalizedTitle = (title || '').trim()
-  if (normalizedTitle.length > 0) {
-    push('session/title', { title: normalizedTitle, messageSeqs: [], source: { kind: 'user' } })
-  }
+  const sessionId = args.sessionId || mintSessionId(sourceId)
+  const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: createdAt ?? Date.now() }
+  if (cwd) meta.cwd = cwd
 
-  return {
-    meta,
-    events,
-    turns,
-    title,
-    messages: events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result').length,
-    toolCalls: events.filter((e) => e.type === 'tool/call').length,
-    skipped,
-    records: recs.length,
-  }
+  return synthesizeSession({ meta, turns, title, provider: 'codex', model, skipped, records: recs.length })
 }
