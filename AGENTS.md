@@ -12,7 +12,7 @@ convert.mjs      转换核心（纯函数、零 DSH 依赖、可独立单测）
 cordis.patch.yml bundle 声明（insert import-claude）
 .github/         GitHub Actions CI（npm test，不进 npm 包）
 package.json     npm 包元数据；files 白名单 = 发布内容
-README.md        对外契约，行为变更必须同步
+README.md        对外契约（英文，GitHub/npm 默认）；README.zh-CN.md 中文版——行为变更必须同步两版
 LICENSE          MIT
 test/            单测 + mock ctx 集成测试（进 GitHub，不进 npm 包）
 dev/             ❌ 本地工程面：HANDOFF.md、GROWTH.md、脚本（bin/）、夹具、并发协调状态（sessions/）——永不提交
