@@ -44,10 +44,11 @@ function mapContentBlock(block) {
 // assistant 消息 = 一步；其后的 tool_result 挂到最近一步。产出 { meta, events, … }。
 function convertClaudeJsonl(raw, args) {
   const recs = []
+  let skipped = 0
   for (const line of raw.split('\n')) {
     const t = line.trim()
     if (!t) continue
-    try { recs.push(JSON.parse(t)) } catch (_) { /* 跳过畸形行 */ }
+    try { recs.push(JSON.parse(t)) } catch (_) { skipped++ }
   }
 
   let sourceId = null
@@ -209,6 +210,8 @@ function convertClaudeJsonl(raw, args) {
     title,
     messages: events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result').length,
     toolCalls: events.filter((e) => e.type === 'tool/call').length,
+    skipped,
+    records: recs.length,
   }
 }
 
@@ -254,6 +257,7 @@ function apply(ctx) {
           turns: { type: 'integer', required: true },
           messages: { type: 'integer', required: true },
           toolCalls: { type: 'integer', required: true },
+          skipped: { type: 'integer' },
           alreadyImported: { type: 'boolean' },
         },
       },
@@ -261,20 +265,20 @@ function apply(ctx) {
         type: 'text',
         text: value.alreadyImported
           ? '会话 ' + value.sessionId + ' 已存在，跳过导入（' + value.turns + ' 轮、' + value.toolCalls + ' 次工具调用）。'
-          : '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId,
+          : '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId + (value.skipped ? '（跳过 ' + value.skipped + ' 行畸形记录）' : ''),
       }],
     },
     async execute(args) {
       const target = await ctx.fs.resolve(args.path)
       const raw = await ctx.fs.readText(target)
-      const { meta, events, turns, messages, toolCalls } = convertClaudeJsonl(raw, args)
+      const { meta, events, turns, messages, toolCalls, skipped } = convertClaudeJsonl(raw, args)
       const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
       if (!exists) {
         await ctx.sessionPersistence.create(meta)
         await ctx.sessionPersistence.append(meta.id, events)
         await attachToWorkspace(ctx, meta)
       }
-      return { sessionId: meta.id, turns, messages, toolCalls, alreadyImported: exists }
+      return { sessionId: meta.id, turns, messages, toolCalls, skipped, alreadyImported: exists }
     },
   }))
 }
