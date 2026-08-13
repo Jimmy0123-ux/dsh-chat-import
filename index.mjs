@@ -1,11 +1,10 @@
-// host.js — Claude Code JSONL transcript → DSH 会话导入器（v1：文本级）
+// index.mjs — Claude Code JSONL transcript → DSH 会话导入器
 //
-// 消费 host 的 sessionPersistence / fs / tools 服务，注册一个 `import_claude`
-// 工具：读取 Claude Code 的 .jsonl transcript，把 user/assistant 文本合成 DSH
-// 事件日志（turn/start、step/start、user/message、assistant/message、step/end、
-// turn/end），再经 sessionPersistence.create + append 落盘为一条可继续的会话。
-//
-// 当前为文本级导入（工具调用 history 是 v1.1，见 README「已知限制」）。
+// 消费 host 的 sessionPersistence / fs / tools / workspaceRegistry 服务，注册
+// `import_claude` 工具：读取 Claude Code 的 .jsonl transcript，把对话合成 DSH
+// 事件日志（turn/start、step/start、user/message、assistant/message、tool/call、
+// tool/result、step/end、turn/end），经 sessionPersistence.create + append 落盘，
+// 再挂接到其 cwd 对应的工作区。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
@@ -30,22 +29,19 @@ function mintSessionId(sourceId) {
   return 'import-' + (slug || String(Date.now()))
 }
 
-// 从一条 Claude assistant 记录提取可见文本（跳过 thinking / tool_use 块）。
-function textOfAssistant(rec) {
-  const content = rec?.message?.content
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    return content
-      .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
-      .map((b) => b.text)
-      .join('')
-      .trim()
+// Claude content block → DSH content block。文本→text、思考→reasoning、工具调用→tool-call。
+function mapContentBlock(block) {
+  if (!block) return null
+  if (block.type === 'text' && typeof block.text === 'string') return { type: 'text', text: block.text }
+  if (block.type === 'thinking' && typeof block.thinking === 'string') return { type: 'reasoning', text: block.thinking }
+  if (block.type === 'tool_use') {
+    return { type: 'tool-call', id: block.id, name: block.name, arguments: JSON.stringify(block.input ?? {}) }
   }
-  return ''
+  return null
 }
 
-// 逐行解析 JSONL，按「直连人类提问」切轮：type==='user' 且 content 是字符串
-// 开新轮；其后所有 assistant 文本并入当前轮，直到下一个直连提问。
+// 逐行解析 JSONL：直连人类提问（type==='user' 且 content 为字符串）开新轮；每条
+// assistant 消息 = 一步；其后的 tool_result 挂到最近一步。产出 { meta, events, … }。
 function convertClaudeJsonl(raw, args) {
   const recs = []
   for (const line of raw.split('\n')) {
@@ -58,67 +54,156 @@ function convertClaudeJsonl(raw, args) {
   let title = null
   let cwd = null
   let createdAt = null
+  let model = null
 
   const turns = []
   let cur = null
+  let lastStep = null
+
   for (const rec of recs) {
     if (rec && typeof rec.sessionId === 'string' && !sourceId) sourceId = rec.sessionId
     if (rec && typeof rec.cwd === 'string' && !cwd) cwd = rec.cwd
     if (rec && typeof rec.timestamp === 'string' && createdAt === null) createdAt = parseTime(rec.timestamp)
     if (rec && rec.type === 'ai-title' && typeof rec.aiTitle === 'string' && !title) title = rec.aiTitle
-    if (rec && rec.type === 'user' && typeof rec.message?.content === 'string') {
-      cur = { prompt: rec.message.content, assistantText: '' }
+    const recModel = rec ? (rec.message?.model ?? rec.model) : undefined
+    if (typeof recModel === 'string' && !model) model = recModel
+
+    if (rec && rec.type === 'user' && rec.message && typeof rec.message.content === 'string') {
+      // 直连人类提问 → 新轮
+      cur = { prompt: rec.message.content, steps: [] }
       turns.push(cur)
-    } else if (cur && rec && rec.type === 'assistant') {
-      const text = textOfAssistant(rec)
-      if (text) cur.assistantText += (cur.assistantText ? '\n\n' : '') + text
+      lastStep = null
+    } else if (rec && rec.type === 'assistant' && cur) {
+      // 一条 assistant 消息 = 一步
+      const step = { content: [], toolCalls: [], toolResults: [] }
+      if (Array.isArray(rec.message?.content)) {
+        for (const block of rec.message.content) {
+          const mapped = mapContentBlock(block)
+          if (!mapped) continue
+          if (mapped.type === 'tool-call') {
+            step.content.push(mapped)   // 助手内容里的 tool-call block
+            step.toolCalls.push(mapped) // 同时作为 tool/call 事件
+          } else {
+            step.content.push(mapped)   // text / reasoning block
+          }
+        }
+      } else if (typeof rec.message?.content === 'string') {
+        step.content.push({ type: 'text', text: rec.message.content })
+      }
+      cur.steps.push(step)
+      lastStep = step
+    } else if (rec && rec.type === 'user' && Array.isArray(rec.message?.content) && cur && lastStep) {
+      // 工具结果：挂在最近一步
+      for (const block of rec.message.content) {
+        if (block && block.type === 'tool_result') {
+          const inner = (Array.isArray(block.content) ? block.content : [])
+            .map(mapContentBlock)
+            .filter(Boolean)
+          lastStep.toolResults.push({
+            toolCallId: block.tool_use_id,
+            content: inner,
+            isError: block.is_error === true,
+          })
+        }
+      }
     }
   }
 
   const sessionId = args.sessionId || mintSessionId(sourceId)
-  const meta = {
-    version: SESSION_FORMAT_VERSION,
-    id: sessionId,
-    createdAt: createdAt ?? Date.now(),
-  }
+  const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: createdAt ?? Date.now() }
   if (cwd) meta.cwd = cwd
 
   const events = []
   let seq = 0
   let turn = 0
-  const push = (type, data, surface) => {
+  const push = (type, data, surface, sourceEventSeqs) => {
     const ev = { type, seq: seq++, time: meta.createdAt, data }
     if (surface) ev.surfaceOp = 'append'
+    if (sourceEventSeqs) ev.sourceEventSeqs = sourceEventSeqs
     events.push(ev)
+    return ev
   }
+
+  const provider = 'claude-code'
+  const mname = model || 'claude-code'
 
   for (const t of turns) {
     turn += 1
     push('turn/start', { turn })
-    push('step/start', { turn, step: 1 })
-    push('user/message', {
-      id: 'import:' + sessionId + ':u' + turn,
-      role: 'user',
-      content: [{ type: 'text', text: t.prompt }],
-      source: { kind: 'user' },
-    }, true)
-    if (t.assistantText) {
-      push('assistant/message', {
-        turn,
-        step: 1,
-        message: {
-          id: 'import:' + sessionId + ':a' + turn,
-          role: 'assistant',
-          content: [{ type: 'text', text: t.assistantText }],
-          source: { kind: 'model', provider: 'claude-code', model: 'claude-code' },
-        },
+    if (t.steps.length === 0) {
+      // 只有提问、没有回复的轮次
+      push('user/message', {
+        id: 'import:' + sessionId + ':u' + turn,
+        role: 'user',
+        content: [{ type: 'text', text: t.prompt }],
+        source: { kind: 'user' },
       }, true)
+    } else {
+      for (let i = 0; i < t.steps.length; i++) {
+        const stepNum = i + 1
+        const step = t.steps[i]
+        push('step/start', { turn, step: stepNum })
+        if (i === 0) {
+          push('user/message', {
+            id: 'import:' + sessionId + ':u' + turn,
+            role: 'user',
+            content: [{ type: 'text', text: t.prompt }],
+            source: { kind: 'user' },
+          }, true)
+        }
+        push('assistant/message', {
+          turn,
+          step: stepNum,
+          message: {
+            id: 'import:' + sessionId + ':a' + turn + ':' + stepNum,
+            role: 'assistant',
+            content: step.content,
+            source: { kind: 'model', provider, model: mname },
+          },
+        }, true)
+        const callSeqByCallId = {}
+        for (const tc of step.toolCalls) {
+          const ev = push('tool/call', {
+            turn,
+            step: stepNum,
+            callId: tc.id,
+            name: tc.name,
+            arguments: tc.arguments,
+          })
+          callSeqByCallId[tc.id] = ev.seq
+        }
+        for (const tr of step.toolResults) {
+          const callSeq = callSeqByCallId[tr.toolCallId]
+          push('tool/result', {
+            turn,
+            step: stepNum,
+            message: {
+              id: 'import:' + sessionId + ':t' + turn + ':' + stepNum + ':' + tr.toolCallId,
+              role: 'user',
+              content: [{
+                type: 'tool-result',
+                toolCallId: tr.toolCallId,
+                content: tr.content,
+                ...(tr.isError ? { isError: true } : {}),
+              }],
+              source: { kind: 'tool', callId: tr.toolCallId },
+            },
+          }, true, callSeq !== undefined ? [callSeq] : undefined)
+        }
+        push('step/end', { turn, step: stepNum })
+      }
     }
-    push('step/end', { turn, step: 1 })
     push('turn/end', { turn, reason: { kind: 'completed' } })
   }
 
-  return { meta, events, turns, title, messages: events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message').length }
+  return {
+    meta,
+    events,
+    turns,
+    title,
+    messages: events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result').length,
+    toolCalls: events.filter((e) => e.type === 'tool/call').length,
+  }
 }
 
 // 把导入的会话挂到其 cwd 对应的工作区（否则会显示为"未分组"）。
@@ -142,7 +227,7 @@ function apply(ctx) {
     name: 'import_claude',
     description:
       '从 Claude Code 的 JSONL transcript 导入一条历史对话为可继续的 DSH 会话。' +
-      '读取 .jsonl 文件、解析 user/assistant 文本、合成会话事件并持久化，返回新会话 id 与统计。',
+      '读取 .jsonl 文件、解析 user/assistant/tool 消息、合成会话事件并持久化，返回新会话 id 与统计。',
     parameters: {
       path: {
         type: 'string',
@@ -162,21 +247,22 @@ function apply(ctx) {
           sessionId: { type: 'string', required: true },
           turns: { type: 'integer', required: true },
           messages: { type: 'integer', required: true },
+          toolCalls: { type: 'integer', required: true },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息）→ 会话 ' + value.sessionId,
+        text: '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId,
       }],
     },
     async execute(args) {
       const target = await ctx.fs.resolve(args.path)
       const raw = await ctx.fs.readText(target)
-      const { meta, events, turns, messages } = convertClaudeJsonl(raw, args)
+      const { meta, events, turns, messages, toolCalls } = convertClaudeJsonl(raw, args)
       await ctx.sessionPersistence.create(meta)
       await ctx.sessionPersistence.append(meta.id, events)
       await attachToWorkspace(ctx, meta)
-      return { sessionId: meta.id, turns, messages }
+      return { sessionId: meta.id, turns, messages, toolCalls }
     },
   }))
 }
