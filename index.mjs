@@ -7,7 +7,7 @@
 // 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { convertClaudeJsonl, convertCodexJsonl } from './convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson } from './convert.mjs'
 
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
@@ -53,6 +53,30 @@ async function collectJsonlFiles(ctx, dirTarget, out, recursive) {
   }
 }
 
+// 递归收集目录下的 .json 文件（ChatGPT 导出，按名称稳定排序）。
+async function collectJsonFiles(ctx, dirTarget, out, recursive) {
+  const entries = await ctx.fs.listDir(dirTarget)
+  for (const entry of entries) {
+    if (entry.type === 'directory') {
+      if (recursive) await collectJsonFiles(ctx, entry.target, out, recursive)
+    } else if (entry.type === 'file' && /\.json$/i.test(entry.name)) {
+      out.push(entry.target)
+    }
+  }
+}
+
+// 幂等落盘单个会话（meta + events）并归组；返回是否新增。
+async function persistSession(ctx, meta, events) {
+  const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
+  if (!exists) {
+    await ctx.sessionPersistence.create(meta)
+    await ctx.sessionPersistence.append(meta.id, events)
+    await attachToWorkspace(ctx, meta)
+    return true
+  }
+  return false
+}
+
 // 批量导入：把目录下每个 .jsonl 都作为独立会话导入。
 async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel) {
   const files = []
@@ -73,18 +97,12 @@ async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel) 
         results.push({ path, status: 'skipped', reason: 'not a ' + sourceLabel + ' transcript (no user turns)' })
         continue
       }
-      const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
-      if (!exists) {
-        await ctx.sessionPersistence.create(meta)
-        await ctx.sessionPersistence.append(meta.id, events)
-        await attachToWorkspace(ctx, meta)
-        imported++
-      } else {
-        alreadyImported++
-      }
+      const added = await persistSession(ctx, meta, events)
+      if (added) imported++
+      else alreadyImported++
       results.push({
         path,
-        status: exists ? 'already-imported' : 'imported',
+        status: added ? 'imported' : 'already-imported',
         sessionId: meta.id,
         turns: turns.length,
         messages,
@@ -99,8 +117,70 @@ async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel) 
   return { total: files.length, imported, alreadyImported, skipped, failed, results }
 }
 
-// 两个导入工具共享的 schema / render / execute 骨架，只差名称、描述、转换器。
-function makeImportTool(ctx, { toolName, sourceLabel, convert, description }) {
+// ChatGPT 导出导入：单个 conversations.json 可能含多个会话，每个会话独立落盘。
+async function importChatgptFile(ctx, target) {
+  const path = target.displayPath || ctx.fs.processPath(target)
+  const raw = await ctx.fs.readText(target)
+  const { conversations, skipped: skippedFiles } = convertChatgptJson(raw, {})
+  const results = []
+  let imported = 0
+  let alreadyImported = 0
+  let skipped = skippedFiles
+  let failed = 0
+  for (const conv of conversations) {
+    try {
+      const added = await persistSession(ctx, conv.meta, conv.events)
+      if (added) imported++
+      else alreadyImported++
+      results.push({
+        path,
+        status: added ? 'imported' : 'already-imported',
+        sessionId: conv.meta.id,
+        turns: conv.turns.length,
+        messages: conv.messages,
+        toolCalls: conv.toolCalls,
+        skipped: 0,
+      })
+    } catch (err) {
+      failed++
+      results.push({ path, status: 'failed', sessionId: conv.meta.id, error: String((err && err.message) || err) })
+    }
+  }
+  return { total: conversations.length + skippedFiles, imported, alreadyImported, skipped, failed, results }
+}
+
+// ChatGPT 目录导入：扫描 .json 文件，每个文件可含多个会话。
+async function importChatgptDirectory(ctx, dirTarget, recursive) {
+  const files = []
+  await collectJsonFiles(ctx, dirTarget, files, recursive !== false)
+  const results = []
+  let imported = 0
+  let alreadyImported = 0
+  let skipped = 0
+  let failed = 0
+  for (const target of files) {
+    try {
+      const r = await importChatgptFile(ctx, target)
+      imported += r.imported
+      alreadyImported += r.alreadyImported
+      skipped += r.skipped
+      failed += r.failed
+      results.push(...r.results)
+    } catch (err) {
+      const path = target.displayPath || ctx.fs.processPath(target)
+      failed++
+      results.push({ path, status: 'failed', error: String((err && err.message) || err) })
+    }
+  }
+  return { total: results.length, imported, alreadyImported, skipped, failed, results }
+}
+
+// 两个导入工具共享的 schema / render / execute 骨架，只差名称、描述、转换器与导入函数。
+// importFile/importDir 默认走单会话路径（importTranscript/importDirectory）；
+// ChatGPT 导出（一文件多会话）注入自己的实现，且 alwaysBatch（单文件也返回批量形态）。
+function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch }) {
+  const importSingle = importFile || ((c, t, a) => importTranscript(c, t, a, convert))
+  const importBatch = importDir || ((c, d, r) => importDirectory(c, d, r, convert, sourceLabel))
   return defineTool({
     name: toolName,
     description,
@@ -108,7 +188,9 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description }) {
       path: {
         type: 'string',
         required: true,
-        description: sourceLabel + ' transcript (.jsonl) 的文件路径，或包含多个 .jsonl 的目录路径。',
+        description: alwaysBatch
+          ? 'ChatGPT 导出 conversations.json 的文件路径，或包含多个 .json 的目录路径。'
+          : sourceLabel + ' transcript (.jsonl) 的文件路径，或包含多个 .jsonl 的目录路径。',
       },
       sessionId: {
         type: 'string',
@@ -199,10 +281,15 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description }) {
       const target = await ctx.fs.resolve(args.path)
       const info = await ctx.fs.stat(target)
       if (info && info.type === 'directory') {
-        const batch = await importDirectory(ctx, target, args.recursive, convert, sourceLabel)
+        const batch = await importBatch(ctx, target, args.recursive)
         return { mode: 'batch', ...batch }
       }
-      const single = await importTranscript(ctx, target, args, convert)
+      if (alwaysBatch) {
+        // ChatGPT 导出：单文件也含多个会话，恒返回批量形态
+        const batch = await importSingle(ctx, target, args)
+        return { mode: 'batch', ...batch }
+      }
+      const single = await importSingle(ctx, target, args)
       return { mode: 'single', ...single }
     },
   })
@@ -229,6 +316,20 @@ function apply(ctx) {
       'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
       '解析 user/assistant/function_call/custom_tool_call 消息、合成会话事件并持久化；重复导入同一会话会幂等跳过。' +
       '返回新会话 id（或批量统计）与明细。',
+  }))
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_chatgpt',
+    sourceLabel: 'ChatGPT',
+    convert: convertChatgptJson,
+    importFile: (c, t) => importChatgptFile(c, t),
+    importDir: (c, d, r) => importChatgptDirectory(c, d, r),
+    alwaysBatch: true,
+    description:
+      '从 ChatGPT 网页导出的 conversations.json 导入历史对话为可继续的 DSH 会话。' +
+      '导出 ZIP 解压后得到 conversations.json（JSON 数组，一个文件含全部会话）；' +
+      'path 可以是该 .json 文件，也可以是包含多个 .json 的目录（目录模式递归扫描）。' +
+      '解析 mapping 主线程（占位节点/系统消息跳过）、合成会话事件并持久化；重复导入同一会话会幂等跳过。' +
+      '返回批量统计与逐会话明细。',
   }))
 }
 

@@ -94,12 +94,13 @@ function makeCtx(tree) {
   return { ctx, persistence, attached, registered }
 }
 
-test('apply 注册 import_claude 与 import_codex 工具（single + batch 输出 schema）', () => {
+test('apply 注册 import_claude / import_codex / import_chatgpt 工具（single + batch 输出 schema）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 2)
+  assert.equal(registered.length, 3)
+  const names = registered.map((d) => d.name).sort()
+  assert.deepEqual(names, ['import_chatgpt', 'import_claude', 'import_codex'])
   for (const def of registered) {
-    assert.ok(['import_claude', 'import_codex'].includes(def.name))
     // 输出 schema 是 oneOf（单文件 / 批量）
     assert.ok(Array.isArray(def.output.schema.oneOf))
     assert.equal(def.output.schema.oneOf.length, 2)
@@ -308,6 +309,76 @@ test('import_codex 幂等：重复导入同一文件已存在则跳过', async (
   assert.equal(first.alreadyImported, false)
   assert.equal(second.alreadyImported, true)
   assert.equal(persistence.sessions.size, 1)
+})
+
+// ---- import_chatgpt 集成 ----
+
+test('import_chatgpt 单文件：一文件多会话、恒返回 batch、schema 校验', async () => {
+  const { ctx, persistence, attached } = makeCtx({ 'D:\\demo\\chatgpt\\conversations.json': load('chatgpt-export.json') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_chatgpt')
+  const value = await def.execute({ path: 'D:\\demo\\chatgpt\\conversations.json' })
+
+  assert.equal(value.mode, 'batch') // 单文件也恒 batch
+  assert.equal(value.total, 3) // 3 个会话（含 1 个被跳过的 system-only）
+  assert.equal(value.imported, 2)
+  assert.equal(value.skipped, 1)
+  assert.equal(value.failed, 0)
+  assert.equal(value.results.length, 2)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved1 = persistence.sessions.get('import-conv-001')
+  const saved2 = persistence.sessions.get('import-conv-002')
+  assert.ok(saved1)
+  assert.ok(saved2)
+  assert.equal(saved1.events.at(-1).type, 'session/title')
+  assert.ok(saved1.events.every((e, i) => e.seq === i))
+  // ChatGPT 无 cwd → 不归组
+  assert.equal(attached.length, 0)
+})
+
+test('import_chatgpt 幂等：重复导入同一文件只落盘一次', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\chatgpt\\conversations.json': load('chatgpt-export.json') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_chatgpt')
+  const first = await def.execute({ path: 'D:\\demo\\chatgpt\\conversations.json' })
+  const second = await def.execute({ path: 'D:\\demo\\chatgpt\\conversations.json' })
+  assert.equal(first.imported, 2)
+  assert.equal(second.imported, 0)
+  assert.equal(second.alreadyImported, 2)
+  assert.equal(persistence.sessions.size, 2)
+})
+
+test('import_chatgpt 目录模式：扫描 .json（非 .jsonl）、递归汇总', async () => {
+  const tree = {
+    'D:\\demo\\chatgpt': 'dir',
+    'D:\\demo\\chatgpt\\conversations.json': load('chatgpt-export.json'),
+    'D:\\demo\\chatgpt\\sub': 'dir',
+    'D:\\demo\\chatgpt\\sub\\more.json': '[{"id":"conv-010","title":"Extra","create_time":1710020000,"mapping":{"x1":{"id":"x1","message":{"id":"mx1","author":{"role":"user"},"content":{"content_type":"text","parts":["hi"]},"create_time":1710020000},"parent":null,"children":[]}}}]',
+    'D:\\demo\\chatgpt\\notes.txt': 'not json',
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_chatgpt')
+  const value = await def.execute({ path: 'D:\\demo\\chatgpt' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.imported, 3) // conv-001 + conv-002 + conv-010
+  assert.equal(value.skipped, 1) // system-only 会话
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  assert.equal(persistence.sessions.size, 3)
+})
+
+test('import_chatgpt 非法 JSON：计入 skipped 而非 failed', async () => {
+  const { ctx } = makeCtx({ 'D:\\demo\\chatgpt\\bad.json': 'not json' })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_chatgpt')
+  const value = await def.execute({ path: 'D:\\demo\\chatgpt\\bad.json' })
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 1)
+  assert.equal(value.skipped, 1)
+  assert.equal(value.failed, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
 })
 
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）

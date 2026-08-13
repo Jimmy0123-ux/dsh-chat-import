@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { convertClaudeJsonl, convertCodexJsonl, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -230,4 +230,53 @@ test('convertCodexJsonl: 空输入不产生事件', () => {
   const out = convertCodexJsonl('')
   assert.equal(out.events.length, 0)
   assert.equal(out.turns.length, 0)
+})
+
+// ---- ChatGPT 网页导出 conversations.json ----
+
+test('convertChatgptJson: 一文件多会话、多轮、mapping 主线程', () => {
+  const out = convertChatgptJson(load('chatgpt-export.json'))
+  assert.equal(out.records, 3)
+  assert.equal(out.conversations.length, 2) // conv-003 只有 system，被跳过
+  assert.equal(out.skipped, 1)
+
+  // conv-001：user → assistant → user
+  const c1 = out.conversations.find((c) => c.meta.id === 'import-conv-001')
+  assert.ok(c1)
+  assert.equal(c1.title, 'Python debugging help')
+  assert.equal(c1.turns.length, 2)
+  assert.equal(c1.messages, 3)
+  assert.equal(c1.toolCalls, 0)
+  const types1 = c1.events.map((e) => e.type)
+  // 事件以 turn/end 平衡收尾（session/title 钉在最后，不破坏回合平衡）
+  assert.equal(types1.filter((t) => t === 'turn/end').length, 2)
+  assert.equal([...types1].reverse().find((t) => t !== 'session/title'), 'turn/end')
+  c1.events.forEach((e, i) => assert.equal(e.seq, i))
+  // 时间戳：Unix 秒 → ms
+  assert.equal(c1.meta.createdAt, 1710000000 * 1000)
+  // assistant source
+  const asst = c1.events.find((e) => e.type === 'assistant/message').data.message
+  assert.deepEqual(asst.source, { kind: 'model', provider: 'chatgpt', model: 'chatgpt' })
+
+  // conv-002：分支取最后 child（n4），占位节点 n3 跳过
+  const c2 = out.conversations.find((c) => c.meta.id === 'import-conv-002')
+  assert.ok(c2)
+  assert.equal(c2.turns.length, 1)
+  const asst2 = c2.events.filter((e) => e.type === 'assistant/message').map((e) => e.data.message.content[0].text)
+  assert.deepEqual(asst2, ['Here is a simple aglio e olio recipe.', 'Actually, use cacio e pepe instead.'])
+})
+
+test('convertChatgptJson: 非数组 / 非法 JSON 返回空并计数 skipped', () => {
+  const out = convertChatgptJson('not json at all')
+  assert.equal(out.conversations.length, 0)
+  assert.equal(out.skipped, 1)
+  const obj = convertChatgptJson('{"a":1}')
+  assert.equal(obj.conversations.length, 0)
+  assert.equal(obj.skipped, 1)
+})
+
+test('convertChatgptJson: 无 cwd（ChatGPT 是聊天，不归组工作区）', () => {
+  const out = convertChatgptJson(load('chatgpt-export.json'))
+  const c1 = out.conversations.find((c) => c.meta.id === 'import-conv-001')
+  assert.equal(c1.meta.cwd, undefined)
 })
