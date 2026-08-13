@@ -14,7 +14,7 @@ package.json     npm 包元数据；files 白名单 = 发布内容
 README.md        对外契约，行为变更必须同步
 LICENSE          MIT
 test/            单测 + mock ctx 集成测试（进 GitHub，不进 npm 包）
-dev/             ❌ 本地工程面：HANDOFF.md、GROWTH.md、脚本、夹具——永不提交
+dev/             ❌ 本地工程面：HANDOFF.md、GROWTH.md、脚本（bin/）、夹具、并发协调状态（sessions/）——永不提交
 ```
 
 - `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`cordis.patch.yml`、`README.md`、`LICENSE`。新增被 `index.mjs` import 的模块必须同步加进 `files`。
@@ -24,6 +24,7 @@ dev/             ❌ 本地工程面：HANDOFF.md、GROWTH.md、脚本、夹具�
 
 ```sh
 npm test        # node --test 跑 test/*.test.mjs（convert 单测 + index mock 集成测试）
+node --test "dev/bin/*.test.mjs"   # dev/bin/session.mjs 并发协调工具的自测（本地工程面）
 ```
 
 无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` 即发布产物。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调 `import_claude`。
@@ -40,6 +41,29 @@ npm test        # node --test 跑 test/*.test.mjs（convert 单测 + index mock 
 - 提交信息说明「为什么」而非复述代码；指向关联 issue/PR 编号。
 - push 前自查：`git log --oneline` 每一条都是一个完整、可读的逻辑单元；工作树干净。
 - 重写已推送历史时只用 `--force-with-lease`，远程有变动立即中止——本仓库是单人直推 `main`，尽量不重写。
+
+## 多会话并发开发（并行 Agent 协调）
+
+同一台机器可能并行开多个 Agent 会话操作**同一个工作目录**。会话间靠 `dev/bin/session.mjs`（本地工具，不入库）协调文件占用，避免互相覆盖、避免共享文档（HANDOFF / GROWTH）被并发改写。
+
+| 时机 | 动作 |
+| --- | --- |
+| 会话开始 / 每个里程碑 | `node dev/bin/session.mjs sync --note "本次要做什么"` |
+| 动手改文件之前 | `node dev/bin/session.mjs claim <path>...`（他人活跃占用 → 拒绝，exit 1） |
+| 对方占用时 | `status` 看谁在用；等对方 `release`，或对方 **stale**（心跳 2h 过期，`DSH_SESSION_STALE_MS` 可调）后 `--force` 接管 |
+| commit + push 之后 | `node dev/bin/session.mjs release`（释放认领） |
+| 崩溃 / 中断后恢复 | 先 `status`，必要时 `prune` 清掉 stale 记录 |
+
+规则：
+
+1. **身份**：默认取 `DSH_SESSION_ID`（DSH 注入，每个 Agent 会话天然唯一）；可用 `--as <tag>` 覆盖。身份缺失时 `claim` / `sync` / `release` 直接报错，不凭空建会话。
+2. **先 claim 再动手**：要改的文件必须先处于自己名下；他人活跃认领的文件不得修改。`dev/HANDOFF.md`、`dev/GROWTH.md` 等共享文档同样要 claim。
+3. **最小认领粒度**：只认领本次要碰的文件；`claim .` 表示整仓库（与一切冲突），仅全局重构用；目录认领覆盖其下所有路径。
+4. **stale 接管**：`--force` 只能接管 stale 会话的认领，永远抢不了活跃会话的文件；被接管者丢的只是认领记录，文件内容不受影响。
+5. **push 前 `git pull --rebase origin main`**：小步提交（一个逻辑变更一个 commit）可把 rebase 冲突降到最低。本协议覆盖同一工作目录的并行会话；跨机器并行靠 git 纪律，registry 不跨机器同步。
+6. **状态位置**：全部运行时状态在 `dev/sessions/`（gitignore，永不提交、不进 npm 包）；损坏时删目录重建即可，不影响仓库。
+
+命令速查：`sync`（登记 + 心跳）`claim`（独占认领）`release`（释放）`status`（总览）`who <path>`（谁占用某文件）`prune`（清 stale）`drop <tag>`（移除会话）`new`（生成 tag）。
 
 ## DSH 插件约束
 
