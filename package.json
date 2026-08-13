@@ -1,6 +1,6 @@
 {
   "name": "dsh-chat-import",
-  "description": "Import Claude Code JSONL transcripts as resumable DeepSeek Harness sessions",
+  "description": "Import Claude Code / Codex / ChatGPT / Cursor conversation histories as resumable DeepSeek Harness sessions",
   "version": "0.1.0",
   "type": "module",
   "main": "./index.mjs",
@@ -29,6 +29,9 @@
     "dsh-plugin",
     "dsh",
     "claude-code",
+    "codex",
+    "chatgpt",
+    "cursor",
     "import",
     "jsonl",
     "migration",
