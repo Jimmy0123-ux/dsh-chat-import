@@ -13,6 +13,7 @@
 [![npm version](https://img.shields.io/npm/v/dsh-chat-import)](https://www.npmjs.com/package/dsh-chat-import)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import)](https://github.com/Nwflower/dsh-chat-import)
+**已收录于：** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import)
 
 `Nwflower/dsh-chat-import` 为 DeepSeek Harness 补充「外部聊天记录导入」能力：把 Claude Code 的 JSONL transcript、Codex / ChatGPT CLI 的 rollout JSONL、ChatGPT 网页导出的 conversations.json、Cursor 的 agent transcript、Gemini CLI 的会话 JSON 与 Reasonix 的会话 JSONL **全保真**导入为**可继续（resume）**的 DSH 会话。插件不改写源文件，也不修改 DSH 引擎内部；每次导入都通过公开的 `sessionPersistence` 追加一条全新的、事件平衡的会话日志，并把会话挂接到其 `cwd` 对应的工作区。
 

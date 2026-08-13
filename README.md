@@ -13,6 +13,7 @@
 [![npm version](https://img.shields.io/npm/v/dsh-chat-import)](https://www.npmjs.com/package/dsh-chat-import)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import)](https://github.com/Nwflower/dsh-chat-import)
+**Listed in:** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import)
 
 `Nwflower/dsh-chat-import` adds external chat-history import to DeepSeek Harness: it brings Claude Code JSONL transcripts, Codex / ChatGPT CLI rollout JSONL, ChatGPT web-export `conversations.json`, Cursor agent transcripts, Gemini CLI session JSON, and Reasonix session JSONL into DSH as **full-fidelity, resumable** sessions. The plugin never rewrites source files and never touches the DSH engine; every import appends a fresh, event-balanced session log through the public `sessionPersistence` service and attaches the session to the workspace of its `cwd`.
 
