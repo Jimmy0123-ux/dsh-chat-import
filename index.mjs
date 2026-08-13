@@ -254,21 +254,27 @@ function apply(ctx) {
           turns: { type: 'integer', required: true },
           messages: { type: 'integer', required: true },
           toolCalls: { type: 'integer', required: true },
+          alreadyImported: { type: 'boolean' },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId,
+        text: value.alreadyImported
+          ? '会话 ' + value.sessionId + ' 已存在，跳过导入（' + value.turns + ' 轮、' + value.toolCalls + ' 次工具调用）。'
+          : '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId,
       }],
     },
     async execute(args) {
       const target = await ctx.fs.resolve(args.path)
       const raw = await ctx.fs.readText(target)
       const { meta, events, turns, messages, toolCalls } = convertClaudeJsonl(raw, args)
-      await ctx.sessionPersistence.create(meta)
-      await ctx.sessionPersistence.append(meta.id, events)
-      await attachToWorkspace(ctx, meta)
-      return { sessionId: meta.id, turns, messages, toolCalls }
+      const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
+      if (!exists) {
+        await ctx.sessionPersistence.create(meta)
+        await ctx.sessionPersistence.append(meta.id, events)
+        await attachToWorkspace(ctx, meta)
+      }
+      return { sessionId: meta.id, turns, messages, toolCalls, alreadyImported: exists }
     },
   }))
 }
