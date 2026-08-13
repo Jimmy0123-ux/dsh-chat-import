@@ -1,17 +1,18 @@
 # DSH Chat Import
 
-`Nwflower/dsh-chat-import` 为 DeepSeek Harness 补充「外部聊天记录导入」能力：把 Claude Code 的 JSONL transcript 与 Codex / ChatGPT CLI 的 rollout JSONL **全保真**导入为**可继续（resume）**的 DSH 会话。插件不改写源文件，也不修改 DSH 引擎内部；每次导入都通过公开的 `sessionPersistence` 追加一条全新的、事件平衡的会话日志，并把会话挂接到其 `cwd` 对应的工作区。
+`Nwflower/dsh-chat-import` 为 DeepSeek Harness 补充「外部聊天记录导入」能力：把 Claude Code 的 JSONL transcript、Codex / ChatGPT CLI 的 rollout JSONL 与 ChatGPT 网页导出的 conversations.json **全保真**导入为**可继续（resume）**的 DSH 会话。插件不改写源文件，也不修改 DSH 引擎内部；每次导入都通过公开的 `sessionPersistence` 追加一条全新的、事件平衡的会话日志，并把会话挂接到其 `cwd` 对应的工作区。
 
 ## 功能
 
 - **导入 Claude Code transcript**：读取 `~/.claude/projects/<slug>/<sessionId>.jsonl`，解析 user / assistant / tool / thinking 消息。
 - **导入 Codex / ChatGPT rollout**：读取 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`（OpenAI Codex CLI 已并入 ChatGPT，格式不变），解析 `response_item` 的 message / function_call / custom_tool_call / reasoning。
+- **导入 ChatGPT 网页导出**：读取导出 ZIP 解压出的 `conversations.json`（一个文件含全部会话），沿 mapping 主线程重建对话。
 - **全保真**：工具调用历史映射为 `tool/call` + `tool/result`（含错误标记、`sourceEventSeqs` 关联）、thinking 块映射为 `reasoning`、多步 assistant 消息完整保留。
 - **可继续（resume）**：合成 `turn/start`、`step/start`、`user/message`、`assistant/message`、`tool/call`、`tool/result`、`step/end`、`turn/end` 事件，落盘为平衡、可加载的会话，点开即可续聊。
-- **保留会话元数据**：源 `sessionId`、`cwd`、`ai-title`（Claude，钉为 `session/title`，不被自动标题覆盖）、真实 model 名（两个源）、创建时间。
-- **自动挂接工作区**：导入后按 `cwd` 解析/创建工作区并 `attachSession`，会话归组正确（不再「未分组」）。
+- **保留会话元数据**：源 `sessionId`、`cwd`、`ai-title`（Claude，钉为 `session/title`，不被自动标题覆盖）、真实 model 名（三个源）、创建时间。
+- **自动挂接工作区**：导入后按 `cwd` 解析/创建工作区并 `attachSession`，会话归组正确（不再「未分组」）；ChatGPT 导出无 `cwd` 字段（纯聊天），不归组。
 - **幂等导入**：目标会话已存在时跳过，不重复写入；畸形 JSONL 行计数上报，不中断。
-- **批量导入**：`path` 传目录时递归扫描所有 `.jsonl`，每个文件导入为独立会话，返回逐文件汇总。
+- **批量导入**：`path` 传目录时递归扫描 `.jsonl`（Claude / Codex）或 `.json`（ChatGPT），每个文件导入为独立会话（ChatGPT 文件内每个会话独立），返回逐文件/逐会话汇总。
 
 ## 设计
 
@@ -56,7 +57,20 @@
 | `response_item reasoning` | 跳过（内容加密不可读） |
 | 轮次结束 | `step/end` + `turn/end` |
 
-会话头 `SessionHeader`：`version: 0`、`id: import-<源sessionId>`、`createdAt`（源时间戳）、`cwd`（源工作目录）。
+### ChatGPT 网页导出 conversations.json
+
+顶层是 JSON 数组（一个文件含全部会话），每个会话对象含 `mapping`（DAG：nodeId → `{ id, message, parent, children }`）。沿 active branch（`children` 最后一个）从 root 遍历得到主线程；`message: null` 的占位节点与 `author.role === 'system'` 跳过；时间戳是 Unix 秒（×1000 转 ms）。ChatGPT 是聊天，导出无 `cwd`，不归组工作区。
+
+| conversations.json | DSH SessionEvent |
+| --- | --- |
+| 会话对象（`id` / `title` / `create_time`） | `SessionHeader`（id / createdAt）+ `session/title` |
+| `mapping` 中 `author.role: "user"` 节点 | `turn/start` + `step/start` + `user/message` |
+| `author.role: "assistant"` 节点 | `assistant/message` |
+| `author.role: "tool"` 节点 | `tool/result`（挂最近一步） |
+| `author.role: "system"` / `message: null` | 跳过 |
+| 轮次结束 | `step/end` + `turn/end` |
+
+会话头 `SessionHeader`：`version: 0`、`id: import-<源sessionId>`、`createdAt`（源时间戳）、`cwd`（源工作目录，ChatGPT 导出无）。
 
 ## 构建
 
@@ -73,7 +87,7 @@ dsh plugin --profile web add -w link:/path/to/dsh-chat-import
 ## 兼容性
 
 - **依赖面**：仅消费 host 公开插件 API（`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`）与 `@deepseek-ai/dsh-tools`（已声明为 `peerDependencies`，实测版本 `0.1.0-rc.6`）。
-- **实测**：2026-08 于 `dsh 0.1.0-rc.6` 的 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（28 个用例）覆盖两个源格式的转换纯函数与 mock 集成路径。
+- **实测**：2026-08 于 `dsh 0.1.0-rc.6` 的 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（35 个用例）覆盖三种源格式的转换纯函数与 mock 集成路径。
 
 ## 卸载
 
@@ -86,25 +100,29 @@ dsh plugin --profile web add -w link:/path/to/dsh-chat-import
 ```
 import_claude({ path: "C:\\Users\\<you>\\.claude\\projects\\<slug>\\<sessionId>.jsonl" })
 import_codex({ path: "C:\\Users\\<you>\\.codex\\sessions\\2026\\05\\18\\rollout-2026-05-18T21-14-16-xxxx.jsonl" })
+import_chatgpt({ path: "C:\\Users\\<you>\\Downloads\\chatgpt-export\\conversations.json" })
 ```
 
-两个工具行为一致：`path` 可以是单个 `.jsonl`，也可以是目录；可选 `sessionId` 覆盖目标 DSH 会话 id（默认 `import-<源sessionId>`）。返回 `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported }`；导入后刷新会话列表即可看到新会话，且已挂接到其工作目录。
+`import_claude` / `import_codex` 行为一致：`path` 可以是单个 `.jsonl`，也可以是目录；可选 `sessionId` 覆盖目标 DSH 会话 id（默认 `import-<源sessionId>`）。返回 `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported }`；导入后刷新会话列表即可看到新会话，且已挂接到其工作目录。
+
+`import_chatgpt` 不同：conversations.json 一个文件含**全部**会话，单文件也返回批量形态 `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`（`total` 是会话数，`results` 每项是一个会话）；ChatGPT 导出无 `cwd`，导入的会话不归组工作区。
 
 ### 批量导入（目录）
 
 ```js
 import_claude({ path: "C:\\Users\\<you>\\.claude\\projects" })
 import_codex({ path: "C:\\Users\\<you>\\.codex\\sessions" })
+import_chatgpt({ path: "C:\\Users\\<you>\\Downloads\\chatgpt-export" })
 ```
 
-目录模式递归扫描（`recursive: false` 可只扫顶层）所有 `.jsonl`，每个文件独立导入为一个会话；非 transcript / 空文件跳过。返回 `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`，`results` 每项含 `path`、`status`（`imported` / `already-imported` / `skipped` / `failed`）及会话统计。
+目录模式递归扫描（`recursive: false` 可只扫顶层）所有 `.jsonl`（Claude / Codex）或 `.json`（ChatGPT）；Claude / Codex 每个文件独立导入为一个会话，ChatGPT 文件内每个会话独立导入；非 transcript / 空文件跳过。返回 `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`，`results` 每项含 `path`、`status`（`imported` / `already-imported` / `skipped` / `failed`）及会话统计。
 
 ## 范围边界
 
 - 源 transcript 只读，绝不原地改写；DSH 历史事件同样 append-only（deep-frozen），只新增、不改写。
 - 不修改 DSH 引擎、apiproxy 或官方 UI 包；不发布任何服务，无需 isolate realm。
 - 读取工作区之外的 transcript 路径时，要求会话沙箱允许访问该路径。
-- 已知边界：不导入 `permission`、`summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃其 `message.content` 之外的附加字段；Codex 的 `reasoning` 内容加密不可读，跳过（计划 v1.2 补全）；目前支持 Claude Code JSONL 与 Codex/ChatGPT rollout 两种源格式（ChatGPT 网页导出规划中）。
+- 已知边界：不导入 `permission`、`summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃其 `message.content` 之外的附加字段；Codex 的 `reasoning` 内容加密不可读，跳过（计划 v1.2 补全）；ChatGPT 导出只重建主线程（分支取最后 child），工具消息按文本挂最近一步、不还原工具参数结构；目前支持 Claude Code JSONL、Codex/ChatGPT rollout 与 ChatGPT 网页导出三种源格式。
 
 ## 测试
 
@@ -112,4 +130,4 @@ import_codex({ path: "C:\\Users\\<you>\\.codex\\sessions" })
 npm test
 ```
 
-`test/convert.test.mjs` 覆盖两个源格式的纯转换逻辑（回合平衡、工具关联、标题、畸形行、注入过滤、重复消息去重）；`test/index.test.mjs` 用 mock 的 `fs` / `sessionPersistence` / `tools` / `workspaceRegistry` 走完整 `apply → execute` 路径，并校验返回值符合输出 schema。
+`test/convert.test.mjs` 覆盖三种源格式的纯转换逻辑（回合平衡、工具关联、标题、畸形行、注入过滤、重复消息去重、mapping 分支/占位节点）；`test/index.test.mjs` 用 mock 的 `fs` / `sessionPersistence` / `tools` / `workspaceRegistry` 走完整 `apply → execute` 路径，并校验返回值符合输出 schema。
