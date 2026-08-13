@@ -53,6 +53,15 @@ dsh plugin --profile web add -w link:/path/to/dsh-chat-import
 
 `dsh plugin` 是 pnpm 转发器：`add` 后识别 `dsh.bundle` 声明，把 `cordis.patch.yml` 的 `insert` 行收编进 profile 的 bundles，重启 dsh 即生效。本地开发建议用 `link:`（符号链接）。
 
+## 兼容性
+
+- **依赖面**：仅消费 host 公开插件 API（`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`）与 `@deepseek-ai/dsh-tools`（已声明为 `peerDependencies`，实测版本 `0.1.0-rc.6`）。
+- **实测**：2026-08 于 `dsh 0.1.0-rc.6` 的 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（18 个用例）覆盖转换纯函数与 mock 集成路径。
+
+## 卸载
+
+从 profile 的 bundles 中移除 `import-claude`（即 `cordis.patch.yml` 的 `insert` 行），重启 dsh 后插件不再加载。已导入的会话保留在 DSH 数据目录，不受卸载影响。
+
 ## 使用
 
 在挂载了本插件的会话里调用工具：
