@@ -7,6 +7,7 @@
 // user/message、assistant/message、tool/call、tool/result、step/end、turn/end），
 // 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区。
 
+import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson } from './convert.mjs'
@@ -327,7 +328,7 @@ async function importOpencodeFile(ctx, target, args = {}) {
 // opencode 目录导入：目录里定位 opencode.db（无递归），再走单库导入；缺 DB 时抛错。
 async function importOpencodeDirectory(ctx, dirTarget, args = {}) {
   const dirPath = dirTarget.displayPath || ctx.fs.processPath(dirTarget)
-  const dbPath = String(dirPath).replace(/[\\/]+$/, '') + '\\opencode.db'
+  const dbPath = join(dirPath, 'opencode.db')
   const dbTarget = await ctx.fs.resolve(dbPath)
   return importOpencodeFile(ctx, dbTarget, args)
 }
