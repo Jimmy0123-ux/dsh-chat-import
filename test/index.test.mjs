@@ -94,12 +94,12 @@ function makeCtx(tree) {
   return { ctx, persistence, attached, registered }
 }
 
-test('apply 注册 import_claude / import_codex / import_chatgpt / import_cursor 工具（single + batch 输出 schema）', () => {
+test('apply 注册五个导入工具（single + batch 输出 schema）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 4)
+  assert.equal(registered.length, 5)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['import_chatgpt', 'import_claude', 'import_codex', 'import_cursor'])
+  assert.deepEqual(names, ['import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini'])
   for (const def of registered) {
     // 输出 schema 是 oneOf（单文件 / 批量）
     assert.ok(Array.isArray(def.output.schema.oneOf))
@@ -431,6 +431,74 @@ test('import_cursor 目录模式：递归扫描 .jsonl、逐文件独立会话',
   assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
   const ids = [...persistence.sessions.keys()].sort()
   assert.deepEqual(ids, ['import-composer-a', 'import-composer-b'])
+})
+
+// ---- import_gemini 集成 ----
+
+test('import_gemini 单文件：落盘、归组、schema 校验', async () => {
+  const { ctx, persistence, attached } = makeCtx({ 'D:\\demo\\gemini\\session-abc.json': load('gemini-simple.json') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_gemini')
+  const value = await def.execute({ path: 'D:\\demo\\gemini\\session-abc.json' })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-b26d7f99-0116-4d1d-b125-98c228a4b933')
+  assert.equal(value.turns, 1)
+  assert.equal(value.alreadyImported, false)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get('import-b26d7f99-0116-4d1d-b125-98c228a4b933')
+  assert.ok(saved)
+  assert.equal(saved.meta.cwd, 'D:\\demo\\gemini-proj')
+  assert.equal(saved.events.at(-1).type, 'turn/end')
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+  // Gemini 有 cwd → 归组
+  assert.equal(attached.length, 1)
+})
+
+test('import_gemini 工具历史：内联 tool/result 落盘', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\gemini\\session-tool.json': load('gemini-tool.json') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_gemini')
+  const value = await def.execute({ path: 'D:\\demo\\gemini\\session-tool.json' })
+  assert.equal(value.toolCalls, 2)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get(value.sessionId)
+  const results = saved.events.filter((e) => e.type === 'tool/result')
+  assert.equal(results.length, 2)
+  assert.equal(results[0].data.message.content[0].content[0].text, 'src\nCargo.toml')
+  assert.equal(results[1].data.message.content[0].isError, true)
+})
+
+test('import_gemini 目录模式：扫描 .json、递归、逐文件独立会话', async () => {
+  const tree = {
+    'D:\\demo\\gemini': 'dir',
+    'D:\\demo\\gemini\\session-a.json': load('gemini-simple.json'),
+    'D:\\demo\\gemini\\sub': 'dir',
+    'D:\\demo\\gemini\\sub\\session-b.json': load('gemini-multi-turn.json'),
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_gemini')
+  const value = await def.execute({ path: 'D:\\demo\\gemini' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  assert.equal(persistence.sessions.size, 2)
+})
+
+test('import_gemini 非法 JSON：单文件计入 skipped 不落盘', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\gemini\\bad.json': 'not json' })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_gemini')
+  const value = await def.execute({ path: 'D:\\demo\\gemini\\bad.json' })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.skipped, 1)
+  assert.equal(persistence.sessions.size, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
 })
 
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）

@@ -7,7 +7,7 @@
 // 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl } from './convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson } from './convert.mjs'
 
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
@@ -31,7 +31,12 @@ async function attachToWorkspace(ctx, meta) {
 // 解析单个 transcript：读取 → 转换 → 幂等落盘 → 归组。返回单文件统计。
 async function importTranscript(ctx, target, args, convert) {
   const raw = await ctx.fs.readText(target)
-  const { meta, events, turns, messages, toolCalls, skipped } = convert(raw, args)
+  const out = convert(raw, args)
+  // 无可导入内容（空文件 / 非目标格式）：计入 skipped，不落盘空会话
+  if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
+    return { sessionId: 'none', turns: 0, messages: 0, toolCalls: 0, skipped: 1, alreadyImported: false }
+  }
+  const { meta, events, turns, messages, toolCalls, skipped } = out
   const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
   if (!exists) {
     await ctx.sessionPersistence.create(meta)
@@ -77,11 +82,13 @@ async function persistSession(ctx, meta, events) {
   return false
 }
 
-// 批量导入：把目录下每个 .jsonl 都作为独立会话导入。
-// deriveArgs(target) 允许按文件派生转换参数（如 Cursor 从文件名取 composer id）。
-async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel, deriveArgs) {
+// 批量导入：把目录下匹配 pattern 的文件都作为独立会话导入。
+// deriveArgs(target) 允许按文件派生转换参数（如 Cursor 从文件名取 composer id）；
+// collect 默认收集 .jsonl，Gemini 等单会话 .json 源传入 collectJsonFiles。
+async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel, deriveArgs, collect) {
   const files = []
-  await collectJsonlFiles(ctx, dirTarget, files, recursive !== false)
+  const collector = collect || collectJsonlFiles
+  await collector(ctx, dirTarget, files, recursive !== false)
   const results = []
   let imported = 0
   let alreadyImported = 0
@@ -179,11 +186,12 @@ async function importChatgptDirectory(ctx, dirTarget, recursive) {
 // 两个导入工具共享的 schema / render / execute 骨架，只差名称、描述、转换器与导入函数。
 // importFile/importDir 默认走单会话路径（importTranscript/importDirectory）；
 // ChatGPT 导出（一文件多会话）注入自己的实现，且 alwaysBatch（单文件也返回批量形态）。
-// deriveArgs(target) 按文件派生转换参数（Cursor 需要 composer id 做幂等 id）。
-function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs }) {
+// deriveArgs(target) 按文件派生转换参数（Cursor 需要 composer id 做幂等 id）；
+// collect 覆盖目录扫描器（Gemini 等单会话 .json 源用 collectJsonFiles）。
+function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect }) {
   const derive = deriveArgs || (() => ({}))
   const importSingle = importFile || ((c, t, a) => importTranscript(c, t, a, convert))
-  const importBatch = importDir || ((c, d, r) => importDirectory(c, d, r, convert, sourceLabel, derive))
+  const importBatch = importDir || ((c, d, r) => importDirectory(c, d, r, convert, sourceLabel, derive, collect))
   return defineTool({
     name: toolName,
     description,
@@ -355,6 +363,18 @@ function apply(ctx) {
       'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
       '解析 user/assistant 文本与 tool_use 调用（transcript 不含 tool_result，仅导入调用历史）；' +
       '过滤 [REDACTED] 哨兵；重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
+  }))
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_gemini',
+    sourceLabel: 'Gemini CLI',
+    convert: convertGeminiJson,
+    collect: collectJsonFiles, // Gemini 是单会话 .json（非 JSONL）
+    description:
+      '从 Gemini CLI 的会话 JSON 导入历史对话为可继续的 DSH 会话（' +
+      '~/.gemini/history/<slot>/chats/session-*.json）。' +
+      'path 可以是单个 .json 文件，也可以是包含多个 .json 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
+      '解析 user/gemini 消息、thoughts→reasoning、内联 toolCalls（结果同对象）并持久化；' +
+      'info 系统通知跳过；重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
   }))
 }
 

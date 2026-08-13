@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -331,4 +331,64 @@ test('convertCursorJsonl: 多轮切分、畸形行计数、无 cursorId 回退�
   assert.equal(starts.length, 2)
   // 无 cursorId 时 id 仍合法（时间戳回退）
   assert.match(out.meta.id, /^import-\d+$/)
+})
+
+// ---- Gemini CLI 会话 ----
+
+test('convertGeminiJson: 简单会话、元数据、平衡回合', () => {
+  const out = convertGeminiJson(load('gemini-simple.json'))
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.messages, 2)
+  assert.equal(out.toolCalls, 0)
+  assert.equal(out.meta.id, 'import-b26d7f99-0116-4d1d-b125-98c228a4b933')
+  assert.equal(out.meta.cwd, 'D:\\demo\\gemini-proj') // directories[0] → cwd
+  assert.ok(out.meta.createdAt) // startTime ISO → ms
+  const types = out.events.map((e) => e.type)
+  assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
+  out.events.forEach((e, i) => assert.equal(e.seq, i))
+  // 用户 parts 数组 → prompt
+  const user = out.events.find((e) => e.type === 'user/message').data
+  assert.equal(user.content[0].text, 'Create a basic python interpreter in rust.')
+  // thoughts → reasoning；真实 model
+  const asst = out.events.find((e) => e.type === 'assistant/message').data.message
+  assert.ok(asst.content.some((c) => c.type === 'reasoning'))
+  assert.deepEqual(asst.source, { kind: 'model', provider: 'gemini', model: 'gemini-3-flash-preview' })
+})
+
+test('convertGeminiJson: 内联 toolCalls → tool/call + tool/result（含错误标记）', () => {
+  const out = convertGeminiJson(load('gemini-tool.json'))
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.toolCalls, 2)
+  const calls = out.events.filter((e) => e.type === 'tool/call')
+  const results = out.events.filter((e) => e.type === 'tool/result')
+  assert.equal(calls.length, 2)
+  assert.equal(results.length, 2)
+  assert.equal(calls[0].data.name, 'list_directory')
+  assert.equal(calls[0].data.arguments, '{"path":"."}')
+  // tool/result 与 tool/call 通过 sourceEventSeqs 关联
+  assert.deepEqual(results[0].sourceEventSeqs, [calls[0].seq])
+  assert.equal(results[0].data.message.content[0].content[0].text, 'src\nCargo.toml')
+  // 第二个调用是 error → isError 标记
+  assert.equal(results[1].data.message.content[0].isError, true)
+  assert.equal(results[1].data.message.content[0].content[0].text, 'Compilation error: missing semicolon')
+  // info 消息跳过：没有多余回合
+  assert.equal(out.turns.length, 1)
+})
+
+test('convertGeminiJson: 多轮切分、kind 缺失兼容', () => {
+  const out = convertGeminiJson(load('gemini-multi-turn.json'))
+  assert.equal(out.turns.length, 2)
+  const starts = out.events.filter((e) => e.type === 'turn/start')
+  assert.equal(starts.length, 2)
+  const users = out.events.filter((e) => e.type === 'user/message')
+  assert.equal(users.length, 2)
+})
+
+test('convertGeminiJson: 非法 JSON / 非会话结构返回空并 skipped', () => {
+  const bad = convertGeminiJson('not json')
+  assert.equal(bad.meta, null)
+  assert.equal(bad.skipped, 1)
+  const wrong = convertGeminiJson('{"foo":1}')
+  assert.equal(wrong.meta, null)
+  assert.equal(wrong.skipped, 1)
 })
