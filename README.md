@@ -2,6 +2,10 @@
   <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a>
 </p>
 
+<p align="center">
+  <img src="assets/import.svg" width="120" alt="dsh-chat-import">
+</p>
+
 # DSH Chat Import
 
 > Import Claude Code / Codex / ChatGPT / Cursor / Gemini conversation histories into DeepSeek Harness as resumable sessions.

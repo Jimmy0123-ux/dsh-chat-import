@@ -2,6 +2,10 @@
   <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a>
 </p>
 
+<p align="center">
+  <img src="assets/import.svg" width="120" alt="dsh-chat-import">
+</p>
+
 # DSH Chat Import
 
 > 把 Claude Code / Codex / ChatGPT / Cursor / Gemini 的聊天记录导入 DeepSeek Harness，成为可继续（resume）的会话。

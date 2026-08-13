@@ -14,11 +14,12 @@ cordis.patch.yml bundle 声明（insert import-claude）
 package.json     npm 包元数据；files 白名单 = 发布内容
 README.md        对外契约（英文，GitHub/npm 默认）；README.zh-CN.md 中文版——行为变更必须同步两版
 LICENSE          MIT
+assets/          LOGO（import.svg，README 双语顶部引用，进 npm 包）
 test/            单测 + mock ctx 集成测试（进 GitHub，不进 npm 包）
 dev/             ❌ 本地工程面：HANDOFF.md、GROWTH.md、脚本（bin/）、夹具、并发协调状态（sessions/）——永不提交
 ```
 
-- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`cordis.patch.yml`、`README.md`、`LICENSE`。新增被 `index.mjs` import 的模块必须同步加进 `files`。
+- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
 - **永不提交**：`dev/`、`node_modules/`、`.prev-session*.jsonl`、真实用户 transcript（含敏感内容）、任何凭据/密钥。
 
 ## 命令

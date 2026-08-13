@@ -15,6 +15,7 @@
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",
+    "assets/import.svg",
     "LICENSE"
   ],
   "dsh": {
