@@ -1,13 +1,15 @@
-// index.mjs — 外部聊天记录（Claude Code / Codex-ChatGPT）→ DSH 会话导入器
+// index.mjs — 外部聊天记录（Claude Code / Codex-ChatGPT / ChatGPT / Cursor /
+// Gemini / Reasonix / opencode）→ DSH 会话导入器
 //
 // 消费 host 的 sessionPersistence / fs / tools / workspaceRegistry 服务，注册
-// `import_claude` 与 `import_codex` 两个工具：读取各自源格式的 .jsonl transcript
-// （单个文件或整个目录），把对话合成 DSH 事件日志（turn/start、step/start、
+// `import_claude` 等导入工具：读取各自源格式的 transcript（单个文件或整个目录；
+// opencode 直接读 SQLite 库），把对话合成 DSH 事件日志（turn/start、step/start、
 // user/message、assistant/message、tool/call、tool/result、step/end、turn/end），
 // 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区。
 
+import { DatabaseSync } from 'node:sqlite'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl } from './convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson } from './convert.mjs'
 
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
@@ -192,15 +194,149 @@ async function importChatgptDirectory(ctx, dirTarget, recursive) {
   return { total: results.length, imported, alreadyImported, skipped, failed, results }
 }
 
+// opencode 历史库（SQLite）→ 中间会话 JSON 数组。
+// 只读打开 opencode.db，查 session/message/part 三表（data 是 JSON 文本）；
+// message 按 (time_created, id) 升序、part 同。session.model 是 JSON 字符串
+// （{id, providerID, variant}），解析取 id 作为会话级模型回退。
+// 默认尊重 opencode 的对话压缩（compaction）：只保留最后一次压缩的摘要（summary）
+// 与 tail_start_id 之后的尾巴，被压掉的前段历史折叠成摘要；options.fullHistory
+// 为 true 时跳过压缩、返回全量。读不到 DB（路径不存在 / 非 SQLite）时抛错，失败大声。
+function readOpencodeDb(dbPath, options = {}) {
+  const db = new DatabaseSync(dbPath, { readOnly: true })
+  try {
+    const sessions = []
+    const sessionRows = db.prepare('SELECT id, title, directory, time_created, model FROM session ORDER BY time_created, id').all()
+    for (const row of sessionRows) {
+      const messages = db.prepare('SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id').all(row.id)
+      const partsByMessage = new Map()
+      for (const p of db.prepare('SELECT message_id, time_created, data FROM part WHERE session_id = ? ORDER BY time_created, id').all(row.id)) {
+        if (!partsByMessage.has(p.message_id)) partsByMessage.set(p.message_id, [])
+        partsByMessage.get(p.message_id).push(JSON.parse(p.data))
+      }
+      const msgs = messages.map((m) => {
+        const data = JSON.parse(m.data)
+        const path = data.path && typeof data.path === 'object' ? data.path : {}
+        return {
+          id: m.id,
+          role: data.role,
+          createdAt: m.time_created,
+          cwd: typeof path.cwd === 'string' ? path.cwd : undefined,
+          model: typeof data.modelID === 'string' ? data.modelID
+            : data.model && typeof data.model === 'object' && typeof data.model.modelID === 'string' ? data.model.modelID
+              : undefined,
+          parts: partsByMessage.get(m.id) || [],
+          isSummary: data.mode === 'compaction' || data.summary === true,
+        }
+      })
+      // 尊重 opencode 的对话压缩（compaction）：默认只保留「最后一次压缩摘要 + 尾巴」，
+      // 把被压掉的前段历史折叠成摘要，避免 resume 把全量历史灌进上下文；
+      // fullHistory 为 true 时跳过压缩、导入全量。
+      let summary
+      let exportMsgs = msgs
+      if (!options.fullHistory) {
+        let lastTailStart = null
+        let lastSummaryText = null
+        for (const m of msgs) {
+          for (const p of m.parts) {
+            if (p && p.type === 'compaction' && typeof p.tail_start_id === 'string') lastTailStart = p.tail_start_id
+          }
+          if (m.isSummary) {
+            const text = m.parts.filter((p) => p && p.type === 'text').map((p) => p.text).join('\n').trim()
+            if (text) lastSummaryText = text
+          }
+        }
+        if (lastTailStart) {
+          const tailIdx = msgs.findIndex((m) => m.id === lastTailStart)
+          if (tailIdx >= 0) {
+            exportMsgs = msgs.slice(tailIdx).filter((m) => !m.isSummary)
+            summary = lastSummaryText || undefined
+          }
+        }
+      }
+      sessions.push({
+        id: row.id,
+        title: row.title,
+        directory: row.directory,
+        createdAt: row.time_created,
+        model: parseOpencodeSessionModel(row.model),
+        summary,
+        messages: exportMsgs.map(({ isSummary, ...rest }) => rest),
+      })
+    }
+    return sessions
+  } finally {
+    db.close()
+  }
+}
+
+// 解析 session.model 的 JSON 字符串（{id, providerID, variant}）为模型 id；非法时 undefined。
+function parseOpencodeSessionModel(raw) {
+  if (typeof raw !== 'string') return undefined
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object') {
+      if (typeof parsed.id === 'string' && parsed.id) return parsed.id
+      if (typeof parsed.modelID === 'string' && parsed.modelID) return parsed.modelID
+    }
+    return undefined
+  } catch {
+    // 非 JSON（个别脏数据）→ 无会话级模型，回退链继续走消息级
+    return undefined
+  }
+}
+
+// opencode 单库导入：DB 内每个会话独立落盘（可 sessionIds 过滤），恒返回批量形态。
+async function importOpencodeFile(ctx, target, args = {}) {
+  const path = target.displayPath || ctx.fs.processPath(target)
+  const sessions = readOpencodeDb(path, { fullHistory: args.fullHistory === true })
+  const wanted = Array.isArray(args.sessionIds) && args.sessionIds.length > 0 ? new Set(args.sessionIds) : null
+  const results = []
+  let imported = 0
+  let alreadyImported = 0
+  let skipped = 0
+  let failed = 0
+  for (const s of sessions) {
+    if (wanted && !wanted.has(s.id)) continue
+    try {
+      const out = convertOpencodeJson(JSON.stringify(s), args)
+      if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
+        skipped++
+        results.push({ path, status: 'skipped', reason: 'no user turns (session ' + s.id + ')' })
+        continue
+      }
+      const added = await persistSession(ctx, out.meta, out.events)
+      if (added) imported++
+      else alreadyImported++
+      results.push({
+        path,
+        status: added ? 'imported' : 'already-imported',
+        sessionId: out.meta.id,
+        turns: out.turns.length,
+        messages: out.messages,
+        toolCalls: out.toolCalls,
+        skipped: 0,
+      })
+    } catch (err) {
+      failed++
+      results.push({ path, status: 'failed', sessionId: 'import-' + s.id, error: String((err && err.message) || err) })
+    }
+  }
+  return { total: sessions.length, imported, alreadyImported, skipped, failed, results }
+}
+
+// opencode 目录导入：目录里定位 opencode.db（无递归），再走单库导入；缺 DB 时抛错。
+async function importOpencodeDirectory(ctx, dirTarget, args = {}) {
+  const dirPath = dirTarget.displayPath || ctx.fs.processPath(dirTarget)
+  const dbPath = String(dirPath).replace(/[\\/]+$/, '') + '\\opencode.db'
+  const dbTarget = await ctx.fs.resolve(dbPath)
+  return importOpencodeFile(ctx, dbTarget, args)
+}
+
 // 两个导入工具共享的 schema / render / execute 骨架，只差名称、描述、转换器与导入函数。
-// importFile/importDir 默认走单会话路径（importTranscript/importDirectory）；
-// ChatGPT 导出（一文件多会话）注入自己的实现，且 alwaysBatch（单文件也返回批量形态）。
-// deriveArgs(target) 按文件派生转换参数（可 async；Cursor 的 composer id、Reasonix 的 meta）；
-// collect 覆盖目录扫描器（Gemini 等单会话 .json 源用 collectJsonFiles）。
-function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect }) {
+function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect, extraParameters, pathDescription, dropParameters, batchUnit = '文件', skippedNote }) {
   const derive = deriveArgs || (async () => ({}))
   const importSingle = importFile || ((c, t, a) => importTranscript(c, t, a, convert))
-  const importBatch = importDir || ((c, d, r) => importDirectory(c, d, r, convert, sourceLabel, derive, collect))
+  const importBatch = importDir || ((c, d, a) => importDirectory(c, d, a.recursive, convert, sourceLabel, derive, collect))
   return defineTool({
     name: toolName,
     description,
@@ -208,18 +344,23 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
       path: {
         type: 'string',
         required: true,
-        description: alwaysBatch
+        description: pathDescription || (alwaysBatch
           ? 'ChatGPT 导出 conversations.json 的文件路径，或包含多个 .json 的目录路径。'
-          : sourceLabel + ' transcript (.jsonl) 的文件路径，或包含多个 .jsonl 的目录路径。',
+          : sourceLabel + ' transcript (.jsonl) 的文件路径，或包含多个 .jsonl 的目录路径。'),
       },
-      sessionId: {
-        type: 'string',
-        description: '可选：目标 DSH 会话 id（仅单文件导入时生效，默认 import-<源sessionId>；目录模式忽略）。',
-      },
-      recursive: {
-        type: 'boolean',
-        description: '可选：目录模式是否递归子目录（默认 true）。',
-      },
+      ...((dropParameters || []).includes('sessionId') ? {} : {
+        sessionId: {
+          type: 'string',
+          description: '可选：目标 DSH 会话 id（仅单文件导入时生效，默认 import-<源sessionId>；目录模式忽略）。',
+        },
+      }),
+      ...((dropParameters || []).includes('recursive') ? {} : {
+        recursive: {
+          type: 'boolean',
+          description: '可选：目录模式是否递归子目录（默认 true）。',
+        },
+      }),
+      ...extraParameters,
     },
     output: {
       schema: {
@@ -280,10 +421,10 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
       render: (args, value) => {
         if (value.mode === 'batch') {
           const bits = []
-          bits.push('共扫描 ' + value.total + ' 个文件')
+          bits.push('共扫描 ' + value.total + ' 个' + batchUnit)
           if (value.imported) bits.push('新增 ' + value.imported + ' 个会话')
           if (value.alreadyImported) bits.push('已存在 ' + value.alreadyImported + ' 个')
-          if (value.skipped) bits.push('跳过 ' + value.skipped + ' 个')
+          if (value.skipped) bits.push('跳过 ' + value.skipped + ' 个（' + (skippedNote || '非 ' + sourceLabel + ' transcript') + '）')
           if (value.failed) bits.push('失败 ' + value.failed + ' 个')
           // 错误处理打磨：失败/跳过原因要可见，不只计数（最多展示 5 条）
           const problems = (value.results || []).filter((r) => r.status === 'failed' || r.status === 'skipped').slice(0, 5)
@@ -311,7 +452,7 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
       const target = await ctx.fs.resolve(args.path)
       const info = await ctx.fs.stat(target)
       if (info && info.type === 'directory') {
-        const batch = await importBatch(ctx, target, args.recursive)
+        const batch = await importBatch(ctx, target, args)
         return { mode: 'batch', ...batch }
       }
       // 单文件：合并按文件派生的转换参数（可 async；Cursor 的 composer id、Reasonix 的 meta）
@@ -360,8 +501,8 @@ function apply(ctx) {
     toolName: 'import_chatgpt',
     sourceLabel: 'ChatGPT',
     convert: convertChatgptJson,
-    importFile: (c, t) => importChatgptFile(c, t),
-    importDir: (c, d, r) => importChatgptDirectory(c, d, r),
+    importFile: (c, t, a) => importChatgptFile(c, t, a),
+    importDir: (c, d, a) => importChatgptDirectory(c, d, a.recursive),
     alwaysBatch: true,
     description:
       '从 ChatGPT 网页导出的 conversations.json 导入历史对话为可继续的 DSH 会话。' +
@@ -430,6 +571,38 @@ function apply(ctx) {
       'tool_call_id 配对结果；会话 id 取文件名 stem，cwd/标题从同目录 .meta.json 派生；' +
       '重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
   }))
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_opencode',
+    sourceLabel: 'opencode',
+    convert: convertOpencodeJson,
+    // 一库多会话：单 .db 文件也恒返回批量形态；目录模式自动定位 opencode.db（无递归）
+    importFile: (c, t, a) => importOpencodeFile(c, t, a),
+    importDir: (c, d, a) => importOpencodeDirectory(c, d, a),
+    alwaysBatch: true,
+    // opencode 无单会话 id 覆盖、无递归（目录里就是 opencode.db）
+    dropParameters: ['sessionId', 'recursive'],
+    pathDescription: 'opencode 历史数据库（opencode.db）的文件路径，或包含 opencode.db 的数据目录路径。',
+    batchUnit: '会话',
+    skippedNote: '无用户回合',
+    extraParameters: {
+      sessionIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '可选：只导入指定源会话 id（缺省导入全部会话）。',
+      },
+      fullHistory: {
+        type: 'boolean',
+        description: '可选：true 时导入全量历史（忽略 opencode 的对话压缩）；默认 false（尊重压缩：只导最后一次摘要 + 尾巴）。',
+      },
+    },
+    description:
+      '从 opencode 的 SQLite 历史库 opencode.db 导入历史会话为可继续的 DSH 会话（默认位置 ~/.local/share/opencode/opencode.db）。' +
+      'path 可以是 .db 文件，也可以是包含 opencode.db 的数据目录（目录模式自动定位，无递归）。' +
+      '读取 session/message/part 表重建对话（event 表是部分镜像、session_message/session_input 为空，忽略）；' +
+      '文本/reasoning/工具调用（tool/call + tool/result，含错误标记与 sourceEventSeqs 关联）/图片附件/补丁/子任务完整保留；' +
+      '默认尊重对话压缩（compaction，只导最后一次摘要+尾巴，摘要作 reasoning 块前置），可选 fullHistory 导全量；' +
+      '可选 sessionIds 只导指定源会话；重复导入同一会话会幂等跳过。返回批量统计与逐会话明细。',
+  }))
 }
 
-export { apply, inject, name }
+export { apply, inject, name, readOpencodeDb }

@@ -8,7 +8,7 @@
 
 # DSH Chat Import
 
-> Import Claude Code / Codex / ChatGPT / Cursor / Gemini / Reasonix conversation histories into DeepSeek Harness as resumable sessions.
+> Import Claude Code / Codex / ChatGPT / Cursor / Gemini / Reasonix / opencode conversation histories into DeepSeek Harness as resumable sessions.
 
 [![npm version](https://img.shields.io/npm/v/dsh-chat-import)](https://www.npmjs.com/package/dsh-chat-import)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -16,7 +16,7 @@
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 **Listed in:** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import)
 
-`Nwflower/dsh-chat-import` adds external chat-history import to DeepSeek Harness: it brings Claude Code JSONL transcripts, Codex / ChatGPT CLI rollout JSONL, ChatGPT web-export `conversations.json`, Cursor agent transcripts, Gemini CLI session JSON, and Reasonix session JSONL into DSH as **full-fidelity, resumable** sessions. The plugin never rewrites source files and never touches the DSH engine; every import appends a fresh, event-balanced session log through the public `sessionPersistence` service and attaches the session to the workspace of its `cwd`.
+`Nwflower/dsh-chat-import` adds external chat-history import to DeepSeek Harness: it brings Claude Code JSONL transcripts, Codex / ChatGPT CLI rollout JSONL, ChatGPT web-export `conversations.json`, Cursor agent transcripts, Gemini CLI session JSON, Reasonix session JSONL, and opencode SQLite history into DSH as **full-fidelity, resumable** sessions. The plugin never rewrites source files and never touches the DSH engine; every import appends a fresh, event-balanced session log through the public `sessionPersistence` service and attaches the session to the workspace of its `cwd`.
 
 ## Features
 
@@ -26,12 +26,13 @@
 - **Import Cursor agent transcripts**: reads `~/.cursor/projects/<slug>/agent-transcripts/<composer-id>/<composer-id>.jsonl`, parses text / tool_use, filters `[REDACTED]` sentinels.
 - **Import Gemini CLI sessions**: reads `~/.gemini/history/<slot>/chats/session-*.json` (one JSON object per file), parses user/gemini messages, `thoughts` → `reasoning`, and inline `toolCalls` (results live on the same object); `info` system notices are skipped.
 - **Import Reasonix sessions**: reads `~/.reasonix/sessions/desktop-*.jsonl` and `subagent-sub-*.jsonl`, parses user/assistant/tool messages (accepts both v1 nested and v2 flat `tool_calls`), `reasoning_content` → `reasoning`, pairs tool results by `tool_call_id`; `cwd`/title come from the sibling `<stem>.meta.json`; V2 WAL sidecars (`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`) are excluded from directory scans.
+- **Import opencode sessions**: reads the opencode SQLite database (`~/.local/share/opencode/opencode.db`), rebuilds each session from the `session` / `message` / `part` tables (the `event` table is a partial mirror and `session_message` / `session_input` are empty — ignored); text / reasoning / tool calls (with error flags) / image attachments / patches / subtasks are preserved, and model resolution follows the message-level → session-level fallback chain. Respects opencode's **conversation compaction** — compacted sessions import as their last summary (a leading `reasoning` block) plus the retained tail instead of the full history; opt back into the full history with `fullHistory: true`.
 - **Full fidelity**: tool history maps to `tool/call` + `tool/result` (with error flags and `sourceEventSeqs` linkage), thinking blocks map to `reasoning`, multi-step assistant messages are preserved.
 - **Resumable**: synthesizes `turn/start`, `step/start`, `user/message`, `assistant/message`, `tool/call`, `tool/result`, `step/end`, `turn/end` events into a balanced, loadable session — open it and continue chatting.
 - **Session metadata preserved**: source `sessionId`, `cwd`, `ai-title` (Claude; pinned as `session/title` so auto-titles can't override), real model name (where the source records one), creation time.
 - **Auto workspace attach**: resolves/creates the workspace by `cwd` and `attachSession`s, so imported sessions are grouped correctly (no more "ungrouped"); ChatGPT exports and Cursor transcripts carry no `cwd` and are left ungrouped.
 - **Idempotent**: skips when the target session already exists; malformed lines are counted and reported, never aborting the import.
-- **Batch import**: pass a directory to `path` to recursively scan `.jsonl` (Claude / Codex / Cursor / Reasonix) or `.json` (ChatGPT / Gemini) files; each file becomes its own session (likewise each conversation inside a ChatGPT file), returning per-file / per-session summaries. Claude auxiliary transcripts (file name ≠ recorded `sessionId`) are skipped, never merged into the main session.
+- **Batch import**: pass a directory to `path` to recursively scan `.jsonl` (Claude / Codex / Cursor / Reasonix) or `.json` (ChatGPT / Gemini) files; each file becomes its own session (likewise each conversation inside a ChatGPT file), returning per-file / per-session summaries. Claude auxiliary transcripts (file name ≠ recorded `sessionId`) are skipped, never merged into the main session. For opencode, point at the data directory holding `opencode.db` (or the `.db` file itself) to import every session in the database at once.
 
 ## Design
 
@@ -131,6 +132,25 @@ Storage: `~/.reasonix/sessions/<stem>.jsonl` (`desktop-*` desktop sessions / `su
 | `<stem>.meta.json` (`workspace` / `summary`) | `cwd` / `session/title` |
 | turn ends | `step/end` + `turn/end` |
 
+### opencode session database (SQLite)
+
+Storage: `~/.local/share/opencode/opencode.db` (SQLite, WAL). The importer reads the `session` / `message` / `part` tables — each `message`/`part` row's `data` is a JSON document; messages sort by `time_created, id`, parts likewise. The `event` table is only a partial mirror of sessions and `session_message` / `session_input` are empty, so all three are ignored. Tool results live **inline** in the tool part's `state` (unlike Claude's split messages), so `tool/call` + `tool/result` are emitted together from one part; even a tool part without output still emits an empty result so calls and results stay paired. opencode compacts long conversations: a `compaction` part carries a `tail_start_id`, and the `mode: "compaction"` summary message that follows holds the summary text. By default the importer keeps only the **last** compaction's summary (a leading `reasoning` block) plus the messages from `tail_start_id` onward, matching opencode's actual compacted context; `fullHistory: true` imports every message instead.
+
+| opencode DB | DSH SessionEvent |
+| --- | --- |
+| `session` row (`id` / `title` / `directory` / `time_created` / `model`) | `SessionHeader` (id / createdAt / cwd) + `session/title` |
+| `message` with `role: "user"` (text parts) | `turn/start` + `step/start` + `user/message` |
+| `message` with `role: "assistant"` | `assistant/message` (one per message) |
+| part `type: "text"` | `text` content block |
+| part `type: "reasoning"` | `reasoning` content block |
+| part `type: "tool"` | `tool/call` + `tool/result` (same step, `sourceEventSeqs` linkage; `state.status === "error"` → `isError`) |
+| part `type: "file"` | `text` block `[image: <filename>]` |
+| part `type: "patch"` | `text` block `[patch: <N> files]` |
+| part `type: "subtask"` | `text` block `[subtask: <command> — <description>]` |
+| part `type: "step-start"` / `"step-finish"` | skipped (structural) |
+| part `type: "compaction"` (`tail_start_id`) | drop the pre-`tail_start_id` history; its summary message becomes a leading `reasoning` block |
+| turn ends | `step/end` + `turn/end` |
+
 `SessionHeader`: `version: 0`, `id: import-<source sessionId>`, `createdAt` (source timestamp; for Reasonix the file-name timestamp, import time when the source has neither, e.g. Cursor), `cwd` (source working directory; absent for ChatGPT exports and Cursor transcripts).
 
 ## Build
@@ -163,14 +183,17 @@ dsh plugin --profile web add dsh-chat-import
 | Cursor | `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` | `import_cursor` | ✅ unit + mock integration (`npm test`) |
 | Gemini CLI | `~/.gemini/history/<slot>/chats/session-*.json` | `import_gemini` | ✅ unit + mock integration (`npm test`) |
 | Reasonix | `~/.reasonix/sessions/desktop-*.jsonl` (and `subagent-sub-*.jsonl`) | `import_reasonix` | ✅ unit + mock integration (`npm test`); dry-run on 55 real sessions |
+| opencode | `~/.local/share/opencode/opencode.db` (SQLite) | `import_opencode` | ✅ unit + mock integration (`npm test`) |
 
-- **Verified**: 2026-08 on `dsh 0.1.0-rc.6` web profile — full "import → resume → workspace attach" run; `npm test` (56 cases) covers the pure conversion logic and mock integration paths for all six source formats.
+- **Verified**: 2026-08 on `dsh 0.1.0-rc.6` web profile — full "import → resume → workspace attach" run; `npm test` (68 cases) covers the pure conversion logic and mock integration paths for all seven source formats.
 
 ## Uninstall
 
 Remove `import-claude` from the profile's bundles (the `insert` line in `cordis.patch.yml`) and restart dsh; the plugin stops loading. Already-imported sessions stay in the DSH data directory and are unaffected.
 
 ## Usage
+
+> **Note:** imports persist to disk immediately, but the DSH session list does not auto-refresh — refresh the page (or the session list) after importing to see the new sessions.
 
 In a session with this plugin mounted, call the tools:
 
@@ -181,11 +204,14 @@ import_chatgpt({ path: "C:\\Users\\<you>\\Downloads\\chatgpt-export\\conversatio
 import_cursor({ path: "C:\\Users\\<you>\\.cursor\\projects\\<slug>\\agent-transcripts\\<composer-id>\\<composer-id>.jsonl" })
 import_gemini({ path: "C:\\Users\\<you>\\.gemini\\history\\<slot>\\chats\\session-2026-04-17T18-09-b26d7f99.json" })
 import_reasonix({ path: "C:\\Users\\<you>\\.reasonix\\sessions\\desktop-202606020721-1.jsonl" })
+import_opencode({ path: "C:\\Users\\<you>\\.local\\share\\opencode\\opencode.db" })
 ```
 
 `import_claude` / `import_codex` / `import_cursor` / `import_gemini` / `import_reasonix` behave alike: `path` can be a single file or a directory; optional `sessionId` overrides the target DSH session id (default `import-<source sessionId>`; Cursor uses the file-name composer id, Reasonix uses the file-name stem). They return `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported }`; after importing, refresh the session list to see the new session, already attached to its working directory.
 
 `import_chatgpt` differs: `conversations.json` holds **all** conversations in one file, so even a single file returns the batch shape `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }` (`total` is the conversation count, each `results` entry is one conversation); ChatGPT exports have no `cwd`, so imported sessions are not grouped into workspaces.
+
+`import_opencode` also always returns the batch shape: one `opencode.db` holds **all** sessions, so `total` is the session count and each `results` entry is one session. `path` may be the `.db` file or the data directory containing it; optional `sessionIds` (array of source session ids) restricts the import to the listed sessions; optional `fullHistory: true` imports the full message history, ignoring opencode's compaction (default `false` — compacted sessions import as their last summary plus the retained tail). Imported sessions keep their `directory` as `cwd` and are grouped into workspaces.
 
 ### Batch import (directory)
 
@@ -196,16 +222,17 @@ import_chatgpt({ path: "C:\\Users\\<you>\\Downloads\\chatgpt-export" })
 import_cursor({ path: "C:\\Users\\<you>\\.cursor\\projects" })
 import_gemini({ path: "C:\\Users\\<you>\\.gemini\\history" })
 import_reasonix({ path: "C:\\Users\\<you>\\.reasonix\\sessions" })
+import_opencode({ path: "C:\\Users\\<you>\\.local\\share\\opencode" })
 ```
 
-Directory mode recursively scans (`recursive: false` for top level only) all `.jsonl` (Claude / Codex / Cursor / Reasonix) or `.json` (ChatGPT / Gemini) files; each file imports as one session (likewise each conversation inside a ChatGPT file); non-transcript / empty files are skipped, Claude auxiliary transcripts (file name ≠ recorded `sessionId`) are skipped with a reason, and Reasonix V2 WAL sidecars (`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`) are excluded. Returns `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`, where each `results` entry carries `path`, `status` (`imported` / `already-imported` / `skipped` / `failed`) and session stats.
+Directory mode recursively scans (`recursive: false` for top level only) all `.jsonl` (Claude / Codex / Cursor / Reasonix) or `.json` (ChatGPT / Gemini) files; each file imports as one session (likewise each conversation inside a ChatGPT file); non-transcript / empty files are skipped, Claude auxiliary transcripts (file name ≠ recorded `sessionId`) are skipped with a reason, and Reasonix V2 WAL sidecars (`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`) are excluded. `import_opencode` directory mode simply locates `opencode.db` in the given directory (no recursion) and imports every session it holds. Returns `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`, where each `results` entry carries `path`, `status` (`imported` / `already-imported` / `skipped` / `failed`) and session stats.
 
 ## Scope & boundaries
 
 - Source transcripts are read-only, never rewritten in place; DSH history events are likewise append-only (deep-frozen) — new events are added, existing ones are never modified.
 - Does not modify the DSH engine, apiproxy, or official UI packages; publishes no services, so no isolate realm is needed.
 - Reading transcripts outside the workspace requires the session sandbox to allow access to that path.
-- Known boundaries: auxiliary records like `permission` / `summary` are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts (file name ≠ recorded `sessionId`) are skipped — only the main `<sessionId>.jsonl` becomes a session; Codex `reasoning` content is encrypted and unreadable, so it is skipped (planned for v1.2); ChatGPT exports rebuild only the main thread (branch = last child), tool messages attach to the nearest step as text without restoring the tool-argument structure; Cursor transcripts contain no `tool_result` (results live only in the UI bubble store) — only `tool/call` history is imported, and `[REDACTED]` text is filtered; Gemini imports follow observed format as of 2026-04 (Gemini publishes no stable schema) — `thoughts` map to `reasoning`, inline tool results are honored when present; Reasonix imports read the `.jsonl` transcript checkpoint (the V2 `.events.jsonl` WAL is excluded — event-log-only sessions newer than the checkpoint are not covered); six source formats are supported today: Claude Code JSONL, Codex / ChatGPT CLI rollout, ChatGPT web export, Cursor agent transcripts, Gemini CLI sessions, and Reasonix sessions.
+- Known boundaries: auxiliary records like `permission` / `summary` are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts (file name ≠ recorded `sessionId`) are skipped — only the main `<sessionId>.jsonl` becomes a session; Codex `reasoning` content is encrypted and unreadable, so it is skipped (planned for v1.2); ChatGPT exports rebuild only the main thread (branch = last child), tool messages attach to the nearest step as text without restoring the tool-argument structure; Cursor transcripts contain no `tool_result` (results live only in the UI bubble store) — only `tool/call` history is imported, and `[REDACTED]` text is filtered; Gemini imports follow observed format as of 2026-04 (Gemini publishes no stable schema) — `thoughts` map to `reasoning`, inline tool results are honored when present; Reasonix imports read the `.jsonl` transcript checkpoint (the V2 `.events.jsonl` WAL is excluded — event-log-only sessions newer than the checkpoint are not covered); opencode imports read the `message` + `part` tables (the `event` table is only a partial mirror and `session_message` / `session_input` are empty, so they are ignored), `patch` parts carry no diff content so only a placeholder `[patch: <N> files]` block is emitted, and tool output may contain ANSI escapes that are kept verbatim; opencode's conversation compaction is respected by default — the pre-`tail_start_id` history is folded into the last summary (a leading `reasoning` block), and `fullHistory: true` imports the full history instead; seven source formats are supported today: Claude Code JSONL, Codex / ChatGPT CLI rollout, ChatGPT web export, Cursor agent transcripts, Gemini CLI sessions, Reasonix sessions, and opencode.
 
 ## Tests
 
@@ -213,4 +240,4 @@ Directory mode recursively scans (`recursive: false` for top level only) all `.j
 npm test
 ```
 
-`test/convert.test.mjs` covers the pure conversion logic for all six source formats (turn balance, tool linkage, titles, malformed lines, injection filtering, duplicate-message dedup, mapping branches / placeholder nodes, REDACTED filtering, inline tool results, v1/v2 tool-call shapes); `test/index.test.mjs` runs the full `apply → execute` path with mock `fs` / `sessionPersistence` / `tools` / `workspaceRegistry` and validates the return value against the output schema.
+`test/convert.test.mjs` covers the pure conversion logic for all seven source formats (turn balance, tool linkage, titles, malformed lines, injection filtering, duplicate-message dedup, mapping branches / placeholder nodes, REDACTED filtering, inline tool results, v1/v2 tool-call shapes, opencode part mapping and model fallback); `test/index.test.mjs` runs the full `apply → execute` path with mock `fs` / `sessionPersistence` / `tools` / `workspaceRegistry` (and a real SQLite temp DB for `import_opencode`) and validates the return value against the output schema.

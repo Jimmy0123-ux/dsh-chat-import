@@ -2,10 +2,12 @@
 // 走真实的 apply → register → execute 路径，并校验返回值符合输出 schema。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { apply } from '../index.mjs'
+import { DatabaseSync } from 'node:sqlite'
+import { apply, readOpencodeDb } from '../index.mjs'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
@@ -94,12 +96,12 @@ function makeCtx(tree) {
   return { ctx, persistence, attached, registered }
 }
 
-test('apply 注册六个导入工具（single + batch 输出 schema）', () => {
+test('apply 注册七个导入工具（single + batch 输出 schema）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 6)
+  assert.equal(registered.length, 7)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_reasonix'])
+  assert.deepEqual(names, ['import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_opencode', 'import_reasonix'])
   for (const def of registered) {
     // 输出 schema 是 oneOf（单文件 / 批量）
     assert.ok(Array.isArray(def.output.schema.oneOf))
@@ -611,6 +613,237 @@ test('import_reasonix 幂等：同名 stem 不重复落盘', async () => {
   assert.equal(first.alreadyImported, false)
   assert.equal(second.alreadyImported, true)
   assert.equal(persistence.sessions.size, 1)
+})
+
+
+// ---- import_opencode 集成（真实 SQLite 临时库） ----
+
+// 合成 opencode 会话（两代消息形状：平铺 modelID / 无模型回退会话级）。
+function opencodeTestSessions() {
+  return [
+    {
+      id: 'ses-a',
+      title: 'Fix build',
+      directory: 'E:/demo/opencode',
+      createdAt: 1786000000000,
+      model: { id: 'deepseek-v4-flash', providerID: 'opencode-go' },
+      messages: [
+        { id: 'msg-a1', createdAt: 1786000000001, data: { role: 'user' }, parts: [
+          { id: 'p-a1', createdAt: 1786000000001, data: { type: 'text', text: '为什么构建失败' } },
+        ] },
+        { id: 'msg-a2', createdAt: 1786000000002, data: { role: 'assistant', modelID: 'deepseek-v4-pro', path: { cwd: 'E:/demo/opencode' } }, parts: [
+          { id: 'p-a2', createdAt: 1786000000002, data: { type: 'reasoning', text: '看日志' } },
+          { id: 'p-a3', createdAt: 1786000000003, data: { type: 'tool', tool: 'bash', callID: 'call-a1', state: { status: 'completed', input: { command: 'cargo build' }, output: 'Compiling...' } } },
+          { id: 'p-a4', createdAt: 1786000000004, data: { type: 'text', text: '修好了' } },
+        ] },
+      ],
+    },
+    {
+      id: 'ses-b',
+      title: 'Refactor',
+      directory: 'E:/demo/opencode',
+      createdAt: 1786000100000,
+      model: { id: 'deepseek-v4-flash', providerID: 'opencode-go' },
+      messages: [
+        { id: 'msg-b1', createdAt: 1786000100001, data: { role: 'user' }, parts: [
+          { id: 'p-b1', createdAt: 1786000100001, data: { type: 'text', text: '重构模块' } },
+        ] },
+        { id: 'msg-b2', createdAt: 1786000100002, data: { role: 'assistant' }, parts: [
+          { id: 'p-b2', createdAt: 1786000100002, data: { type: 'text', text: '完成' } },
+        ] },
+      ],
+    },
+  ]
+}
+
+// 合成一个含对话压缩（compaction）的 opencode 会话：c1/c2 被压掉，c3 起为尾巴，c5 是触发器（无正文），c6 是摘要。
+function opencodeCompactedSession() {
+  return {
+    id: 'ses-comp',
+    title: 'Long task',
+    directory: 'E:/demo/opencode',
+    createdAt: 1786000000000,
+    model: { id: 'deepseek-v4-flash', providerID: 'opencode-go' },
+    messages: [
+      { id: 'msg-c1', createdAt: 1786000000001, data: { role: 'user' }, parts: [
+        { id: 'p-c1', createdAt: 1786000000001, data: { type: 'text', text: '第一个问题' } },
+      ] },
+      { id: 'msg-c2', createdAt: 1786000000002, data: { role: 'assistant' }, parts: [
+        { id: 'p-c2', createdAt: 1786000000002, data: { type: 'text', text: '第一个回答' } },
+      ] },
+      { id: 'msg-c3', createdAt: 1786000000003, data: { role: 'user' }, parts: [
+        { id: 'p-c3', createdAt: 1786000000003, data: { type: 'text', text: '第二个问题' } },
+      ] },
+      { id: 'msg-c4', createdAt: 1786000000004, data: { role: 'assistant' }, parts: [
+        { id: 'p-c4', createdAt: 1786000000004, data: { type: 'text', text: '第二个回答' } },
+      ] },
+      { id: 'msg-c5', createdAt: 1786000000005, data: { role: 'user' }, parts: [
+        { id: 'p-c5', createdAt: 1786000000005, data: { type: 'compaction', tail_start_id: 'msg-c3' } },
+      ] },
+      { id: 'msg-c6', createdAt: 1786000000006, data: { role: 'assistant', mode: 'compaction', summary: true }, parts: [
+        { id: 'p-c6', createdAt: 1786000000006, data: { type: 'text', text: '前面做过的所有事摘要。' } },
+      ] },
+    ],
+  }
+}
+
+// 在 os.tmpdir() 建临时 opencode.db（opencode schema 的 session/message/part 三表），返回 db 路径。
+function makeOpencodeDb(sessions) {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-opencode-'))
+  const dbPath = join(dir, 'opencode.db')
+  const db = new DatabaseSync(dbPath)
+  db.exec('CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_created INTEGER, model TEXT)')
+  db.exec('CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT)')
+  db.exec('CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, data TEXT)')
+  for (const s of sessions) {
+    db.prepare('INSERT INTO session (id, title, directory, time_created, model) VALUES (?, ?, ?, ?, ?)').run(s.id, s.title, s.directory, s.createdAt, JSON.stringify(s.model))
+    for (const m of s.messages) {
+      db.prepare('INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)').run(m.id, s.id, m.createdAt, JSON.stringify(m.data))
+      for (const p of m.parts) {
+        db.prepare('INSERT INTO part (id, message_id, session_id, time_created, data) VALUES (?, ?, ?, ?, ?)').run(p.id, m.id, s.id, p.createdAt, JSON.stringify(p.data))
+      }
+    }
+  }
+  db.close()
+  return dbPath
+}
+
+test('import_opencode 单库文件：批量形态、逐会话落盘、schema 校验', async () => {
+  const dbPath = makeOpencodeDb(opencodeTestSessions())
+  const { ctx, persistence, attached } = makeCtx({}) // stat 不在 tree 里 → 按 DB 文件处理
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  const value = await def.execute({ path: dbPath })
+
+  assert.equal(value.mode, 'batch') // 单 .db 也恒批量
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.equal(value.alreadyImported, 0)
+  assert.equal(value.skipped, 0)
+  assert.equal(value.failed, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const savedA = persistence.sessions.get('import-ses-a')
+  assert.ok(savedA)
+  assert.equal(savedA.meta.cwd, 'E:/demo/opencode')
+  assert.equal(savedA.meta.createdAt, 1786000000000)
+  assert.equal(savedA.events.at(-1).type, 'session/title')
+  assert.ok(savedA.events.every((e, i) => e.seq === i))
+  // tool/call + tool/result 关联落盘
+  const call = savedA.events.find((e) => e.type === 'tool/call')
+  const result = savedA.events.find((e) => e.type === 'tool/result')
+  assert.equal(call.data.callId, 'call-a1')
+  assert.deepEqual(result.sourceEventSeqs, [call.seq])
+  assert.equal(result.data.message.content[0].content[0].text, 'Compiling...')
+  // 会话级模型回退（msg-b2 无模型）
+  const savedB = persistence.sessions.get('import-ses-b')
+  assert.ok(savedB)
+  const asstB = savedB.events.find((e) => e.type === 'assistant/message').data.message
+  assert.equal(asstB.source.model, 'deepseek-v4-flash')
+  // 有 cwd → 归组两个会话
+  assert.equal(attached.length, 2)
+})
+
+test('import_opencode 目录模式：自动定位 opencode.db、schema 校验', async () => {
+  const dbPath = makeOpencodeDb(opencodeTestSessions())
+  const dirPath = dirname(dbPath)
+  const { ctx, persistence } = makeCtx({ [dirPath]: 'dir' }) // stat 命中 → 目录分支
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  const value = await def.execute({ path: dirPath })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  assert.equal(persistence.sessions.size, 2)
+})
+
+test('import_opencode sessionIds 过滤：只导指定源会话', async () => {
+  const dbPath = makeOpencodeDb(opencodeTestSessions())
+  const { ctx, persistence } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  const value = await def.execute({ path: dbPath, sessionIds: ['ses-b'] })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2) // 库里 2 个会话，只处理被选中的
+  assert.equal(value.imported, 1)
+  assert.equal(value.results.length, 1)
+  assert.equal(value.results[0].sessionId, 'import-ses-b')
+  assert.equal(persistence.sessions.size, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('import_opencode 幂等：重复导入同一库只落盘一次', async () => {
+  const dbPath = makeOpencodeDb(opencodeTestSessions())
+  const { ctx, persistence } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  const first = await def.execute({ path: dbPath })
+  const second = await def.execute({ path: dbPath })
+
+  assert.equal(first.imported, 2)
+  assert.equal(second.imported, 0)
+  assert.equal(second.alreadyImported, 2)
+  assert.equal(persistence.sessions.size, 2)
+})
+
+test('readOpencodeDb：只读抽取会话、消息/part 排序、模型解析', () => {
+  const dbPath = makeOpencodeDb(opencodeTestSessions())
+  const sessions = readOpencodeDb(dbPath)
+
+  assert.equal(sessions.length, 2)
+  const a = sessions.find((s) => s.id === 'ses-a')
+  assert.equal(a.title, 'Fix build')
+  assert.equal(a.directory, 'E:/demo/opencode')
+  assert.equal(a.model, 'deepseek-v4-flash') // session.model JSON 字符串 → id
+  assert.equal(a.createdAt, 1786000000000)
+  assert.equal(a.messages.length, 2)
+  assert.equal(a.messages[0].role, 'user')
+  assert.equal(a.messages[1].role, 'assistant')
+  assert.equal(a.messages[1].model, 'deepseek-v4-pro') // data.modelID 平铺
+  assert.equal(a.messages[1].cwd, 'E:/demo/opencode') // data.path.cwd
+  assert.equal(a.messages[1].parts.length, 3)
+  assert.equal(a.messages[1].parts[0].type, 'reasoning')
+  assert.equal(a.messages[1].parts[1].type, 'tool')
+  // 无模型的消息不携带 model
+  const b = sessions.find((s) => s.id === 'ses-b')
+  assert.equal(b.messages[1].model, undefined)
+})
+
+test('readOpencodeDb：尊重压缩只导摘要+尾巴，fullHistory 导全量', () => {
+  const dbPath = makeOpencodeDb([opencodeCompactedSession()])
+  const [s] = readOpencodeDb(dbPath)
+  assert.equal(s.summary, '前面做过的所有事摘要。')
+  assert.equal(s.messages.length, 3) // c3/c4/c5（c1/c2 被压掉，c6 摘要消息剔除）
+  assert.equal(s.messages[0].id, 'msg-c3')
+  assert.equal(s.messages[1].id, 'msg-c4')
+  assert.equal(s.messages[2].id, 'msg-c5')
+
+  const [full] = readOpencodeDb(dbPath, { fullHistory: true })
+  assert.equal(full.summary, undefined)
+  assert.equal(full.messages.length, 6) // 全量
+})
+
+test('import_opencode fullHistory：true 导入全量历史', async () => {
+  const dbPath = makeOpencodeDb([opencodeCompactedSession()])
+  const { ctx, persistence } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  const value = await def.execute({ path: dbPath, fullHistory: true })
+  assert.equal(value.imported, 1)
+  const saved = persistence.sessions.get('import-ses-comp')
+  assert.ok(saved)
+  assert.equal(saved.events.filter((e) => e.type === 'user/message').length, 2) // c1 + c3（c5 无正文被跳过）
+  assert.equal(saved.events.filter((e) => e.type === 'assistant/message').length, 3) // c2 + c4 + c6
+})
+
+test('import_opencode 读不到 DB：失败大声抛错', async () => {
+  const { ctx } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  await assert.rejects(() => def.execute({ path: join(tmpdir(), 'no-such-opencode.db') }))
 })
 
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）
