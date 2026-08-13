@@ -2,7 +2,6 @@
   "name": "dsh-chat-import",
   "description": "Import Claude Code JSONL transcripts as resumable DeepSeek Harness sessions",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "main": "./index.mjs",
   "exports": {
@@ -24,6 +23,24 @@
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": "0.1.0-rc.6"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "dsh",
+    "claude-code",
+    "import",
+    "jsonl",
+    "migration",
+    "transcript"
+  ],
+  "author": "Nwflower <1679659@qq.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nwflower/dsh-chat-import.git"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "scripts": {
     "test": "node --test \"test/*.test.mjs\""
