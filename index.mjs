@@ -7,7 +7,7 @@
 // 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区。
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson } from './convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl } from './convert.mjs'
 
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
@@ -52,10 +52,16 @@ async function collectJsonlFiles(ctx, dirTarget, out, recursive) {
   for (const entry of entries) {
     if (entry.type === 'directory') {
       if (recursive) await collectJsonlFiles(ctx, entry.target, out, recursive)
-    } else if (entry.type === 'file' && /\.jsonl$/i.test(entry.name)) {
+    } else if (entry.type === 'file' && /\.jsonl$/i.test(entry.name) && !isSidecarJsonl(entry.name)) {
       out.push(entry.target)
     }
   }
+}
+
+// 会话主 transcript 的伴生 JSONL（事件日志 / 冲突日志 / 守护文件）不是会话本身，
+// 目录批量扫描时排除（Reasonix V2 的 <id>.events.jsonl 是 WAL，非主 transcript）。
+function isSidecarJsonl(name) {
+  return /\.(events|conflicts|guardian)\.jsonl$/i.test(name)
 }
 
 // 递归收集目录下的 .json 文件（ChatGPT 导出，按名称稳定排序）。
@@ -83,8 +89,8 @@ async function persistSession(ctx, meta, events) {
 }
 
 // 批量导入：把目录下匹配 pattern 的文件都作为独立会话导入。
-// deriveArgs(target) 允许按文件派生转换参数（如 Cursor 从文件名取 composer id）；
-// collect 默认收集 .jsonl，Gemini 等单会话 .json 源传入 collectJsonFiles。
+// deriveArgs(target) 允许按文件派生转换参数（可 async；Cursor 取文件名 composer id，
+// Reasonix 读同目录 meta.json 拿 workspace/summary）；collect 默认收集 .jsonl。
 async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel, deriveArgs, collect) {
   const files = []
   const collector = collect || collectJsonlFiles
@@ -98,7 +104,8 @@ async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel, 
     const path = target.displayPath || ctx.fs.processPath(target)
     try {
       const raw = await ctx.fs.readText(target)
-      const { meta, events, turns, messages, toolCalls, skipped: badLines } = convert(raw, deriveArgs ? deriveArgs(target) : {})
+      const derived = deriveArgs ? await deriveArgs(target) : {}
+      const { meta, events, turns, messages, toolCalls, skipped: badLines } = convert(raw, derived)
       if (turns.length === 0 && events.length === 0) {
         // 不是对应源格式的 transcript（没有可导入内容）
         skipped++
@@ -186,10 +193,10 @@ async function importChatgptDirectory(ctx, dirTarget, recursive) {
 // 两个导入工具共享的 schema / render / execute 骨架，只差名称、描述、转换器与导入函数。
 // importFile/importDir 默认走单会话路径（importTranscript/importDirectory）；
 // ChatGPT 导出（一文件多会话）注入自己的实现，且 alwaysBatch（单文件也返回批量形态）。
-// deriveArgs(target) 按文件派生转换参数（Cursor 需要 composer id 做幂等 id）；
+// deriveArgs(target) 按文件派生转换参数（可 async；Cursor 的 composer id、Reasonix 的 meta）；
 // collect 覆盖目录扫描器（Gemini 等单会话 .json 源用 collectJsonFiles）。
 function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect }) {
-  const derive = deriveArgs || (() => ({}))
+  const derive = deriveArgs || (async () => ({}))
   const importSingle = importFile || ((c, t, a) => importTranscript(c, t, a, convert))
   const importBatch = importDir || ((c, d, r) => importDirectory(c, d, r, convert, sourceLabel, derive, collect))
   return defineTool({
@@ -298,8 +305,8 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         const batch = await importBatch(ctx, target, args.recursive)
         return { mode: 'batch', ...batch }
       }
-      // 单文件：合并按文件派生的转换参数（如 Cursor 的 composer id）
-      const fileArgs = { ...args, ...derive(target) }
+      // 单文件：合并按文件派生的转换参数（可 async；Cursor 的 composer id、Reasonix 的 meta）
+      const fileArgs = { ...args, ...(await derive(target)) }
       if (alwaysBatch) {
         // ChatGPT 导出：单文件也含多个会话，恒返回批量形态
         const batch = await importSingle(ctx, target, fileArgs)
@@ -375,6 +382,37 @@ function apply(ctx) {
       'path 可以是单个 .json 文件，也可以是包含多个 .json 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
       '解析 user/gemini 消息、thoughts→reasoning、内联 toolCalls（结果同对象）并持久化；' +
       'info 系统通知跳过；重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
+  }))
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_reasonix',
+    sourceLabel: 'Reasonix',
+    convert: convertReasonixJsonl,
+    // 会话 id 用文件名 stem（幂等）；cwd/createdAt 从同目录 <stem>.meta.json 派生
+    deriveArgs: async (target) => {
+      const p = target.displayPath || ctx.fs.processPath(target)
+      const base = String(p).split(/[\\/]/).pop() || ''
+      const stem = base.replace(/\.jsonl$/i, '')
+      const derived = { reasonixId: stem }
+      try {
+        // meta 与 transcript 同目录：<stem>.meta.json
+        const metaPath = String(p).replace(/[\\/][^\\/]*\.jsonl$/i, '') + '\\' + stem + '.meta.json'
+        const metaTarget = await ctx.fs.resolve(metaPath)
+        const raw = await ctx.fs.readText(metaTarget)
+        const meta = JSON.parse(raw)
+        if (meta && typeof meta.workspace === 'string' && meta.workspace) derived.cwd = meta.workspace
+        if (meta && typeof meta.summary === 'string' && meta.summary.trim()) derived.title = meta.summary.trim()
+      } catch {
+        // meta 缺失（子代理或旧文件）不致命：仍按 stem 导入，仅无 cwd/标题
+      }
+      return derived
+    },
+    description:
+      '从 Reasonix 的会话 JSONL 导入历史对话为可继续的 DSH 会话（' +
+      '~/.reasonix/sessions/desktop-*.jsonl 与 subagent-sub-*.jsonl）。' +
+      'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
+      '解析 user/assistant/tool 消息（兼容 v1 嵌套与 v2 扁平 tool_calls）、reasoning_content→reasoning、' +
+      'tool_call_id 配对结果；会话 id 取文件名 stem，cwd/标题从同目录 .meta.json 派生；' +
+      '重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
   }))
 }
 

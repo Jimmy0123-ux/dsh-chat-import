@@ -94,12 +94,12 @@ function makeCtx(tree) {
   return { ctx, persistence, attached, registered }
 }
 
-test('apply 注册五个导入工具（single + batch 输出 schema）', () => {
+test('apply 注册六个导入工具（single + batch 输出 schema）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 5)
+  assert.equal(registered.length, 6)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini'])
+  assert.deepEqual(names, ['import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_reasonix'])
   for (const def of registered) {
     // 输出 schema 是 oneOf（单文件 / 批量）
     assert.ok(Array.isArray(def.output.schema.oneOf))
@@ -499,6 +499,70 @@ test('import_gemini 非法 JSON：单文件计入 skipped 不落盘', async () =
   assert.equal(value.skipped, 1)
   assert.equal(persistence.sessions.size, 0)
   assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+// ---- import_reasonix 集成 ----
+
+test('import_reasonix 单文件：meta 派生 cwd/标题、落盘、schema 校验', async () => {
+  const { ctx, persistence, attached } = makeCtx({
+    'D:\\demo\\reasonix\\desktop-v2.jsonl': load('reasonix-v2.jsonl'),
+    'D:\\demo\\reasonix\\desktop-v2.meta.json': load('reasonix-v2.meta.json'),
+  })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_reasonix')
+  const value = await def.execute({ path: 'D:\\demo\\reasonix\\desktop-v2.jsonl' })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-desktop-v2') // 文件名 stem
+  assert.equal(value.turns, 1)
+  assert.equal(value.toolCalls, 1)
+  assert.equal(value.alreadyImported, false)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get('import-desktop-v2')
+  assert.ok(saved)
+  assert.equal(saved.meta.cwd, 'D:\\Reasonix') // meta.workspace → cwd
+  assert.equal(saved.events.at(-1).type, 'session/title') // meta.summary → 标题
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+  // cwd → 归组
+  assert.equal(attached.length, 1)
+  assert.equal(attached[0].id, 'import-desktop-v2')
+})
+
+test('import_reasonix 目录模式：递归扫描、排除 WAL 伴生文件、逐文件独立会话', async () => {
+  const tree = {
+    'D:\\demo\\reasonix': 'dir',
+    'D:\\demo\\reasonix\\desktop-a.jsonl': load('reasonix-v1.jsonl'),
+    'D:\\demo\\reasonix\\desktop-a.jsonl.bak': load('reasonix-v1.jsonl'),
+    'D:\\demo\\reasonix\\sub': 'dir',
+    'D:\\demo\\reasonix\\sub\\desktop-b.jsonl': load('reasonix-multi-turn.jsonl'),
+    // V2 WAL / 伴生文件：目录扫描必须排除
+    'D:\\demo\\reasonix\\desktop-a.events.jsonl': '{"type":"event"}',
+    'D:\\demo\\reasonix\\desktop-a.conflicts.jsonl': '{}',
+    'D:\\demo\\reasonix\\desktop-a.guardian.jsonl': '{}',
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_reasonix')
+  const value = await def.execute({ path: 'D:\\demo\\reasonix' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2) // desktop-a.jsonl + sub/desktop-b.jsonl（bak/WAL 均排除）
+  assert.equal(value.imported, 2)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  const ids = [...persistence.sessions.keys()].sort()
+  assert.deepEqual(ids, ['import-desktop-a', 'import-desktop-b'])
+})
+
+test('import_reasonix 幂等：同名 stem 不重复落盘', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\reasonix\\desktop-a.jsonl': load('reasonix-v1.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_reasonix')
+  const first = await def.execute({ path: 'D:\\demo\\reasonix\\desktop-a.jsonl' })
+  const second = await def.execute({ path: 'D:\\demo\\reasonix\\desktop-a.jsonl' })
+  assert.equal(first.alreadyImported, false)
+  assert.equal(second.alreadyImported, true)
+  assert.equal(persistence.sessions.size, 1)
 })
 
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）

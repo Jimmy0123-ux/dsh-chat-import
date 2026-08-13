@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -391,4 +391,53 @@ test('convertGeminiJson: 非法 JSON / 非会话结构返回空并 skipped', () 
   const wrong = convertGeminiJson('{"foo":1}')
   assert.equal(wrong.meta, null)
   assert.equal(wrong.skipped, 1)
+})
+
+// ---- Reasonix ----
+
+test('convertReasonixJsonl: v1 嵌套 tool_calls + tool_call_id 配对 + reasoning', () => {
+  const out = convertReasonixJsonl(load('reasonix-v1.jsonl'), { reasonixId: 'desktop-202606020721-1' })
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.toolCalls, 1)
+  assert.equal(out.meta.id, 'import-desktop-202606020721-1')
+  const types = out.events.map((e) => e.type)
+  assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
+  out.events.forEach((e, i) => assert.equal(e.seq, i))
+  // 工具调用与结果配对
+  const call = out.events.find((e) => e.type === 'tool/call')
+  assert.equal(call.data.name, 'search_files')
+  assert.equal(call.data.arguments, '{"pattern": "codegraph"}')
+  const result = out.events.find((e) => e.type === 'tool/result')
+  assert.deepEqual(result.sourceEventSeqs, [call.seq])
+  assert.equal(result.data.message.content[0].content[0].text, '找到了 codegraph v0.9.8')
+  // reasoning_content → reasoning block
+  const asst = out.events.filter((e) => e.type === 'assistant/message').map((e) => e.data.message)
+  assert.ok(asst.some((m) => m.content.some((c) => c.type === 'reasoning')))
+  // provider
+  assert.deepEqual(asst[0].source, { kind: 'model', provider: 'reasonix', model: 'reasonix' })
+})
+
+test('convertReasonixJsonl: v2 扁平 tool_calls + createdAt 时间戳', () => {
+  const out = convertReasonixJsonl(load('reasonix-v2.jsonl'), { reasonixId: 'desktop-202606020725-2', cwd: 'D:\\Reasonix', title: '查看当前编辑 xlsx 的 skill' })
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.toolCalls, 1)
+  assert.equal(out.meta.cwd, 'D:\\Reasonix')
+  assert.equal(out.meta.createdAt, 1780325474978) // 取第一条消息的 createdAt
+  const call = out.events.find((e) => e.type === 'tool/call')
+  assert.equal(call.data.name, 'list_directory')
+  const result = out.events.find((e) => e.type === 'tool/result')
+  assert.deepEqual(result.sourceEventSeqs, [call.seq])
+  // title 来自 meta.summary → session/title 事件
+  const titleEv = out.events.find((e) => e.type === 'session/title')
+  assert.equal(titleEv.data.title, '查看当前编辑 xlsx 的 skill')
+})
+
+test('convertReasonixJsonl: 多轮切分、畸形行计数', () => {
+  const out = convertReasonixJsonl('not json\n' + load('reasonix-multi-turn.jsonl'), {})
+  assert.equal(out.skipped, 1)
+  assert.equal(out.turns.length, 2)
+  const starts = out.events.filter((e) => e.type === 'turn/start')
+  assert.equal(starts.length, 2)
+  // 无 reasonixId 时退化为时间戳 id（仍合法）
+  assert.match(out.meta.id, /^import-\d+$/)
 })
