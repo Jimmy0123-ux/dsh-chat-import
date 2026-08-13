@@ -8,13 +8,13 @@
 
 # DSH Chat Import
 
-> Import Claude Code / Codex / ChatGPT / Cursor / Gemini conversation histories into DeepSeek Harness as resumable sessions.
+> Import Claude Code / Codex / ChatGPT / Cursor / Gemini / Reasonix conversation histories into DeepSeek Harness as resumable sessions.
 
 [![npm version](https://img.shields.io/npm/v/dsh-chat-import)](https://www.npmjs.com/package/dsh-chat-import)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import)](https://github.com/Nwflower/dsh-chat-import)
 
-`Nwflower/dsh-chat-import` adds external chat-history import to DeepSeek Harness: it brings Claude Code JSONL transcripts, Codex / ChatGPT CLI rollout JSONL, ChatGPT web-export `conversations.json`, Cursor agent transcripts, and Gemini CLI session JSON into DSH as **full-fidelity, resumable** sessions. The plugin never rewrites source files and never touches the DSH engine; every import appends a fresh, event-balanced session log through the public `sessionPersistence` service and attaches the session to the workspace of its `cwd`.
+`Nwflower/dsh-chat-import` adds external chat-history import to DeepSeek Harness: it brings Claude Code JSONL transcripts, Codex / ChatGPT CLI rollout JSONL, ChatGPT web-export `conversations.json`, Cursor agent transcripts, Gemini CLI session JSON, and Reasonix session JSONL into DSH as **full-fidelity, resumable** sessions. The plugin never rewrites source files and never touches the DSH engine; every import appends a fresh, event-balanced session log through the public `sessionPersistence` service and attaches the session to the workspace of its `cwd`.
 
 ## Features
 
@@ -23,12 +23,13 @@
 - **Import ChatGPT web exports**: reads `conversations.json` from an exported ZIP (one file holds all conversations), rebuilds each conversation along the main mapping thread.
 - **Import Cursor agent transcripts**: reads `~/.cursor/projects/<slug>/agent-transcripts/<composer-id>/<composer-id>.jsonl`, parses text / tool_use, filters `[REDACTED]` sentinels.
 - **Import Gemini CLI sessions**: reads `~/.gemini/history/<slot>/chats/session-*.json` (one JSON object per file), parses user/gemini messages, `thoughts` → `reasoning`, and inline `toolCalls` (results live on the same object); `info` system notices are skipped.
+- **Import Reasonix sessions**: reads `~/.reasonix/sessions/desktop-*.jsonl` and `subagent-sub-*.jsonl`, parses user/assistant/tool messages (accepts both v1 nested and v2 flat `tool_calls`), `reasoning_content` → `reasoning`, pairs tool results by `tool_call_id`; `cwd`/title come from the sibling `<stem>.meta.json`; V2 WAL sidecars (`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`) are excluded from directory scans.
 - **Full fidelity**: tool history maps to `tool/call` + `tool/result` (with error flags and `sourceEventSeqs` linkage), thinking blocks map to `reasoning`, multi-step assistant messages are preserved.
 - **Resumable**: synthesizes `turn/start`, `step/start`, `user/message`, `assistant/message`, `tool/call`, `tool/result`, `step/end`, `turn/end` events into a balanced, loadable session — open it and continue chatting.
 - **Session metadata preserved**: source `sessionId`, `cwd`, `ai-title` (Claude; pinned as `session/title` so auto-titles can't override), real model name (where the source records one), creation time.
 - **Auto workspace attach**: resolves/creates the workspace by `cwd` and `attachSession`s, so imported sessions are grouped correctly (no more "ungrouped"); ChatGPT exports and Cursor transcripts carry no `cwd` and are left ungrouped.
 - **Idempotent**: skips when the target session already exists; malformed lines are counted and reported, never aborting the import.
-- **Batch import**: pass a directory to `path` to recursively scan `.jsonl` (Claude / Codex / Cursor) or `.json` (ChatGPT / Gemini) files; each file becomes its own session (likewise each conversation inside a ChatGPT file), returning per-file / per-session summaries.
+- **Batch import**: pass a directory to `path` to recursively scan `.jsonl` (Claude / Codex / Cursor / Reasonix) or `.json` (ChatGPT / Gemini) files; each file becomes its own session (likewise each conversation inside a ChatGPT file), returning per-file / per-session summaries.
 
 ## Design
 
@@ -112,6 +113,20 @@ Storage: `~/.gemini/history/<slot>/chats/session-*.json` — one JSON object per
 | `type: "info"` | skipped |
 | turn ends | `step/end` + `turn/end` |
 
+### Reasonix session JSONL
+
+Storage: `~/.reasonix/sessions/<stem>.jsonl` (`desktop-*` desktop sessions / `subagent-sub-*` sub-agent sessions), one session per file. Lines are OpenAI-style messages without an envelope, and both format generations are accepted: v1 `tool_calls` use the nested `{ id, type: "function", function: { name, arguments } }` shape, v2 uses the flat `{ id, name, arguments }` shape and may carry a `createdAt` (unix ms). Tool results (`role: "tool"` with `tool_call_id`) pair with the assistant `tool_calls[].id`. A sibling `<stem>.meta.json` provides `workspace` → `cwd` and `summary` → pinned title. V2 WAL sidecars (`<stem>.events.jsonl`, `.conflicts.jsonl`, `.guardian.jsonl`) are append-only logs, not transcripts, and are excluded from directory scans.
+
+| Reasonix JSONL | DSH SessionEvent |
+| --- | --- |
+| `role: "user"` (string content) | `turn/start` + `step/start` + `user/message` |
+| `role: "assistant"` string content | `assistant/message` |
+| `reasoning_content` | `reasoning` content block |
+| `tool_calls[].function` (v1 nested / v2 flat) | `tool/call` |
+| `role: "tool"` with `tool_call_id` | `tool/result` (paired by `tool_call_id`, `sourceEventSeqs` linkage) |
+| `<stem>.meta.json` (`workspace` / `summary`) | `cwd` / `session/title` |
+| turn ends | `step/end` + `turn/end` |
+
 `SessionHeader`: `version: 0`, `id: import-<source sessionId>`, `createdAt` (source timestamp; import time when the source has none, e.g. Cursor), `cwd` (source working directory; absent for ChatGPT exports and Cursor transcripts).
 
 ## Build
@@ -143,8 +158,9 @@ dsh plugin --profile web add dsh-chat-import
 | ChatGPT web export | ZIP → `conversations.json` | `import_chatgpt` | ✅ unit + mock integration (`npm test`) |
 | Cursor | `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` | `import_cursor` | ✅ unit + mock integration (`npm test`) |
 | Gemini CLI | `~/.gemini/history/<slot>/chats/session-*.json` | `import_gemini` | ✅ unit + mock integration (`npm test`) |
+| Reasonix | `~/.reasonix/sessions/desktop-*.jsonl` (and `subagent-sub-*.jsonl`) | `import_reasonix` | ✅ unit + mock integration (`npm test`); dry-run on 55 real sessions |
 
-- **Verified**: 2026-08 on `dsh 0.1.0-rc.6` web profile — full "import → resume → workspace attach" run; `npm test` (50 cases) covers the pure conversion logic and mock integration paths for all five source formats.
+- **Verified**: 2026-08 on `dsh 0.1.0-rc.6` web profile — full "import → resume → workspace attach" run; `npm test` (56 cases) covers the pure conversion logic and mock integration paths for all six source formats.
 
 ## Uninstall
 
@@ -160,9 +176,10 @@ import_codex({ path: "C:\\Users\\<you>\\.codex\\sessions\\2026\\05\\18\\rollout-
 import_chatgpt({ path: "C:\\Users\\<you>\\Downloads\\chatgpt-export\\conversations.json" })
 import_cursor({ path: "C:\\Users\\<you>\\.cursor\\projects\\<slug>\\agent-transcripts\\<composer-id>\\<composer-id>.jsonl" })
 import_gemini({ path: "C:\\Users\\<you>\\.gemini\\history\\<slot>\\chats\\session-2026-04-17T18-09-b26d7f99.json" })
+import_reasonix({ path: "C:\\Users\\<you>\\.reasonix\\sessions\\desktop-202606020721-1.jsonl" })
 ```
 
-`import_claude` / `import_codex` / `import_cursor` / `import_gemini` behave alike: `path` can be a single file or a directory; optional `sessionId` overrides the target DSH session id (default `import-<source sessionId>`; Cursor uses the file-name composer id). They return `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported }`; after importing, refresh the session list to see the new session, already attached to its working directory.
+`import_claude` / `import_codex` / `import_cursor` / `import_gemini` / `import_reasonix` behave alike: `path` can be a single file or a directory; optional `sessionId` overrides the target DSH session id (default `import-<source sessionId>`; Cursor uses the file-name composer id, Reasonix uses the file-name stem). They return `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported }`; after importing, refresh the session list to see the new session, already attached to its working directory.
 
 `import_chatgpt` differs: `conversations.json` holds **all** conversations in one file, so even a single file returns the batch shape `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }` (`total` is the conversation count, each `results` entry is one conversation); ChatGPT exports have no `cwd`, so imported sessions are not grouped into workspaces.
 
@@ -174,16 +191,17 @@ import_codex({ path: "C:\\Users\\<you>\\.codex\\sessions" })
 import_chatgpt({ path: "C:\\Users\\<you>\\Downloads\\chatgpt-export" })
 import_cursor({ path: "C:\\Users\\<you>\\.cursor\\projects" })
 import_gemini({ path: "C:\\Users\\<you>\\.gemini\\history" })
+import_reasonix({ path: "C:\\Users\\<you>\\.reasonix\\sessions" })
 ```
 
-Directory mode recursively scans (`recursive: false` for top level only) all `.jsonl` (Claude / Codex / Cursor) or `.json` (ChatGPT / Gemini) files; each file imports as one session (likewise each conversation inside a ChatGPT file); non-transcript / empty files are skipped. Returns `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`, where each `results` entry carries `path`, `status` (`imported` / `already-imported` / `skipped` / `failed`) and session stats.
+Directory mode recursively scans (`recursive: false` for top level only) all `.jsonl` (Claude / Codex / Cursor / Reasonix) or `.json` (ChatGPT / Gemini) files; each file imports as one session (likewise each conversation inside a ChatGPT file); non-transcript / empty files are skipped, and Reasonix V2 WAL sidecars (`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`) are excluded. Returns `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`, where each `results` entry carries `path`, `status` (`imported` / `already-imported` / `skipped` / `failed`) and session stats.
 
 ## Scope & boundaries
 
 - Source transcripts are read-only, never rewritten in place; DSH history events are likewise append-only (deep-frozen) — new events are added, existing ones are never modified.
 - Does not modify the DSH engine, apiproxy, or official UI packages; publishes no services, so no isolate realm is needed.
 - Reading transcripts outside the workspace requires the session sandbox to allow access to that path.
-- Known boundaries: auxiliary records like `permission` / `summary` are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Codex `reasoning` content is encrypted and unreadable, so it is skipped (planned for v1.2); ChatGPT exports rebuild only the main thread (branch = last child), tool messages attach to the nearest step as text without restoring the tool-argument structure; Cursor transcripts contain no `tool_result` (results live only in the UI bubble store) — only `tool/call` history is imported, and `[REDACTED]` text is filtered; Gemini imports follow observed format as of 2026-04 (Gemini publishes no stable schema) — `thoughts` map to `reasoning`, inline tool results are honored when present; five source formats are supported today: Claude Code JSONL, Codex / ChatGPT CLI rollout, ChatGPT web export, Cursor agent transcripts, and Gemini CLI sessions.
+- Known boundaries: auxiliary records like `permission` / `summary` are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Codex `reasoning` content is encrypted and unreadable, so it is skipped (planned for v1.2); ChatGPT exports rebuild only the main thread (branch = last child), tool messages attach to the nearest step as text without restoring the tool-argument structure; Cursor transcripts contain no `tool_result` (results live only in the UI bubble store) — only `tool/call` history is imported, and `[REDACTED]` text is filtered; Gemini imports follow observed format as of 2026-04 (Gemini publishes no stable schema) — `thoughts` map to `reasoning`, inline tool results are honored when present; Reasonix imports read the `.jsonl` transcript checkpoint (the V2 `.events.jsonl` WAL is excluded — event-log-only sessions newer than the checkpoint are not covered); six source formats are supported today: Claude Code JSONL, Codex / ChatGPT CLI rollout, ChatGPT web export, Cursor agent transcripts, Gemini CLI sessions, and Reasonix sessions.
 
 ## Tests
 
@@ -191,4 +209,4 @@ Directory mode recursively scans (`recursive: false` for top level only) all `.j
 npm test
 ```
 
-`test/convert.test.mjs` covers the pure conversion logic for all five source formats (turn balance, tool linkage, titles, malformed lines, injection filtering, duplicate-message dedup, mapping branches / placeholder nodes, REDACTED filtering, inline tool results); `test/index.test.mjs` runs the full `apply → execute` path with mock `fs` / `sessionPersistence` / `tools` / `workspaceRegistry` and validates the return value against the output schema.
+`test/convert.test.mjs` covers the pure conversion logic for all six source formats (turn balance, tool linkage, titles, malformed lines, injection filtering, duplicate-message dedup, mapping branches / placeholder nodes, REDACTED filtering, inline tool results, v1/v2 tool-call shapes); `test/index.test.mjs` runs the full `apply → execute` path with mock `fs` / `sessionPersistence` / `tools` / `workspaceRegistry` and validates the return value against the output schema.
