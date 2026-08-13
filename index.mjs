@@ -196,6 +196,12 @@ function convertClaudeJsonl(raw, args) {
     push('turn/end', { turn, reason: { kind: 'completed' } })
   }
 
+  // 标题：ai-title → session/title 事件（钉住，避免自动回退标题覆盖）。
+  const normalizedTitle = (title || '').trim()
+  if (normalizedTitle.length > 0) {
+    push('session/title', { title: normalizedTitle, messageSeqs: [], source: { kind: 'user' } })
+  }
+
   return {
     meta,
     events,
