@@ -1,15 +1,16 @@
 # AGENTS.md
 
-`dsh-chat-import` 是 DeepSeek Harness 的 Host 插件：把 Claude Code 的 JSONL transcript **全保真**导入为**可继续（resume）**的 DSH 会话。DSH 的哲学是 **everything is a plugin**——本仓库只做插件，不碰引擎。改代码前先读 `README.md`（对外契约）与 `test/`（现有行为）。
+`dsh-chat-import` 是 DeepSeek Harness 的 Host 插件：把 Claude Code / Codex / ChatGPT 的外部聊天记录 **全保真**导入为**可继续（resume）**的 DSH 会话。DSH 的哲学是 **everything is a plugin**——本仓库只做插件，不碰引擎。改代码前先读 `README.md`（对外契约）与 `test/`（现有行为）。
 
 ## 仓库布局：发布面 / 本地工程面
 
 根目录只放发布到 GitHub / npm 的文件；本地工程文件一律收进 `dev/`（gitignore，永不提交）。
 
 ```
-index.mjs        插件入口（唯一 host 面文件）：注册 import_claude 工具
+index.mjs        插件入口（唯一 host 面文件）：注册 import_claude / import_codex / import_chatgpt
 convert.mjs      转换核心（纯函数、零 DSH 依赖、可独立单测）
 cordis.patch.yml bundle 声明（insert import-claude）
+.github/         GitHub Actions CI（npm test，不进 npm 包）
 package.json     npm 包元数据；files 白名单 = 发布内容
 README.md        对外契约，行为变更必须同步
 LICENSE          MIT
@@ -27,7 +28,7 @@ npm test        # node --test 跑 test/*.test.mjs（convert 单测 + index mock 
 node --test "dev/bin/*.test.mjs"   # dev/bin/session.mjs 并发协调工具的自测（本地工程面）
 ```
 
-无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` 即发布产物。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调 `import_claude`。
+无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` 即发布产物。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调 `import_claude` / `import_codex` / `import_chatgpt`。
 
 ## 提交纪律（保持仓库干净）
 
