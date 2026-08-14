@@ -18,7 +18,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool, TOOL_RUNTIME_SCHEDULER } from '@deepseek-ai/dsh-tools'
 import {
   convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl,
   convertGeminiJson, convertReasonixJsonl, convertPiJsonl, convertOpencodeJson,
@@ -1667,6 +1667,13 @@ async function readBody(req) {
 }
 
 function apply(ctx) {
+  // 声明 TOOL_RUNTIME_SCHEDULER 命名导入：一旦解析到旧副本 dsh-tools@0.0.1-rc.1
+  //（只导出 TOOL_REGISTRY_SCHEDULER），模块加载即失败并大声报错，而不是静默用旧
+  // ABI 注册工具、最终让宿主 agent-loop 在调度时崩溃
+  //（Cannot read properties of undefined (reading 'prepare')）并污染会话历史。
+  if (typeof TOOL_RUNTIME_SCHEDULER !== 'symbol') {
+    throw new Error('dsh-chat-import: resolved @deepseek-ai/dsh-tools lacks TOOL_RUNTIME_SCHEDULER — requires ^0.1.0-rc.6')
+  }
   // REQ-24 imports registry 目录：$DSH_HOME/dsh-chat-import（$DSH_HOME 缺省 ~/.dsh）
   const registryDir = resolveRegistryDir()
   ctx.tools.register(makeImportTool(ctx, {
