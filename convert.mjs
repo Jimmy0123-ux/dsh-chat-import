@@ -200,6 +200,54 @@ function synthesizeSession({ meta, turns, title, provider, model, skipped, recor
   }
 }
 
+// 从一次完整转换中截取「第 fromTurn 轮及之后」的事件尾部，seq 从 fromSeq 重新编号
+// （供 REQ-24 增量续写：重导把源文件新增轮次 append 进同一 DSH 会话）。
+//
+// 轮次边界由 turn/start 事件的 data.turn 决定（不是每个事件都带 data.turn）。
+// 末尾的 session/title 事件（无 turn）默认剥离（dropSessionEvents=true）——标题只在
+// 全量导入时写一次，续写轮次不重复钉标题。工具结果事件的 sourceEventSeqs 重映射到
+// 尾部新 seq；指向尾部之外的引用（跨轮异步工具：调用在已导入前段、结果在新增尾部）
+// 原样保留——前段 seq 未变，旧值仍指向真实调用——并计入 droppedBoundaryResults。
+// 事件除 seq 外原样保留（surfaceOp:'append' 等随事件走，续写不重写、不附加标题）。
+export function tailSessionEvents(converted, { fromTurn, fromSeq, dropSessionEvents = true }) {
+  const keep = []
+  const oldToNew = new Map()
+  let currentTurn = null
+  let droppedBoundaryResults = 0
+  for (const ev of converted.events ?? []) {
+    if (ev && ev.type === 'turn/start' && ev.data && typeof ev.data.turn === 'number') {
+      currentTurn = ev.data.turn
+    }
+    if (ev && ev.type === 'session/title') {
+      if (dropSessionEvents) continue
+      oldToNew.set(ev.seq, fromSeq + keep.length)
+      keep.push(ev)
+      continue
+    }
+    if (currentTurn !== null && currentTurn >= fromTurn) {
+      if (Array.isArray(ev.sourceEventSeqs)) {
+        for (const s of ev.sourceEventSeqs) {
+          // 引用不在已处理的尾内事件里 → 指向尾外（前段 seq 未变，原样保留合法）
+          if (!oldToNew.has(s)) droppedBoundaryResults++
+        }
+      }
+      oldToNew.set(ev.seq, fromSeq + keep.length)
+      keep.push(ev)
+    }
+  }
+  return {
+    firstTurn: fromTurn,
+    droppedBoundaryResults,
+    events: keep.map((ev, i) => {
+      const next = { ...ev, seq: fromSeq + i }
+      if (Array.isArray(ev.sourceEventSeqs)) {
+        next.sourceEventSeqs = ev.sourceEventSeqs.map((s) => (oldToNew.has(s) ? oldToNew.get(s) : s))
+      }
+      return next
+    }),
+  }
+}
+
 // 逐行解析 JSONL：直连人类提问（type==='user' 且 content 为字符串）开新轮；每条
 // assistant 消息 = 一步。Claude 源格式把多条连续 assistant（各带 tool_use）与后置的
 // tool_result 分开（assistant[callA] assistant[callB] user[resultA] user[resultB]）；

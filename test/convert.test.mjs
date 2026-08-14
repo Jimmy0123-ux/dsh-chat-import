@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION } from '../convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION, tailSessionEvents } from '../convert.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -980,4 +980,111 @@ test('convertOpencodeJson: 压缩摘要 summary → 首个 assistant 步骤前�
     .flatMap((e) => e.data.message.content)
     .filter((c) => c.type === 'reasoning')
   assert.equal(reasoning.length, 1)
+})
+
+// ---- tailSessionEvents（REQ-24 增量续写的事件级截取） ----
+
+// 合成三回合 Claude transcript：turn1 文本问答、turn2 工具调用（call+result）、
+// turn3 文本问答 + ai-title。
+function threeTurnClaude() {
+  return [
+    '{"sessionId":"sess-incr-001","type":"user","message":{"role":"user","content":"第一个问题"}}',
+    '{"sessionId":"sess-incr-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"第一个回答"}]}}',
+    '{"sessionId":"sess-incr-001","type":"user","message":{"role":"user","content":"第二个问题"}}',
+    '{"sessionId":"sess-incr-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"好"},{"type":"tool_use","id":"toolu_01","name":"Read","input":{"file":"a.txt"}}]}}',
+    '{"sessionId":"sess-incr-001","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":[{"type":"text","text":"A 内容"}]}]}}',
+    '{"sessionId":"sess-incr-001","type":"user","message":{"role":"user","content":"第三个问题"}}',
+    '{"sessionId":"sess-incr-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"第三个回答"}]}}',
+    '{"sessionId":"sess-incr-001","type":"ai-title","aiTitle":"三回合会话"}',
+  ].join('\n')
+}
+
+test('tailSessionEvents: 按 turn 切片、seq 从 fromSeq 连续重编号、续号用源编号', () => {
+  const out = convertClaudeJsonl(threeTurnClaude(), { sourcePath: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(out.turns.length, 3)
+  const headCount = out.events.find((e) => e.type === 'turn/start' && e.data.turn === 2).seq
+  const fromSeq = 40 // 模拟已存日志长度
+  const tail = tailSessionEvents(out, { fromTurn: 2, fromSeq })
+  assert.equal(tail.firstTurn, 2)
+  assert.equal(tail.droppedBoundaryResults, 0)
+  // 尾部不含 session/imported 标记与 session/title（续写不重复写标记/标题）
+  assert.ok(!tail.events.some((e) => e.type === 'session/imported'))
+  assert.ok(!tail.events.some((e) => e.type === 'session/title'))
+  // seq 从 fromSeq 连续
+  tail.events.forEach((e, i) => assert.equal(e.seq, fromSeq + i))
+  // 第一个事件是 turn2 的 turn/start；turn 续号用源编号（2、3）
+  assert.equal(tail.events[0].type, 'turn/start')
+  assert.equal(tail.events[0].data.turn, 2)
+  const starts = tail.events.filter((e) => e.type === 'turn/start').map((e) => e.data.turn)
+  assert.deepEqual(starts, [2, 3])
+  // 尾部以 turn/end 收尾（平衡）；surfaceOp 保留
+  assert.equal(tail.events.at(-1).type, 'turn/end')
+  const surface = tail.events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message')
+  assert.ok(surface.length > 0)
+  for (const e of surface) assert.equal(e.surfaceOp, 'append')
+  // 尾部事件集合 = 完整转换里 turn2 起的事件（session/title 被剥离）
+  const headSeq = out.events.find((e) => e.type === 'turn/start' && e.data.turn === 2).seq
+  const fromTurn2 = out.events.filter((e) => e.seq >= headSeq && e.type !== 'session/title')
+  assert.equal(tail.events.length, fromTurn2.length)
+  for (const [i, e] of fromTurn2.entries()) {
+    assert.equal(tail.events[i].type, e.type)
+    assert.deepEqual(tail.events[i].data, e.data)
+  }
+})
+
+test('tailSessionEvents: 尾内 tool/result 的 sourceEventSeqs 重映射到新 seq', () => {
+  const out = convertClaudeJsonl(threeTurnClaude(), { sourcePath: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  const tail = tailSessionEvents(out, { fromTurn: 2, fromSeq: 100 })
+  const call = tail.events.find((e) => e.type === 'tool/call')
+  const result = tail.events.find((e) => e.type === 'tool/result')
+  assert.ok(call)
+  assert.ok(result)
+  assert.equal(call.data.callId, 'toolu_01')
+  // 重映射后 result 指向尾内 call 的新 seq
+  assert.deepEqual(result.sourceEventSeqs, [call.seq])
+  // 尾部事件不引用旧 seq（全部落在 [fromSeq, fromSeq+len) 内）
+  for (const e of tail.events) {
+    if (Array.isArray(e.sourceEventSeqs)) {
+      for (const s of e.sourceEventSeqs) assert.ok(s >= 100)
+    }
+  }
+})
+
+test('tailSessionEvents: dropSessionEvents=false 保留 session/title（标题 last-wins 无害）', () => {
+  const out = convertClaudeJsonl(threeTurnClaude(), { sourcePath: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  const tail = tailSessionEvents(out, { fromTurn: 3, fromSeq: 200, dropSessionEvents: false })
+  const titleEv = tail.events.find((e) => e.type === 'session/title')
+  assert.ok(titleEv)
+  assert.equal(titleEv.data.title, '三回合会话')
+  assert.equal(titleEv.seq, tail.events.at(-1).seq) // title 钉在尾部末尾
+  // 默认剥离
+  const stripped = tailSessionEvents(out, { fromTurn: 3, fromSeq: 200 })
+  assert.ok(!stripped.events.some((e) => e.type === 'session/title'))
+})
+
+test('tailSessionEvents: 指向尾外的 sourceEventSeqs 原样保留并计 droppedBoundaryResults', () => {
+  // 合成一个跨界场景：turn2 的 tool/result 引用 turn1 的 tool/call（跨轮异步结果）。
+  // 手工构造 converted 事件：turn1 含 call（seq 5），turn2 含 result（sourceEventSeqs=[5]）。
+  const ev = (type, seq, data, extra) => ({ type, seq, data, ...extra })
+  const converted = {
+    events: [
+      ev('session/imported', 0, {}),
+      ev('turn/start', 1, { turn: 1 }),
+      ev('user/message', 2, {}, { surfaceOp: 'append' }),
+      ev('assistant/message', 3, {}, { surfaceOp: 'append' }),
+      ev('tool/call', 4, { callId: 'toolu_x' }),
+      ev('turn/end', 5, { turn: 1 }),
+      ev('turn/start', 6, { turn: 2 }),
+      ev('user/message', 7, {}, { surfaceOp: 'append' }),
+      ev('tool/result', 8, { toolCallId: 'toolu_x' }, { surfaceOp: 'append', sourceEventSeqs: [4] }),
+      ev('turn/end', 9, { turn: 2 }),
+    ],
+    turns: [{}, {}],
+  }
+  const tail = tailSessionEvents(converted, { fromTurn: 2, fromSeq: 50 })
+  assert.equal(tail.droppedBoundaryResults, 1)
+  const result = tail.events.find((e) => e.type === 'tool/result')
+  // 指向尾外的引用原样保留（前段 seq 未变，旧值仍指向真实调用）
+  assert.deepEqual(result.sourceEventSeqs, [4])
+  assert.deepEqual(tail.events.map((e) => e.seq), [50, 51, 52, 53])
 })
