@@ -111,6 +111,7 @@ function makeCtx(tree, opts = {}) {
   const attached = []
   const workspaces = new Map()
   const registered = []
+  const webRoutes = [] // webServer.register 捕获（REQ-41 路由断言）
   const entriesCache = new Map()
   const reads = { count: 0 }
   const writes = [] // export_claude / sync_to_claude 的写盘记录（{ path, content, options }）
@@ -196,6 +197,9 @@ function makeCtx(tree, opts = {}) {
   const ctx = {
     fs,
     sessionPersistence: persistence,
+    webServer: {
+      register(def) { webRoutes.push(def); return () => {} },
+    },
     get(service) {
       if (service === 'workspaceRegistry') return workspaceRegistry
       if (service === 'sessionPersistence') return persistence
@@ -208,7 +212,7 @@ function makeCtx(tree, opts = {}) {
   }
   // 测试辅助：按名字取出注册的工具定义
   ctx.tools.registered = (toolName) => registered.find((d) => d.name === toolName)
-  return { ctx, persistence, attached, registered, reads, writes }
+  return { ctx, persistence, attached, registered, reads, writes, webRoutes }
 }
 
 // REQ-32：导入会话日志首事件为 session/imported 标记（seq 0、ignorable），
@@ -2785,4 +2789,74 @@ test('REQ-17 预览 → 正式导入：去掉 preview 后字段口径一致、�
   assert.equal(real.alreadyImported, false)
   assert.equal(real.sessionId, 'import-sess-simple-001')
   assert.equal(persistence.sessions.size, 1)
+})
+
+// ---- REQ-41 被动会话发现（Browser 面板数据源路由） ----
+
+test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions，kind exact），工具计数仍 16', () => {
+  const { ctx, webRoutes, registered } = makeCtx({})
+  apply(ctx)
+  const route = webRoutes.find((r) => r.path === '/api-import/sessions')
+  assert.ok(route)
+  assert.equal(route.kind, 'exact')
+  assert.equal(typeof route.handler, 'function')
+  // 只加路由，不加工具：scan_discover 已计过，工具注册数不变
+  assert.equal(registered.length, 16)
+})
+
+test('REQ-41 /api-import/sessions handler：合成夹具经 discoverSessions 返回会话、未知来源 400', async () => {
+  const root = 'D:\\demo\\claude\\projects'
+  const tree = {
+    [root]: 'dir',
+    [root + '\\proj-a']: 'dir',
+    [root + '\\proj-a\\sess-aaa.jsonl']: [
+      '{"sessionId":"sess-aaa","type":"user","cwd":"D:\\\\demo\\\\claude-proj","message":{"role":"user","content":"帮我重构这个模块"}}',
+      '{"sessionId":"sess-aaa","type":"assistant","message":{"role":"assistant","content":"好"}}',
+    ].join('\n'),
+    [root + '\\proj-b']: 'dir',
+    [root + '\\proj-b\\sess-bbb.jsonl']: [
+      '{"sessionId":"sess-bbb","type":"user","message":{"role":"user","content":"<system-reminder>系统注入，不是提问</system-reminder>"}}',
+      '{"sessionId":"sess-bbb","type":"user","message":{"role":"user","content":"真实问题"}}',
+      '{"sessionId":"sess-bbb","type":"assistant","message":{"role":"assistant","content":"好"}}',
+    ].join('\n'),
+  }
+  const { ctx, webRoutes } = makeCtx(tree)
+  apply(ctx)
+  const route = webRoutes.find((r) => r.path === '/api-import/sessions')
+  const invoke = async (body) => {
+    const req = { async *[Symbol.asyncIterator]() { yield JSON.stringify(body) } }
+    const res = {
+      status: null, headers: null, body: null,
+      writeHead(s, h) { this.status = s; this.headers = h },
+      end(b) { this.body = b },
+    }
+    await route.handler(req, res)
+    return { res, data: JSON.parse(res.body) }
+  }
+
+  // claude-code 来源（SOURCE_FORMAT → claude）：discoverSessions 返回 2 个会话
+  const first = await invoke({ source: 'claude-code', path: root })
+  assert.equal(first.res.status, 200)
+  assert.equal(first.data.ok, true)
+  assert.equal(first.data.sessions.length, 2)
+  const aaa = first.data.sessions.find((s) => s.sessionId === 'sess-aaa')
+  assert.ok(aaa)
+  assert.equal(aaa.format, 'claude')
+  assert.equal(aaa.title, '帮我重构这个模块')
+  assert.equal(aaa.importStatus, 'not-imported') // registry 为空
+  const bbb = first.data.sessions.find((s) => s.sessionId === 'sess-bbb')
+  assert.equal(bbb.title, '真实问题') // 注入首行被过滤（REQ-40 标题提取）
+  assert.ok(bbb.sourcePath.endsWith('sess-bbb.jsonl'))
+
+  // query 过滤透传
+  const q = await invoke({ source: 'claude-code', path: root, query: '重构' })
+  assert.equal(q.data.ok, true)
+  assert.equal(q.data.sessions.length, 1)
+  assert.equal(q.data.sessions[0].sessionId, 'sess-aaa')
+
+  // 未知来源 → 400 {ok:false, error}
+  const bad = await invoke({ source: 'not-a-source', path: root })
+  assert.equal(bad.res.status, 400)
+  assert.equal(bad.data.ok, false)
+  assert.match(bad.data.error, /未知来源/)
 })

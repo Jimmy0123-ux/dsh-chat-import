@@ -99,6 +99,7 @@ function makeCtx(tree = {}) {
   const ctx = {
     fs,
     sessionPersistence: persistence,
+    webServer: { register() {} }, // REQ-41：apply 注册 /api-import/sessions 路由（zcode 测试不关心）
     get(service) {
       if (service === 'workspaceRegistry') return workspaceRegistry
       if (service === 'sessionPersistence') return persistence

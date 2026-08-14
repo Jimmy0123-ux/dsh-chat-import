@@ -119,6 +119,7 @@ function makeCtx(persistence, tree) {
   const ctx = {
     fs,
     sessionPersistence: persistence,
+    webServer: { register() {} }, // REQ-41：apply 注册 /api-import/sessions 路由（REQ-33 测试不关心）
     get(service) {
       if (service === 'sessionPersistence') return persistence
       if (service === 'fs') return fs

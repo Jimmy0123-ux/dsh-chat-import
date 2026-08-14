@@ -279,6 +279,7 @@ function makeMinCtx(tree) {
   const ctx = {
     fs,
     sessionPersistence: persistence,
+    webServer: { register() {} }, // REQ-41：apply 注册 /api-import/sessions 路由（REQ-26 测试不关心）
     get(service) {
       if (service === 'sessionPersistence') return persistence
       if (service === 'workspaceRegistry') return workspaceRegistry

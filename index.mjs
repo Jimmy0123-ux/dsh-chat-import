@@ -34,7 +34,7 @@ import { readZcodeDb, readZcodeTranscript, zcodeDefaultDbPath, importZcodeFile, 
 import { discoverSessions, FORMATS } from './lib/discovery.mjs'
 
 const name = 'import-claude'
-const inject = ['sessionPersistence', 'fs', 'tools']
+const inject = ['sessionPersistence', 'fs', 'tools', 'webServer']
 
 // ── REQ-37 上下文预算解析（纯 host 面）──────────────────────────────────
 // 导入会话无 provider 配置时不会被 dsh 自动压缩（routedTarget 解析失败），超长
@@ -1574,6 +1574,32 @@ async function runScanDiscover(ctx, args, registryDir) {
   })
 }
 
+// ── REQ-41 被动会话发现（Browser 侧面板数据源）──────────────────────────
+// lib/client.js 的侧边栏面板按「来源」下拉请求 POST /api-import/sessions；与
+// scan_discover 共用同一套 discovery（lib/discovery.mjs discoverSessions +
+// makeDiscoveryHost + imports registry 标注 + 30s TTL / 持久化书签），只读零副作用。
+// 客户端来源 id（claude-code 等 11 个）→ discovery format 短名（FORMATS）。
+const SOURCE_FORMAT = {
+  'claude-code': 'claude',
+  codex: 'codex',
+  chatgpt: 'chatgpt',
+  cursor: 'cursor',
+  gemini: 'gemini',
+  reasonix: 'reasonix',
+  opencode: 'opencode',
+  zcode: 'zcode',
+  grokbuild: 'grokbuild',
+  openclaw: 'openclaw',
+  hermes: 'hermes',
+}
+
+// 读请求 body 的 JSON（空 body 按 {}；畸形 JSON 抛错由路由 catch 兜底）。
+async function readBody(req) {
+  const chunks = []
+  for await (const chunk of req) chunks.push(String(chunk))
+  return JSON.parse(chunks.join('') || '{}')
+}
+
 function apply(ctx) {
   // REQ-24 imports registry 目录：$DSH_HOME/dsh-chat-import（$DSH_HOME 缺省 ~/.dsh）
   const registryDir = resolveRegistryDir()
@@ -2223,6 +2249,41 @@ function apply(ctx) {
       return runScanDiscover(ctx, args, registryDir)
     },
   }))
+  // REQ-41 被动发现路由：POST /api-import/sessions（Browser 面板数据源，不新增工具）。
+  // body: { source, query?, path? }——source 是客户端来源 id（SOURCE_FORMAT 映射到
+  // discovery format）；query 按标题/项目/路径过滤；path 可选（客户端不发，调用方可
+  // 钉扫描根，缺省扫该格式默认数据根）。返回 discoverSessions 结果（{ok, sessions}），
+  // 错误返回 {ok:false, error}。webServer 在 inject 里（硬依赖），apply 时必可用。
+  ctx.webServer.register({
+    kind: 'exact',
+    path: '/api-import/sessions',
+    handler: async (req, res) => {
+      try {
+        const body = await readBody(req)
+        const source = typeof body.source === 'string' && body.source ? body.source : ''
+        const format = SOURCE_FORMAT[source]
+        if (!format) {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ ok: false, error: '未知来源: ' + source }))
+          return
+        }
+        const registry = await loadImports(registryDir)
+        const found = await discoverSessions({
+          path: typeof body.path === 'string' && body.path ? body.path : undefined,
+          format,
+          query: typeof body.query === 'string' ? body.query : '',
+          host: makeDiscoveryHost(ctx),
+          imports: registry.imports,
+          cacheDir: registryDir,
+        })
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, sessions: found.sessions }))
+      } catch (err) {
+        res.writeHead(500, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok: false, error: String((err && err.message) || err) }))
+      }
+    },
+  })
 }
 
 export { apply, inject, name, readOpencodeDb, readZcodeDb, exportClaudeSession }

@@ -6,6 +6,9 @@
   "main": "./index.mjs",
   "exports": {
     ".": "./index.mjs",
+    "./client": {
+      "default": "./lib/client.js"
+    },
     "./export.mjs": "./export.mjs",
     "./CHANGELOG.md": "./CHANGELOG.md",
     "./cordis.patch.yml": "./cordis.patch.yml",
@@ -17,6 +20,7 @@
     "export.mjs",
     "lib/imports.mjs",
     "lib/backfill.mjs",
+    "lib/client.js",
     "lib/discovery.mjs",
     "lib/convert",
     "lib/hermes.mjs",
@@ -32,10 +36,18 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.6",
+    "react": ">=18.0.0"
   },
   "keywords": [
     "deepseek-harness",
