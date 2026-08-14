@@ -2873,15 +2873,19 @@ test('REQ-17 预览 → 正式导入：去掉 preview 后字段口径一致、�
 
 // ---- REQ-41 被动会话发现（Browser 面板数据源路由） ----
 
-test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions，kind exact），工具计数仍 16', () => {
+test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-import/import，kind exact），工具计数不变', () => {
   const { ctx, webRoutes, registered } = makeCtx({})
   apply(ctx)
-  const route = webRoutes.find((r) => r.path === '/api-import/sessions')
-  assert.ok(route)
-  assert.equal(route.kind, 'exact')
-  assert.equal(typeof route.handler, 'function')
-  // 只加路由，不加工具：scan_discover 已计过，工具注册数不变
-  assert.equal(registered.length, 16)
+  const sessions = webRoutes.find((r) => r.path === '/api-import/sessions')
+  const imp = webRoutes.find((r) => r.path === '/api-import/import')
+  assert.ok(sessions)
+  assert.ok(imp)
+  assert.equal(sessions.kind, 'exact')
+  assert.equal(imp.kind, 'exact')
+  assert.equal(typeof sessions.handler, 'function')
+  assert.equal(typeof imp.handler, 'function')
+  // 只加路由，不加工具：12 导入 + scan/export/sync/list/retract = 17，注册数不变
+  assert.equal(registered.length, 17)
 })
 
 test('REQ-41 /api-import/sessions handler：合成夹具经 discoverSessions 返回会话、未知来源 400', async () => {
@@ -2934,9 +2938,115 @@ test('REQ-41 /api-import/sessions handler：合成夹具经 discoverSessions 返
   assert.equal(q.data.sessions.length, 1)
   assert.equal(q.data.sessions[0].sessionId, 'sess-aaa')
 
+  // source 省略/空串 = 扫全部格式（面板「全部来源」按工作区分组浏览）；其余格式自拒
+  const all = await invoke({ path: root })
+  assert.equal(all.data.ok, true)
+  assert.equal(all.data.sessions.length, 2)
+  assert.ok(all.data.sessions.every((s) => s.format === 'claude'))
+
   // 未知来源 → 400 {ok:false, error}
   const bad = await invoke({ source: 'not-a-source', path: root })
   assert.equal(bad.res.status, 400)
   assert.equal(bad.data.ok, false)
   assert.match(bad.data.error, /未知来源/)
+})
+
+// ---- REQ-41 Stage 2 面板导入路由（POST /api-import/import） ----
+
+// 路由调用辅助：把 body 序列化为 async iterable req + 捕获 res
+async function invokeImportRoute(route, body) {
+  const req = { async *[Symbol.asyncIterator]() { yield JSON.stringify(body) } }
+  const res = {
+    status: null, headers: null, body: null,
+    writeHead(s, h) { this.status = s; this.headers = h },
+    end(b) { this.body = b },
+  }
+  await route.handler(req, res)
+  return { res, data: JSON.parse(res.body) }
+}
+
+test('REQ-41 /api-import/import handler：单选导入（claude 夹具）→ imported，幂等重导 → already-imported，归组一致', async () => {
+  const root = 'D:\\demo\\claude\\projects'
+  const src = root + '\\proj-a\\sess-aaa.jsonl'
+  const tree = {
+    [root]: 'dir',
+    [root + '\\proj-a']: 'dir',
+    [src]: [
+      '{"sessionId":"sess-aaa","type":"user","cwd":"D:\\\\demo\\\\claude-proj","message":{"role":"user","content":"帮我重构这个模块"}}',
+      '{"sessionId":"sess-aaa","type":"assistant","message":{"role":"assistant","content":"好"}}',
+    ].join('\n'),
+  }
+  const { ctx, persistence, attached, webRoutes } = makeCtx(tree)
+  apply(ctx)
+  const route = webRoutes.find((r) => r.path === '/api-import/import')
+  assert.ok(route)
+
+  const one = await invokeImportRoute(route, { items: [{ source: 'claude-code', sourcePath: src }] })
+  assert.equal(one.res.status, 200)
+  assert.equal(one.data.ok, true)
+  assert.equal(one.data.results.length, 1)
+  assert.equal(one.data.results[0].status, 'imported')
+  assert.equal(one.data.results[0].mode, 'single')
+  assert.equal(one.data.results[0].sessionId, 'import-sess-aaa')
+  assert.equal(persistence.sessions.size, 1)
+  // 面板导入与 import_* 工具一致：cwd → workspace attach
+  assert.ok(attached.some((a) => a.ws === 'D:\\demo\\claude-proj'))
+
+  // 幂等：同一 sourcePath 再导 → already-imported，不重复落盘
+  const again = await invokeImportRoute(route, { items: [{ source: 'claude-code', sourcePath: src }] })
+  assert.equal(again.data.ok, true)
+  assert.equal(again.data.results[0].status, 'already-imported')
+  assert.equal(persistence.sessions.size, 1)
+})
+
+test('REQ-41 /api-import/import handler：多选同源去重（同 sourcePath 只导一次）+ 空 items 400 + 未知来源 400', async () => {
+  const root = 'D:\\demo\\claude\\projects'
+  const src = root + '\\proj-a\\sess-aaa.jsonl'
+  const tree = {
+    [root]: 'dir',
+    [root + '\\proj-a']: 'dir',
+    [src]: '{"sessionId":"sess-aaa","type":"user","message":{"role":"user","content":"hi"}}\n{"sessionId":"sess-aaa","type":"assistant","message":{"role":"assistant","content":"ok"}}',
+  }
+  const { ctx, webRoutes } = makeCtx(tree)
+  apply(ctx)
+  const route = webRoutes.find((r) => r.path === '/api-import/import')
+
+  // 同一 sourcePath 两个条目（多选命中同一文件）→ 去重只导一次
+  const multi = await invokeImportRoute(route, {
+    items: [
+      { source: 'claude-code', sourcePath: src, sessionId: 'sess-aaa' },
+      { source: 'claude-code', sourcePath: src, sessionId: 'whatever' },
+    ],
+  })
+  assert.equal(multi.data.ok, true)
+  assert.equal(multi.data.results.length, 1)
+  assert.equal(multi.data.results[0].status, 'imported')
+
+  // items 为空 → 400
+  const empty = await invokeImportRoute(route, { items: [] })
+  assert.equal(empty.res.status, 400)
+  assert.equal(empty.data.ok, false)
+  assert.match(empty.data.error, /items 为空/)
+
+  // 未知来源 → 400
+  const bad = await invokeImportRoute(route, { items: [{ source: 'nope', sourcePath: src }] })
+  assert.equal(bad.res.status, 400)
+  assert.equal(bad.data.ok, false)
+  assert.match(bad.data.error, /未知来源/)
+})
+
+test('REQ-41 /api-import/import handler：批量形态（chatgpt conversations.json 一文件多会话 → batch 摘要）', async () => {
+  const file = 'D:\\demo\\chatgpt\\conversations.json'
+  const { ctx, persistence, webRoutes } = makeCtx({ [file]: load('chatgpt-export.json') })
+  apply(ctx)
+  const route = webRoutes.find((r) => r.path === '/api-import/import')
+
+  const out = await invokeImportRoute(route, { items: [{ source: 'chatgpt', sourcePath: file }] })
+  assert.equal(out.res.status, 200)
+  assert.equal(out.data.ok, true)
+  assert.equal(out.data.results.length, 1)
+  assert.equal(out.data.results[0].mode, 'batch')
+  assert.equal(out.data.results[0].imported, 2)
+  assert.equal(out.data.results[0].skipped, 1)
+  assert.equal(persistence.sessions.size, 2)
 })

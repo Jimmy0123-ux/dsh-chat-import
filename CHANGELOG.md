@@ -9,6 +9,27 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
+## [Unreleased]
+
+### Added
+
+- **Browser-side session discovery & import panel (REQ-41)** — the dsh web
+  sidebar gains an **导入会话** entry (a `sidebar.footer.action` list slot; the
+  client is a hand-written CJS bundle `lib/client.js` declared via `dsh.client`
+  in `package.json`). Stage 1 added the read-only discovery panel — a source
+  filter + session list backed by the new host route `POST /api-import/sessions`
+  (the same discovery as `scan_discover`: 30s TTL cache + persistent mtime
+  bookmarks, zero side effects). Stage 2 adds **workspace-folder grouping**
+  (sessions grouped by each source's `cwd`/project, "(未分组)" bucket),
+  **single import** and **multi-select import** (checkbox + "导入所选 (N)") via
+  the new host route `POST /api-import/import`, which reuses the exact
+  `import_*` tool pipeline — idempotent skip / incremental append / `force` /
+  context-budget semantics are identical, multi-session sources
+  (`conversations.json`, opencode/zcode/hermes DBs) import whole-source
+  (opencode/zcode restrict to the selected `sessionId`s), and the list refreshes
+  with the new statuses after importing. The `pi` source joins the panel filter,
+  and the `source` filter may be omitted to scan all formats at once.
+
 ## [0.3.0] - 2026-08-14
 
 Third minor release — shipped 2026-08-14 with four new import sources (Grok

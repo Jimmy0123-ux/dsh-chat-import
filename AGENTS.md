@@ -7,16 +7,20 @@
 根目录只放发布到 GitHub / npm 的文件；本地工程文件一律收进 `dev/`（gitignore，永不提交）。
 
 ```
-index.mjs        插件入口（唯一 host 面）：注册 8 个导入工具（import_claude / import_codex / import_chatgpt /
-                 import_cursor / import_gemini / import_reasonix / import_opencode / import_zcode）+
-                 export_claude + sync_to_claude
+index.mjs        插件入口（host 面）：注册 12 个导入工具（import_claude / import_codex / import_chatgpt /
+                 import_cursor / import_gemini / import_reasonix / import_opencode / import_zcode /
+                 import_grokbuild / import_openclaw / import_hermes / import_pi）+ scan_discover +
+                 export_claude + sync_to_claude + list_imported_sessions + retract_import；并注册
+                 webServer 路由（POST /api-import/sessions 发现、POST /api-import/import 面板导入）
 lib/             导入/同步驱动：imports.mjs（幂等 registry）、backfill.mjs（sync_to_claude 写回）、
-                 opencode.mjs / zcode.mjs（SQLite 读取，node:sqlite）、convert/（转换核心按源拆分）
-convert.mjs      转换核心 re-export shim（已按源拆到 lib/convert/{core,claude,codex,chatgpt,cursor,gemini,reasonix,opencode,zcode}.mjs，纯函数、零 DSH 依赖、可独立单测）
+                 discovery.mjs（12 格式统一发现 + 30s TTL / 持久化书签）、client.js（Browser 侧 bundle，
+                 REQ-41：sidebar.footer.action 槽 → 按工作区分组的面板 + 单选/多选导入）、
+                 opencode.mjs / zcode.mjs / hermes.mjs（SQLite 读取，node:sqlite）、convert/（转换核心按源拆分）
+convert.mjs      转换核心 re-export shim（已按源拆到 lib/convert/{core,claude,codex,chatgpt,cursor,gemini,reasonix,opencode,zcode,grokbuild,openclaw,hermes,pi}.mjs，纯函数、零 DSH 依赖、可独立单测）
 export.mjs       反向导出序列化器（DSH 会话日志 → Claude Code JSONL，纯函数、零 DSH 依赖）
 cordis.patch.yml bundle 声明（insert import-claude）
 .github/         GitHub Actions CI（npm test，不进 npm 包）
-package.json     npm 包元数据；files 白名单 = 发布内容
+package.json     npm 包元数据；files 白名单 = 发布内容；dsh.client 声明 Browser 侧注入
 README.md        对外契约（英文，GitHub/npm 默认）；README.zh-CN.md 中文版——行为变更必须同步两版
 CHANGELOG.md     变更日志（进 npm 包）
 LICENSE          MIT
@@ -25,8 +29,8 @@ test/            convert 单测 + export 单测 + index mock 集成 + zcode 自�
 dev/             ❌ 本地工程面：HANDOFF.md、GROWTH.md、脚本（bin/）、夹具——永不提交；sessions/ 为遗留目录（协议已切 dsh-file-claim，可忽略）
 ```
 
-- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/convert`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
-- **永不提交**：`dev/`、`node_modules/`、`.prev-session*.jsonl`、真实用户 transcript（含敏感内容）、任何凭据/密钥。
+- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/client.js`、`lib/discovery.mjs`、`lib/convert`、`lib/hermes.mjs`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
+- **永不提交**：`dev/`、`node_modules/`、`.prev-session*.jsonl`、`.dsh-file-claim/`（插件运行时目录）、真实用户 transcript（含敏感内容）、任何凭据/密钥。
 
 ## 命令
 
@@ -34,7 +38,7 @@ dev/             ❌ 本地工程面：HANDOFF.md、GROWTH.md、脚本（bin/）
 npm test        # node --test 跑 test/*.test.mjs（convert 单测 + export 单测 + index mock 集成 + zcode 自包含）
 ```
 
-无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` / `export.mjs` / `lib/` 即发布产物。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调 `import_claude` / `import_codex` / `import_chatgpt` / `import_cursor` / `import_gemini` / `import_reasonix` / `import_opencode` / `import_zcode` / `export_claude` / `sync_to_claude`。
+无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` / `export.mjs` / `lib/` 即发布产物（`lib/client.js` 是手写 CJS bundle，亦无构建）。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调任一 `import_*`（12 个）/ `scan_discover` / `export_claude` / `sync_to_claude` / `list_imported_sessions` / `retract_import`；Browser 侧验证：dsh web 侧边栏底部「导入会话」按钮 → 面板按工作区分组浏览 + 单选/多选导入。
 
 ## 提交纪律（保持仓库干净）
 
@@ -72,7 +76,7 @@ npm test        # node --test 跑 test/*.test.mjs（convert 单测 + export 单�
 
 ## DSH 插件约束
 
-- **只消费 host 公开服务**：`sessionPersistence`（create + append 落盘；list + readFrom 供 `export_claude` / `sync_to_claude` 只读）、`fs`、`tools`、`workspaceRegistry`；`agentDefaultModel` / `llm`（REQ-37 预算自适应）可选，经 `ctx.get` 读取、缺失或抛错即回退。opencode / zcode 用 `node:sqlite`（`DatabaseSync`，host 面）。不发布服务 → 无需 isolate realm；**无 Browser 侧**（当前仍纯 host；REQ-41 若选 Browser 入口再同步本文件）。
+- **只消费 host 公开服务**：`sessionPersistence`（create + append 落盘；list + readFrom 供 `export_claude` / `sync_to_claude` 只读）、`fs`、`tools`、`webServer`（REQ-41 面板 JSON 路由）、`workspaceRegistry`；`agentDefaultModel` / `llm`（REQ-37 预算自适应）可选，经 `ctx.get` 读取、缺失或抛错即回退。opencode / zcode / hermes 用 `node:sqlite`（`DatabaseSync`，host 面）。不发布服务 → 无需 isolate realm。**有 Browser 侧**（REQ-41 已定案选 Browser 入口：`lib/client.js` 手写 CJS bundle 注册到 `sidebar.footer.action` 槽，`package.json` 声明 `dsh.client` + peer `react` / `@deepseek-ai/dsh-client-locale`，`files` 含 `lib/client.js`；面板只消费 host JSON 路由，不 import DSH host 模块）。
 - **插件，不是引擎改动**：新行为走公开扩展点（工具注册）；绝不修改 DSH 引擎 / apiproxy / 官方 UI 包。
 - **会话日志 append-only、deep-frozen**：只 `create` + `append`，绝不改写历史事件。
 - **模型可见 ⟺ 落盘**：进入模型上下文的任何内容必须能从会话日志重建；新模型可见输入必须对应会话事件。

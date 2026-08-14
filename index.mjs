@@ -782,7 +782,11 @@ async function previewZcodeDirectory(ctx, dirTarget, args) {
 // registryDir 由 apply 传入（$DSH_HOME/dsh-chat-import）；fingerprintKeys 决定哪些
 // 工具参数计入 imports registry 的 args 指纹（opencode 的 fullHistory 等）。
 // previewFile / previewDir 提供 REQ-17 dry-run 预览实现（缺省走标准单文件/目录预览）。
-function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect, extraParameters, pathDescription, dropParameters, batchUnit = '文件', skippedNote, registryDir, fingerprintKeys = [], dirSingle, fileBatch, previewFile, previewDir }) {
+function makeImportTool(ctx, spec) {
+  const { format, toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect, extraParameters, pathDescription, dropParameters, batchUnit = '文件', skippedNote, registryDir, fingerprintKeys = [], dirSingle, fileBatch, previewFile, previewDir } = spec
+  // REQ-41 Stage 2：带 format 的来源同时登记进 IMPORT_SPECS，供 POST /api-import/import
+  // 路由复用同一套导入编排（面板导入与 import_* 工具行为完全一致）。
+  if (format) IMPORT_SPECS.set(format, spec)
   const derive = deriveArgs || (async () => ({}))
   const importSingle = importFile || ((c, t, a) => importTranscript(c, t, a, convert, { registryDir, fingerprintKeys }))
   const importBatch = importDir || ((c, d, a) => importDirectory(c, d, a, { convert, sourceLabel, deriveArgs: derive, collect, registryDir, fingerprintKeys }))
@@ -1578,7 +1582,8 @@ async function runScanDiscover(ctx, args, registryDir) {
 // lib/client.js 的侧边栏面板按「来源」下拉请求 POST /api-import/sessions；与
 // scan_discover 共用同一套 discovery（lib/discovery.mjs discoverSessions +
 // makeDiscoveryHost + imports registry 标注 + 30s TTL / 持久化书签），只读零副作用。
-// 客户端来源 id（claude-code 等 11 个）→ discovery format 短名（FORMATS）。
+// Stage 2：source 省略（空串）时扫全部格式，供面板按工作区文件夹分组浏览。
+// 客户端来源 id（claude-code 等 12 个）→ discovery format 短名（FORMATS）。
 const SOURCE_FORMAT = {
   'claude-code': 'claude',
   codex: 'codex',
@@ -1590,7 +1595,65 @@ const SOURCE_FORMAT = {
   zcode: 'zcode',
   grokbuild: 'grokbuild',
   openclaw: 'openclaw',
+  pi: 'pi',
   hermes: 'hermes',
+}
+
+// ── REQ-41 Stage 2：面板批量导入（POST /api-import/import）──────────────
+// 面板「导入 / 多选导入」按发现条目（source / sourcePath / sessionId）复用工具层
+// 同一套导入编排（幂等 / 增量 / force / 预算），不新增工具。IMPORT_SPECS 由
+// makeImportTool 在 apply 注册各来源时登记（带 format 的 spec），保证面板导入与
+// import_* 工具行为完全一致（同一注册对象，同一转换/落盘/归组状态机）。
+const IMPORT_SPECS = new Map()
+
+// 单条发现条目导入：stat → 目录（dirSingle 判定单会话）/ 文件（alwaysBatch /
+// fileBatch 判定批量）→ 对应导入函数；预算按工具同款解析链（路由层已解析一次）。
+// opencode / zcode 支持 sessionIds 过滤（DB 多会话只导所选）；其余格式整源导入。
+async function importDiscoveryItem(ctx, format, sourcePath, sessionIds, { force, budget, budgetSource }) {
+  const spec = IMPORT_SPECS.get(format)
+  if (!spec) throw new Error('未知格式: ' + format)
+  const derive = spec.deriveArgs || (async () => ({}))
+  const importSingle = spec.importFile
+    || ((c, t, a) => importTranscript(c, t, a, spec.convert, { registryDir: spec.registryDir, fingerprintKeys: spec.fingerprintKeys }))
+  const importBatch = spec.importDir
+    || ((c, d, a) => importDirectory(c, d, a, { convert: spec.convert, sourceLabel: spec.sourceLabel, deriveArgs: derive, collect: spec.collect, registryDir: spec.registryDir, fingerprintKeys: spec.fingerprintKeys }))
+  const args = { path: sourcePath, force: force === true, budget, budgetSource }
+  if (Array.isArray(sessionIds) && sessionIds.length > 0 && (format === 'opencode' || format === 'zcode')) {
+    args.sessionIds = [...new Set(sessionIds)]
+  }
+  const target = await ctx.fs.resolve(sourcePath)
+  const info = await ctx.fs.stat(target)
+  const fileArgs = { ...args, ...(await derive(target)) }
+  if (info && info.type === 'directory') {
+    if (spec.dirSingle && await spec.dirSingle(ctx, target)) {
+      return { mode: 'single', ...(await importSingle(ctx, target, fileArgs)) }
+    }
+    return { mode: 'batch', ...(await importBatch(ctx, target, args)) }
+  }
+  if (spec.alwaysBatch || (spec.fileBatch && await spec.fileBatch(ctx, target))) {
+    return { mode: 'batch', ...(await importSingle(ctx, target, fileArgs)) }
+  }
+  return { mode: 'single', ...(await importSingle(ctx, target, fileArgs)) }
+}
+
+// 把工具层导入结果压成面板摘要：single 透传 status/sessionId，batch 透传计数。
+function summarizeImport(out) {
+  const res = { mode: out.mode === 'batch' ? 'batch' : 'single' }
+  if (out.mode === 'batch') {
+    for (const k of ['total', 'imported', 'alreadyImported', 'appended', 'skipped', 'failed']) {
+      if (typeof out[k] === 'number') res[k] = out[k]
+    }
+  } else {
+    res.status = out.status || 'unknown'
+    if (typeof out.sessionId === 'string') res.sessionId = out.sessionId
+    if (typeof out.turns === 'number') res.turns = out.turns
+    if (typeof out.messages === 'number') res.messages = out.messages
+    if (out.alreadyImported === true) res.alreadyImported = true
+    if (out.sourceShrunk === true) res.sourceShrunk = true
+    if (typeof out.skipReason === 'string') res.skipReason = out.skipReason
+  }
+  if (typeof out.error === 'string') res.error = out.error
+  return res
 }
 
 // 读请求 body 的 JSON（空 body 按 {}；畸形 JSON 抛错由路由 catch 兜底）。
@@ -1604,6 +1667,7 @@ function apply(ctx) {
   // REQ-24 imports registry 目录：$DSH_HOME/dsh-chat-import（$DSH_HOME 缺省 ~/.dsh）
   const registryDir = resolveRegistryDir()
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'claude',
     toolName: 'import_claude',
     sourceLabel: 'Claude Code',
     convert: convertClaudeJsonl,
@@ -1622,6 +1686,7 @@ function apply(ctx) {
       '返回新会话 id（或批量统计）与明细。',
   }))
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'codex',
     toolName: 'import_codex',
     sourceLabel: 'Codex/ChatGPT',
     convert: convertCodexJsonl,
@@ -1634,6 +1699,7 @@ function apply(ctx) {
       '返回新会话 id（或批量统计）与明细。',
   }))
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'chatgpt',
     toolName: 'import_chatgpt',
     sourceLabel: 'ChatGPT',
     convert: convertChatgptJson,
@@ -1651,6 +1717,7 @@ function apply(ctx) {
       '返回批量统计与逐会话明细。',
   }))
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'cursor',
     toolName: 'import_cursor',
     sourceLabel: 'Cursor',
     convert: convertCursorJsonl,
@@ -1669,6 +1736,7 @@ function apply(ctx) {
       '过滤 [REDACTED] 哨兵；重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
   }))
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'gemini',
     toolName: 'import_gemini',
     sourceLabel: 'Gemini CLI',
     convert: convertGeminiJson,
@@ -1682,6 +1750,7 @@ function apply(ctx) {
       'info 系统通知跳过；重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
   }))
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'reasonix',
     toolName: 'import_reasonix',
     sourceLabel: 'Reasonix',
     convert: convertReasonixJsonl,
@@ -1714,6 +1783,7 @@ function apply(ctx) {
       '重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
   }))
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'opencode',
     toolName: 'import_opencode',
     sourceLabel: 'opencode',
     convert: convertOpencodeJson,
@@ -1753,6 +1823,7 @@ function apply(ctx) {
   // 一库多会话：单 .db / 单 transcript.jsonl 也恒返回批量形态；目录模式自动定位
   // db.sqlite（无递归）；zcode://<id> 伪路径走默认库只导该会话。
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'zcode',
     toolName: 'import_zcode',
     sourceLabel: 'zcode',
     convert: convertZcodeJson,
@@ -1799,6 +1870,7 @@ function apply(ctx) {
   // 转换器 convertGrokbuildJson 需读两个文件再转换，编排见文件头的
   // importGrokbuildSession / importGrokbuildDirectory。
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'grokbuild',
     toolName: 'import_grokbuild',
     sourceLabel: 'Grok Build',
     convert: convertGrokbuildJson,
@@ -1831,6 +1903,7 @@ function apply(ctx) {
   // displayName 作会话标题）。标准单文件/目录批量形态；deriveArgs 按文件 stem 从
   // sessions.json 查 displayName（openclawDisplayNames 纯函数）。
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'openclaw',
     toolName: 'import_openclaw',
     sourceLabel: 'OpenClaw',
     convert: convertOpenclawJson,
@@ -1863,6 +1936,7 @@ function apply(ctx) {
   // （db 不可用 readHermesDb 返回 null 时）。.db 单文件恒批量（对齐 import_opencode）；
   // 单 .jsonl = 单会话（mode single）；目录优先 state.db、不可用则递归扫 .jsonl。
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'hermes',
     toolName: 'import_hermes',
     sourceLabel: 'Hermes',
     convert: convertHermesJson,
@@ -1890,6 +1964,7 @@ function apply(ctx) {
   // 链接）。活动分支（叶→根）重建、compaction 默认尊重（fullHistory 入参数指纹）；
   // 头行缺失时用文件名 stem 作稳定源 id（幂等）。
   ctx.tools.register(makeImportTool(ctx, {
+    format: 'pi',
     toolName: 'import_pi',
     sourceLabel: 'Pi Coding Agent',
     convert: convertPiJsonl,
@@ -2282,10 +2357,11 @@ function apply(ctx) {
     },
   }))
   // REQ-41 被动发现路由：POST /api-import/sessions（Browser 面板数据源，不新增工具）。
-  // body: { source, query?, path? }——source 是客户端来源 id（SOURCE_FORMAT 映射到
-  // discovery format）；query 按标题/项目/路径过滤；path 可选（客户端不发，调用方可
-  // 钉扫描根，缺省扫该格式默认数据根）。返回 discoverSessions 结果（{ok, sessions}），
-  // 错误返回 {ok:false, error}。webServer 在 inject 里（硬依赖），apply 时必可用。
+  // body: { source?, query?, path? }——source 是客户端来源 id（SOURCE_FORMAT 映射到
+  // discovery format；省略/空串 = 扫全部格式，面板「全部来源」视图按工作区分组）；
+  // query 按标题/项目/路径过滤；path 可选（客户端不发，调用方可钉扫描根，缺省扫该
+  // 格式默认数据根）。返回 discoverSessions 结果（{ok, sessions}），错误返回
+  // {ok:false, error}。webServer 在 inject 里（硬依赖），apply 时必可用。
   ctx.webServer.register({
     kind: 'exact',
     path: '/api-import/sessions',
@@ -2293,8 +2369,8 @@ function apply(ctx) {
       try {
         const body = await readBody(req)
         const source = typeof body.source === 'string' && body.source ? body.source : ''
-        const format = SOURCE_FORMAT[source]
-        if (!format) {
+        const format = source ? SOURCE_FORMAT[source] : undefined
+        if (source && !format) {
           res.writeHead(400, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ ok: false, error: '未知来源: ' + source }))
           return
@@ -2310,6 +2386,72 @@ function apply(ctx) {
         })
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true, sessions: found.sessions }))
+      } catch (err) {
+        res.writeHead(500, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok: false, error: String((err && err.message) || err) }))
+      }
+    },
+  })
+  // REQ-41 Stage 2 导入路由：POST /api-import/import（面板「导入 / 多选导入」）。
+  // body: { items: [{ source, sourcePath, sessionId? }], force? }——items 来自
+  // /api-import/sessions 的发现条目；按 sourcePath 去重聚合（同一文件/库只导一次，
+  // opencode/zcode 聚合所选 sessionIds 只导所选会话）；预算按工具同款解析链
+  // resolveImportBudget 一次（批内共享，registry 记录同口径，预算变化 → budgetChanged
+  // 跳过语义与 import_* 工具一致）。逐条错误不拖垮整批：条目级 {status:'failed',
+  // error}。返回 { ok: true, results: [{ sourcePath, format, mode, ...摘要 }] }。
+  ctx.webServer.register({
+    kind: 'exact',
+    path: '/api-import/import',
+    handler: async (req, res) => {
+      try {
+        const body = await readBody(req)
+        const items = Array.isArray(body.items) ? body.items : []
+        if (items.length === 0) {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ ok: false, error: 'items 为空：请选择要导入的会话' }))
+          return
+        }
+        const budgetInfo = await resolveImportBudget(ctx, body)
+        const byPath = new Map()
+        for (const item of items) {
+          if (!item || typeof item !== 'object') continue
+          const source = typeof item.source === 'string' && item.source ? item.source : ''
+          const format = SOURCE_FORMAT[source]
+          if (!format) {
+            res.writeHead(400, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ ok: false, error: '未知来源: ' + source }))
+            return
+          }
+          const sourcePath = typeof item.sourcePath === 'string' && item.sourcePath ? item.sourcePath : ''
+          if (!sourcePath) {
+            res.writeHead(400, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ ok: false, error: '条目缺少 sourcePath' }))
+            return
+          }
+          let group = byPath.get(sourcePath)
+          if (!group) {
+            group = { format, sourcePath, sessionIds: [] }
+            byPath.set(sourcePath, group)
+          }
+          if ((format === 'opencode' || format === 'zcode') && typeof item.sessionId === 'string' && item.sessionId) {
+            group.sessionIds.push(item.sessionId)
+          }
+        }
+        const results = []
+        for (const group of byPath.values()) {
+          try {
+            const out = await importDiscoveryItem(ctx, group.format, group.sourcePath, group.sessionIds, {
+              force: body.force === true,
+              budget: budgetInfo.budget,
+              budgetSource: budgetInfo.source,
+            })
+            results.push({ sourcePath: group.sourcePath, format: group.format, ...summarizeImport(out) })
+          } catch (err) {
+            results.push({ sourcePath: group.sourcePath, format: group.format, status: 'failed', error: String((err && err.message) || err) })
+          }
+        }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, results }))
       } catch (err) {
         res.writeHead(500, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: false, error: String((err && err.message) || err) }))

@@ -151,6 +151,14 @@ sync_to_claude({ sessionId: "import-019f5f27-…" })
 sync_to_claude({ sessionId: "…", target: "copy", dryRun: true })
 ```
 
+### 浏览器面板 — 侧边栏发现与导入
+
+dsh web 侧边栏底部有「导入会话」入口（`sidebar.footer.action` 槽）。打开的面板**按工作区文件夹分组**列出发现的会话（各来源记录里的 `cwd`/项目名，缺省归入「(未分组)」），支持来源过滤——「全部来源」扫描全部格式的默认数据根，单选来源则只看该格式——并带逐会话导入状态徽标（已导入 / 部分 / 未导入）。
+
+每行支持**单选导入**，复选框支持**多选导入**（「导入所选 (N)」）：面板调用与 `import_*` 工具完全相同的 host 导入管线，幂等跳过 / 增量续写 / force / 上下文预算语义完全一致；导入后自动刷新列表展示最新状态。多会话源（如 `conversations.json`、opencode/zcode/hermes 库）整源导入——opencode/zcode 只导所选 `sessionId`。
+
+> 数据来自与 `scan_discover` 同一套只读发现（30s TTL 缓存 + 持久化 mtime 书签）；面板除你主动触发的导入外零写入。
+
 ## 🔑 关键行为
 
 - **只读导入** — 源转录与数据库绝不改写；导入的 DSH 历史 append-only（既有事件绝不修改）。
@@ -162,7 +170,7 @@ sync_to_claude({ sessionId: "…", target: "copy", dryRun: true })
 
 ## ⚙️ 兼容性
 
-面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 335 个用例。
+面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 340 个用例。
 
 ## 📦 安装与卸载
 

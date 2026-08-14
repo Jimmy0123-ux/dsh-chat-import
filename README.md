@@ -151,6 +151,14 @@ sync_to_claude({ sessionId: "import-019f5f27-…" })
 sync_to_claude({ sessionId: "…", target: "copy", dryRun: true })
 ```
 
+### Browser panel — discover & import from the sidebar
+
+The dsh web sidebar shows an **导入会话** entry at the bottom (a `sidebar.footer.action` slot). It opens a panel listing discovered sessions **grouped by workspace folder** (each source's `cwd`/project when available, otherwise an "(未分组)" bucket), with a source filter — "全部来源" scans every format's default data root, a single source restricts the view — and a per-session import-status badge (已导入 / 部分 / 未导入).
+
+Each row supports **single import**, and the checkboxes enable **multi-select import** ("导入所选 (N)"): the panel calls the same host import pipeline as the `import_*` tools, so idempotent skip / incremental append / `force` / context-budget semantics are identical, and the list refreshes with the new statuses after importing. A multi-session source (e.g. `conversations.json`, an opencode/zcode/hermes DB) is imported whole — opencode/zcode restrict to the selected `sessionId`s.
+
+> The data comes from the same read-only discovery as `scan_discover` (30s TTL cache + persistent mtime bookmarks); the panel itself never writes anything except the imports you trigger.
+
 ## 🔑 Key behaviors
 
 - **Read-only import** — source transcripts and databases are never rewritten; imported DSH history is append-only (existing events are never modified).
@@ -162,7 +170,7 @@ sync_to_claude({ sessionId: "…", target: "copy", dryRun: true })
 
 ## ⚙️ Compatibility
 
-Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6`) and requires **Node.js >= 22.13** (the first release where `node:sqlite` is available without a flag). `npm test` — 335 cases.
+Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6`) and requires **Node.js >= 22.13** (the first release where `node:sqlite` is available without a flag). `npm test` — 340 cases.
 
 ## 📦 Install & uninstall
 
