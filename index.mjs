@@ -2371,7 +2371,7 @@ function apply(ctx) {
   // 返回全部，limit 字段 = 实际长度）。返回 discoverSessions 结果（{ok, sessions,
   // total, offset, limit}，total 为过滤后总数，供面板分页），错误返回 {ok:false,
   // error}。webServer 由上方可选守卫保证非空（web 环境）。
-  ctx.webServer.register({
+  webServer.register({
     kind: 'exact',
     path: '/api-import/sessions',
     handler: async (req, res) => {
@@ -2412,7 +2412,7 @@ function apply(ctx) {
   // resolveImportBudget 一次（批内共享，registry 记录同口径，预算变化 → budgetChanged
   // 跳过语义与 import_* 工具一致）。逐条错误不拖垮整批：条目级 {status:'failed',
   // error}。返回 { ok: true, results: [{ sourcePath, format, mode, ...摘要 }] }。
-  ctx.webServer.register({
+  webServer.register({
     kind: 'exact',
     path: '/api-import/import',
     handler: async (req, res) => {
