@@ -1,7 +1,7 @@
 {
   "name": "dsh-chat-import",
   "description": "Import Claude Code / Codex / ChatGPT / Cursor / Gemini / Reasonix / opencode conversation histories as resumable DeepSeek Harness sessions",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "main": "./index.mjs",
   "exports": {
