@@ -161,6 +161,10 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 
 > 数据来自与 `scan_discover` 同一套只读发现（30s TTL 缓存 + 持久化 mtime 书签）；面板除你主动触发的导入外零写入。
 
+### `/import` 斜杠命令
+
+插件还注册了一个 **`/import <source> <path>`** 斜杠命令（在挂载了 dsh `commands` 服务的环境下可用）：直接在会话里输入即可导入，不占模型轮次——与 `import_*` 工具同一管线、同一幂等 / 增量 / force / 上下文预算语义。`<source>` 接受短名（`claude`、`codex`…）、客户端来源 id（`claude-code`）或工具全名（`import_claude`）；`<path>` 为 transcript 文件或会话目录 / 数据根（单文件导入 / 目录批量照常判定）。
+
 ## 🔑 关键行为
 
 - **只读导入** — 源转录与数据库绝不改写；导入的 DSH 历史 append-only（既有事件绝不修改）。

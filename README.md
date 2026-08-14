@@ -160,6 +160,10 @@ Each row supports **single import**, and the checkboxes enable **multi-select im
 
 > The data comes from the same read-only discovery as `scan_discover` (30s TTL cache + persistent mtime bookmarks); the panel itself never writes anything except the imports you trigger.
 
+### `/import` slash command
+
+The plugin also registers a **`/import <source> <path>`** slash command (available where the dsh `commands` service is mounted): type it directly in a session to import without a model round-trip — the same pipeline and the same idempotent / incremental / `force` / context-budget semantics as the `import_*` tools. `<source>` accepts the short name (`claude`, `codex`, …), the client source id (`claude-code`), or the full tool name (`import_claude`); `<path>` is a transcript file or a session directory / data root (single-file import vs. directory batch as usual).
+
 ## 🔑 Key behaviors
 
 - **Read-only import** — source transcripts and databases are never rewritten; imported DSH history is append-only (existing events are never modified).

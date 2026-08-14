@@ -20,7 +20,8 @@ lib/             导入/同步驱动（按职责拆分，均消费 ctx、非纯�
                  retract.mjs（REQ-33 识别/撤回）、discovery-host.mjs（scan_discover host 适配）、
                  panel.mjs（REQ-41 面板路由）、client.js（Browser 侧 bundle，REQ-41：sidebar.footer.action
                  槽 → 按工作区分组的面板 + 单选/多选导入；文案注册到 "chat-import" ns 经
-                 @deepseek-ai/dsh-client-locale 随 web 语言切换，缺失时降级内置 zh）、opencode.mjs / zcode.mjs / hermes.mjs
+                 @deepseek-ai/dsh-client-locale 随 web 语言切换，缺失时降级内置 zh）、command.mjs
+                 （REQ-42 /import 命令面：commands 可选服务延迟注册，复用 importDiscoveryItem）、opencode.mjs / zcode.mjs / hermes.mjs
                  （SQLite 读取，node:sqlite）、convert/（转换核心按源拆分）、export/（反向序列化按目标
                  格式拆分，当前仅 claude.mjs）
 convert.mjs      转换核心 re-export shim（已按源拆到 lib/convert/{core,claude,codex,chatgpt,cursor,gemini,reasonix,opencode,zcode,grokbuild,openclaw,hermes,pi,kimi}.mjs，纯函数、零 DSH 依赖、可独立单测）
@@ -37,7 +38,7 @@ test/            convert 单测 + export 单测 + index mock 集成 + zcode 自�
 dev/             ❌ 本地工程面（gitignore，永不提交）：bin/（脚本：session.mjs 多会话认领 CLI、verify-*、totp）、hooks/（pre-push）、research/（竞品/方向调研）、HANDOFF.md、REQUIREMENTS.md、GROWTH.md、RELEASING.md、ORCHESTRATOR-PROMPT.md、TESTER-PROMPT.md、gh-pat.txt（凭据勿提交）；多会话协调靠 dsh-file-claim 插件
 ```
 
-- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/client.js`、`lib/discovery.mjs`、`lib/budget.mjs`、`lib/import-core.mjs`、`lib/import-variants.mjs`、`lib/toolkit.mjs`、`lib/export-tool.mjs`、`lib/retract.mjs`、`lib/discovery-host.mjs`、`lib/panel.mjs`、`lib/tools.mjs`、`lib/convert`、`lib/export`、`lib/hermes.mjs`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
+- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/client.js`、`lib/command.mjs`、`lib/discovery.mjs`、`lib/budget.mjs`、`lib/import-core.mjs`、`lib/import-variants.mjs`、`lib/toolkit.mjs`、`lib/export-tool.mjs`、`lib/retract.mjs`、`lib/discovery-host.mjs`、`lib/panel.mjs`、`lib/tools.mjs`、`lib/convert`、`lib/export`、`lib/hermes.mjs`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
 - **永不提交**：`dev/`、`node_modules/`、`.prev-session*.jsonl`、`.dsh-file-claim/`（插件运行时目录）、真实用户 transcript（含敏感内容）、任何凭据/密钥。
 
 ## 命令
