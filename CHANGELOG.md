@@ -13,6 +13,31 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Added
 
+- **ZCode source import** (`import_zcode`) (REQ-38) — the 8th import source:
+  reads the z.ai official CLI's `~/.zcode/cli/db/db.sqlite` (SQLite authority
+  index) read-only via `node:sqlite`; the `message` / `part` rows carry no
+  `sequence` column, so the message stream is rebuilt by
+  `ORDER BY time_created, id`, and only main sessions (`parent_id IS NULL`)
+  are imported. `compaction` parts restore their compressed summary
+  (`data.summary.body`) as a leading `reasoning` block (the compaction body
+  itself never enters the conversation), tool parts emit `tool/call` +
+  `tool/result` in pairs (`state.output` inline), `<system-reminder>`
+  injections are filtered, and `provider='zcode'`. When the DB is unavailable
+  the import falls back to the legacy `transcript.jsonl` (last `model_request`
+  messages, tool results back-filled into the tool part's `state.output`).
+  One DB holds all sessions, so the tool always returns the batch shape
+  (`zcode://<id>` pseudo-path / `sessionIds` filtering, DB-level
+  fingerprinting, per-session append / `sourceShrunk`).
+- **Title fallback** `custom-title > ai-title > first question` (REQ-27) —
+  every source now resolves its session title by priority: `custom-title` >
+  `ai-title` (Claude) / the source-recorded title (ChatGPT, opencode, ZCode,
+  Reasonix meta summary) > the first user prompt as a fallback; titles are
+  normalized (trim, collapse inner whitespace) and truncated at 80 characters
+  (an ellipsis is appended on overflow). Explicit titles are still pinned with
+  a `session/title` event; a pure first-question fallback only fills the title
+  field without writing an event (DSH auto-falls back to the first user text
+  for untitled sessions), and blank titles never emit a title event.
+
 - **Incremental re-import** (REQ-24) — re-importing the same source path no
   longer just skips: a grown source file appends only its **new turns** to the
   same DSH session (contiguous `seq` continued from the authoritative stored
