@@ -196,7 +196,7 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 
 ## ⚙️ Compatibility
 
-- Consumes only public host plugin APIs (`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`) and `@deepseek-ai/dsh-tools` (declared `peerDependencies`, tested against `0.1.0-rc.6`).
+- Consumes only public host plugin APIs (`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`) and `@deepseek-ai/dsh-tools`, declared as a `peerDependencies` range `^0.1.0-rc.6` (currently resolving to `0.1.0-rc.6`, the version the plugin is tested against).
 
 | Source format | Import tool | Verified |
 | --- | --- | --- |
@@ -208,7 +208,9 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 | Reasonix | `import_reasonix` | ✅ unit + mock integration (`npm test`); dry-run on 55 real sessions |
 | opencode | `import_opencode` | ✅ unit + mock integration (`npm test`) |
 
-- **Verified**: 2026-08 on `dsh 0.1.0-rc.6` (web profile) — full "import → resume → workspace attach" run; `npm test` (79 cases) covers the pure conversion logic and mock integration paths for all seven source formats.
+- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (79 cases) covers the pure conversion logic and mock integration paths for all seven source formats.
+- **Expected**: `dsh-tools ^0.1.0-rc.6` — the `dsh 0.1.x` line, the same range the host install uses.
+- **Out of band**: `<0.1.0-rc.6` and `>=0.2.0` are untested — after a `dsh` major upgrade, run a headless smoke test first, then update this matrix.
 
 ## 🔒 Safety & boundaries
 
