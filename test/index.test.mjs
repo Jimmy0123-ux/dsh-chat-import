@@ -601,8 +601,10 @@ test('import_chatgpt 单文件：一文件多会话、恒返回 batch、schema �
   // 同一文件里的每个会话都带标记，sourcePath 都是 conversations.json（REQ-32）
   assertImportedMarker(saved1.events, { tool: 'chatgpt', sourceId: 'conv-001', sourcePath: 'D:\\demo\\chatgpt\\conversations.json' })
   assertImportedMarker(saved2.events, { tool: 'chatgpt', sourceId: 'conv-002', sourcePath: 'D:\\demo\\chatgpt\\conversations.json' })
-  // ChatGPT 无 cwd → 不归组
-  assert.equal(attached.length, 0)
+  // ChatGPT 无 cwd → REQ-39-lite 回退归到导出文件所在目录（否则堆进「未分组」找不到）
+  assert.equal(attached.length, 2)
+  assert.ok(attached.every((a) => a.ws === 'D:\\demo\\chatgpt'))
+  assert.deepEqual(attached.map((a) => a.id).sort(), ['import-conv-001', 'import-conv-002'])
 })
 
 test('import_chatgpt 幂等：重复导入同一文件只落盘一次', async () => {

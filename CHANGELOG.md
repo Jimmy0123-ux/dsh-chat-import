@@ -35,6 +35,22 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Fixed
 
+- **Import panel: session list now scrolls; workspace groups collapse on click**
+  — the session list lost its scroll container in the Stage-3 rewrite (groups
+  were rendered straight into the fixed panel, so long lists overflowed past
+  the viewport with no way to scroll; `clientH` vs `scrollH` mismatch). The
+  list is a proper `flex:1; overflow-y:auto` container again, and the
+  workspace-folder group headers (`▾`) now toggle collapse/expand on click.
+- **Imported sessions stay findable when the transcript `cwd` does not exist
+  locally (REQ-39-lite)** — `workspaceRegistry` only owns workspaces for
+  directories that exist (`fs.realpath`); transcripts migrated from another
+  machine carry cwds that do not exist here, so every such import silently
+  landed in the collapsed "未分组" group and looked like "nothing was
+  imported". `attachToWorkspace` now falls back to the **source file's
+  directory** (the source directory itself when the source is a directory) as
+  the workspace when the `cwd` cannot be resolved — e.g. a `conversations.json`
+  without a cwd is grouped under its export directory. Opened sessions always
+  render their messages (verified); this fixes their visibility in the sidebar.
 - **Import panel reports actionable errors instead of a raw `Failed to execute
   'json'…Unexpected end of JSON input`** — the panel's `fetch` now reads the
   response as text and parses defensively: an empty / non-JSON response (e.g.

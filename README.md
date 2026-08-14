@@ -40,7 +40,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 **▶️ Resume**
 
 - **Seamlessly resumable** — open an imported session and keep chatting exactly where the source left off.
-- **🗂 Auto workspace grouping** — sessions land in the workspace of their source `cwd` — no more "ungrouped".
+- **🗂 Auto workspace grouping** — sessions land in the workspace of their source `cwd` (falling back to the source file's directory when that path does not exist locally) — no more "ungrouped".
 
 **🔄 Reverse**
 
@@ -163,7 +163,7 @@ Each row supports **single import**, and the checkboxes enable **multi-select im
 
 - **Read-only import** — source transcripts and databases are never rewritten; imported DSH history is append-only (existing events are never modified).
 - **Idempotent + incremental** — unchanged sources are skipped without re-reading; growth appends only the new turns; truncation is detected and reported.
-- **Auto workspace grouping** — sessions are grouped into the workspace of their source `cwd`.
+- **Auto workspace grouping** — sessions are grouped into the workspace of their source `cwd`; when the `cwd` does not exist on this machine (common when migrating transcripts from another machine), the session falls back to the workspace of the **source file's directory** so it never disappears into "未分组".
 - **Context budget protection** — imported sessions carry no provider configuration, so dsh never auto-compacts them; oversized sessions are trimmed to fit a context budget (per-message caps, then a compressed middle keeping the earliest prompts, a summary and the tail). The budget can be set per call or via the `DSH_IMPORT_CONTEXT_BUDGET` env var; the trim is always reported in the result.
 - **Fail loudly, never silently** — malformed lines and suspected secrets are counted and reported by position (line numbers / kind — content is never output); anything a source format cannot preserve is explicitly flagged in the import report.
 - **Sandbox** — reading source files or writing exports outside the workspace requires the session sandbox to allow the path.

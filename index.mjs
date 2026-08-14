@@ -16,7 +16,7 @@
 //（标题 / cwd / 时间 / 规模 / 跳过明细），零副作用（不落盘、不写 registry）。
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
@@ -109,19 +109,34 @@ function attachReq26(out, res) {
 }
 
 // 把导入的会话挂到其 cwd 对应的工作区（否则会显示为"未分组"）。
-async function attachToWorkspace(ctx, meta) {
-  if (!meta.cwd) return false
+// REQ-39-lite 可见性回退：cwd 在本地不存在/不可解析（realpath 拒绝——跨机器迁移
+// transcript 的常见情况）时，改用源文件所在目录（源本身是目录则用它自己）归组，
+// 避免导入会话全部堆进「未分组」导致在工作区找不到。所有候选都失败才放弃归组。
+async function attachToWorkspace(ctx, meta, sourcePath) {
   const wr = ctx.get('workspaceRegistry')
   if (!wr || typeof wr.resolveByPath !== 'function') return false
-  try {
-    let ws = await wr.resolveByPath(meta.cwd)
-    if (!ws) ws = await wr.create(meta.cwd)
-    await ws.attachSession(meta.id)
-    return true
-  } catch (err) {
-    console.error('workspace attach failed:', String((err && err.message) || err))
-    return false
+  const candidates = []
+  if (meta.cwd) candidates.push(meta.cwd)
+  if (sourcePath) {
+    try {
+      const target = await ctx.fs.resolve(sourcePath)
+      const info = await ctx.fs.stat(target)
+      candidates.push(info && info.type === 'directory' ? sourcePath : dirname(sourcePath))
+    } catch {
+      // 源路径 stat 失败（已删除等）：跳过源目录回退，仅剩 cwd 候选
+    }
   }
+  for (const path of candidates) {
+    try {
+      let ws = await wr.resolveByPath(path)
+      if (!ws) ws = await wr.create(path)
+      await ws.attachSession(meta.id)
+      return true
+    } catch (err) {
+      console.error('workspace attach failed for ' + path + ':', String((err && err.message) || err))
+    }
+  }
+  return false
 }
 
 // 预热投影缓存：冷读一次持久化会话并回写，让侧边栏无需打开会话即可显示
@@ -147,7 +162,7 @@ async function runDecision(ctx, decision, registryDir, sourcePath, persisted) {
     const { __meta, __events } = decision
     await ctx.sessionPersistence.create(__meta)
     await ctx.sessionPersistence.append(__meta.id, __events)
-    await attachToWorkspace(ctx, __meta)
+    await attachToWorkspace(ctx, __meta, sourcePath)
     await warmProjection(ctx, __meta.id)
     persisted.add(__meta.id)
   } else if (decision.__action === 'append') {
@@ -156,7 +171,7 @@ async function runDecision(ctx, decision, registryDir, sourcePath, persisted) {
     for (const c of decision.__creates) {
       await ctx.sessionPersistence.create(c.meta)
       await ctx.sessionPersistence.append(c.meta.id, c.events)
-      await attachToWorkspace(ctx, c.meta)
+      await attachToWorkspace(ctx, c.meta, sourcePath)
       await warmProjection(ctx, c.meta.id)
       persisted.add(c.meta.id)
     }
