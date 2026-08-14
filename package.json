@@ -18,6 +18,7 @@
     "lib/imports.mjs",
     "lib/backfill.mjs",
     "lib/convert",
+    "lib/hermes.mjs",
     "lib/opencode.mjs",
     "lib/zcode.mjs",
     "cordis.patch.yml",
