@@ -24,6 +24,65 @@ import { resolveRegistryDir, loadImports, rememberImport, unwrapRecord, listPers
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
 
+// ── REQ-37 上下文预算解析（纯 host 面）──────────────────────────────────
+// 导入会话无 provider 配置时不会被 dsh 自动压缩（routedTarget 解析失败），超长
+// 会话全量落盘后恢复对话直接 400。预算（token 数）解析优先级：
+//   工具参数 budget > 环境变量 DSH_IMPORT_CONTEXT_BUDGET >
+//   动态（agentDefaultModel.currentSelection + llm.resolveModelInfo 模型窗口）>
+//   静态默认 550k。
+// agentDefaultModel / llm 在 rc.6 host 服务面存在但可能未挂载：任一步不可用或
+// 抛错都回退静态默认，绝不报错。解析结果盖写进 args.budget（转换层消费）与
+// args.budgetSource（裁剪上报标注来源），并落进 imports registry。
+const DEFAULT_CONTEXT_BUDGET = 550000
+const IMPORT_BUDGET_ENV = 'DSH_IMPORT_CONTEXT_BUDGET'
+
+// 预算值归一：缺省/非法（非正数）返回 null。
+function parseBudgetValue(v) {
+  if (v === undefined || v === null || v === '') return null
+  const n = typeof v === 'number' ? v : Number(String(v).trim())
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null
+}
+
+// 动态预算：默认模型窗口 − 默认输出上限 − max(25% 窗口, 40k)。
+async function dynamicContextBudget(ctx) {
+  try {
+    const adm = ctx.get('agentDefaultModel')
+    const llm = ctx.get('llm')
+    if (!adm || typeof adm.currentSelection !== 'function') return null
+    if (!llm || typeof llm.resolveModelInfo !== 'function') return null
+    const selection = adm.currentSelection()
+    if (!selection || typeof selection.provider !== 'string' || typeof selection.model !== 'string') return null
+    const info = await llm.resolveModelInfo(selection.provider, selection.model)
+    const window = info && info.context && typeof info.context.contextWindow === 'number' ? info.context.contextWindow : null
+    if (window === null || window <= 0) return null
+    const maxTokens = typeof info.defaultMaxTokens === 'number' && info.defaultMaxTokens > 0 ? info.defaultMaxTokens : 0
+    const budget = window - maxTokens - Math.max(Math.floor(window * 0.25), 40000)
+    return Number.isFinite(budget) && budget > 0 ? Math.floor(budget) : null
+  } catch {
+    // 动态解析任一环不可用（服务未挂载 / 模型无窗口元数据）→ 回退静态默认
+    return null
+  }
+}
+
+// 完整解析链，返回 { budget, source }（source ∈ param|env|dynamic|default）。
+async function resolveImportBudget(ctx, args) {
+  const param = parseBudgetValue(args.budget)
+  if (param !== null) return { budget: param, source: 'param' }
+  const env = parseBudgetValue(process.env[IMPORT_BUDGET_ENV])
+  if (env !== null) return { budget: env, source: 'env' }
+  const dynamic = await dynamicContextBudget(ctx)
+  if (dynamic !== null) return { budget: dynamic, source: 'dynamic' }
+  return { budget: DEFAULT_CONTEXT_BUDGET, source: 'default' }
+}
+
+// 把预算来源标注并入转换层裁剪上报（convert.mjs 纯函数只知预算值，不知来源）。
+function markTrimmedSource(out, args) {
+  if (out && out.trimmed && typeof args.budgetSource === 'string') {
+    out.trimmed = { ...out.trimmed, source: args.budgetSource }
+  }
+  return out
+}
+
 // 把导入的会话挂到其 cwd 对应的工作区（否则会显示为"未分组"）。
 async function attachToWorkspace(ctx, meta) {
   if (!meta.cwd) return false
@@ -107,6 +166,11 @@ async function importTranscript(ctx, target, args, convert, { registryDir, persi
     if (typeof known.args === 'string' && fingerprint !== known.args) {
       return { sessionId: known.dshId, turns: known.turns, messages: 0, toolCalls: 0, skipped: 0, alreadyImported: true, status: 'already-imported', argsChanged: true }
     }
+    // REQ-37：预算变化（文件未变）→ 跳过并报告（同 argsChanged 语义）；需要按新预算
+    // 导入用 force:true。budget 为 index 层解析后的实际预算（registry 记录同一口径）。
+    if (typeof known.budget === 'number' && known.budget !== args.budget) {
+      return { sessionId: known.dshId, turns: known.turns, messages: 0, toolCalls: 0, skipped: 0, alreadyImported: true, status: 'already-imported', budgetChanged: true }
+    }
     if (stat && stat.version === known.version && stat.size === known.sizeBytes) {
       // 未变：短路径跳过（不 readText），重复导入同一会话幂等
       return { sessionId: known.dshId, turns: known.turns, messages: 0, toolCalls: 0, skipped: 0, alreadyImported: true, status: 'already-imported' }
@@ -114,14 +178,14 @@ async function importTranscript(ctx, target, args, convert, { registryDir, persi
   }
 
   const raw = await ctx.fs.readText(target)
-  const out = convert(raw, { ...args, sourcePath })
+  const out = markTrimmedSource(convert(raw, { ...args, sourcePath }), args)
   // 无可导入内容（空文件 / 非目标格式 / 辅助 transcript）：计入 skipped，不落盘空会话
   if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
     const res = { sessionId: 'none', turns: 0, messages: 0, toolCalls: 0, skipped: 1, alreadyImported: false, status: 'skipped' }
     if (out.skipReason) res.skipReason = out.skipReason
     return res
   }
-  const decision = await decideSingle(ctx, { known, converted: out, stat, args, fingerprint, persisted: persistedSet, sourcePath })
+  const decision = await decideSingle(ctx, { known, converted: out, stat, args, fingerprint, persisted: persistedSet, sourcePath, budget: args.budget })
   return runDecision(ctx, decision, registryDir, sourcePath, persistedSet)
 }
 
@@ -166,7 +230,7 @@ function batchItem(path, single) {
     toolCalls: single.toolCalls,
     skipped: single.skipped,
   }
-  for (const k of ['skipReason', 'error', 'appendedTurns', 'appendedEvents', 'appendedSkipped', 'sourceShrunk', 'changedInPlace', 'argsChanged', 'backfilled', 'droppedBoundaryResults', 'forceImported']) {
+  for (const k of ['skipReason', 'error', 'appendedTurns', 'appendedEvents', 'appendedSkipped', 'sourceShrunk', 'changedInPlace', 'argsChanged', 'budgetChanged', 'backfilled', 'droppedBoundaryResults', 'forceImported', 'trimmed']) {
     if (single[k] !== undefined) item[k === 'skipReason' ? 'reason' : k] = single[k]
   }
   return item
@@ -191,7 +255,8 @@ async function importDirectory(ctx, dirTarget, args, { convert, sourceLabel, der
     const path = target.displayPath || ctx.fs.processPath(target)
     try {
       const derived = deriveArgs ? await deriveArgs(target) : {}
-      const single = await importTranscript(ctx, target, { ...derived, force: args.force === true }, convert, { registryDir, persisted, fingerprintKeys })
+      // 展开 args（含 REQ-37 预算 budget/budgetSource），deriveArgs 可覆盖
+      const single = await importTranscript(ctx, target, { ...args, ...derived, force: args.force === true }, convert, { registryDir, persisted, fingerprintKeys })
       if (single.status === 'imported') imported++
       else if (single.status === 'appended') appended++
       else if (single.status === 'already-imported') alreadyImported++
@@ -224,6 +289,13 @@ async function importChatgptFile(ctx, target, args, { registryDir, persisted } =
   if (known && args.force !== true) {
     const subs = Object.values(known.conversations)
     const allPersisted = subs.length > 0 && subs.every((sub) => persistedSet.has(sub.dshId))
+    // REQ-37：预算变化 → 跳过并上报 budgetChanged（同 argsChanged 语义）
+    if (allPersisted && typeof known.budget === 'number' && known.budget !== args.budget) {
+      const results = Object.entries(known.conversations).map(([, sub]) => ({
+        path, status: 'already-imported', sessionId: sub.dshId, turns: sub.turns, messages: 0, toolCalls: 0, skipped: 0, budgetChanged: true,
+      }))
+      return { total: results.length, imported: 0, alreadyImported: results.length, appended: 0, skipped: 0, failed: 0, results }
+    }
     if (allPersisted && stat && stat.version === known.version && stat.size === known.sizeBytes) {
       const results = Object.entries(known.conversations).map(([, sub]) => ({
         path, status: 'already-imported', sessionId: sub.dshId, turns: sub.turns, messages: 0, toolCalls: 0, skipped: 0,
@@ -233,9 +305,10 @@ async function importChatgptFile(ctx, target, args, { registryDir, persisted } =
   }
 
   const raw = await ctx.fs.readText(target)
-  const { conversations, skipped: skippedFiles } = convertChatgptJson(raw, { sourcePath: path })
+  const { conversations, skipped: skippedFiles } = convertChatgptJson(raw, { sourcePath: path, budget: args.budget })
+  for (const conv of conversations) markTrimmedSource(conv, args)
   const items = conversations.map((conv) => ({ key: conv.meta.sourceId || conv.meta.id, converted: conv }))
-  const decision = await decideMulti(ctx, { known, items, stat, args, fingerprint, persisted: persistedSet, sourcePath: path, subTable: 'conversations' })
+  const decision = await decideMulti(ctx, { known, items, stat, args, fingerprint, persisted: persistedSet, sourcePath: path, subTable: 'conversations', budget: args.budget })
   const missing = known ? Object.keys(known.conversations).filter((k) => !items.some((i) => i.key === k)) : []
   const result = await runDecision(ctx, decision, registryDir, path, persistedSet)
   return {
@@ -393,6 +466,11 @@ async function importOpencodeFile(ctx, target, args, { registryDir, persisted } 
         const results = skipResults().map((r) => ({ ...r, argsChanged: true }))
         return { total: results.length, imported: 0, alreadyImported: results.length, appended: 0, skipped: 0, failed: 0, results }
       }
+      // REQ-37：预算变化 → 跳过并上报 budgetChanged（同 argsChanged 语义）
+      if (typeof known.budget === 'number' && known.budget !== args.budget) {
+        const results = skipResults().map((r) => ({ ...r, budgetChanged: true }))
+        return { total: results.length, imported: 0, alreadyImported: results.length, appended: 0, skipped: 0, failed: 0, results }
+      }
       if (stat && stat.version === known.version && stat.size === known.sizeBytes) {
         const count = Object.keys(known.sessions).length
         return { total: count, imported: 0, alreadyImported: count, appended: 0, skipped: 0, failed: 0, results: skipResults() }
@@ -406,14 +484,14 @@ async function importOpencodeFile(ctx, target, args, { registryDir, persisted } 
   const preSkipped = []
   for (const s of sessions) {
     if (wanted && !wanted.has(s.id)) continue
-    const out = convertOpencodeJson(JSON.stringify(s), { ...args, sourcePath: path })
+    const out = markTrimmedSource(convertOpencodeJson(JSON.stringify(s), { ...args, sourcePath: path }), args)
     if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
       preSkipped.push({ path, status: 'skipped', reason: 'no user turns (session ' + s.id + ')' })
       continue
     }
     items.push({ key: s.id, converted: out })
   }
-  const decision = await decideMulti(ctx, { known, items, stat, args, fingerprint, persisted: persistedSet, sourcePath: path, subTable: 'sessions' })
+  const decision = await decideMulti(ctx, { known, items, stat, args, fingerprint, persisted: persistedSet, sourcePath: path, subTable: 'sessions', budget: args.budget })
   const missing = known && known.sessions ? Object.keys(known.sessions).filter((k) => !sessions.some((s) => s.id === k)) : []
   const result = await runDecision(ctx, decision, registryDir, path, persistedSet)
   return {
@@ -457,6 +535,10 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         type: 'boolean',
         description: '可选：true 时即使已导入也以新 id（import-<src>-<n>）另存一份完整副本，旧会话原样保留。',
       },
+      budget: {
+        type: 'integer',
+        description: '可选：上下文预算（token 数），超长会话按三层保护裁剪。优先级：本参数 > 环境变量 DSH_IMPORT_CONTEXT_BUDGET > 动态模型窗口（agentDefaultModel + llm）> 静态默认 550k。',
+      },
       ...((dropParameters || []).includes('sessionId') ? {} : {
         sessionId: {
           type: 'string',
@@ -494,8 +576,26 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
               sourceShrunk: { type: 'boolean' },
               changedInPlace: { type: 'boolean' },
               argsChanged: { type: 'boolean' },
+              budgetChanged: { type: 'boolean' },
               backfilled: { type: 'boolean' },
               droppedBoundaryResults: { type: 'integer' },
+              trimmed: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  budget: { type: 'integer', required: true },
+                  source: { type: 'string', enum: ['param', 'env', 'dynamic', 'default'], required: true },
+                  originalTokens: { type: 'integer', required: true },
+                  estimatedTokens: { type: 'integer', required: true },
+                  croppedBlocks: { type: 'integer', required: true },
+                  droppedTurns: { type: 'integer', required: true },
+                  droppedMessages: { type: 'integer', required: true },
+                  droppedToolCalls: { type: 'integer', required: true },
+                  droppedToolResults: { type: 'integer', required: true },
+                  droppedOversized: { type: 'integer', required: true },
+                  summaryInserted: { type: 'boolean', required: true },
+                },
+              },
               forceImported: {
                 type: 'object',
                 additionalProperties: false,
@@ -546,8 +646,26 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
                     sourceShrunk: { type: 'boolean' },
                     changedInPlace: { type: 'boolean' },
                     argsChanged: { type: 'boolean' },
+                    budgetChanged: { type: 'boolean' },
                     backfilled: { type: 'boolean' },
                     droppedBoundaryResults: { type: 'integer' },
+                    trimmed: {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        budget: { type: 'integer', required: true },
+                        source: { type: 'string', enum: ['param', 'env', 'dynamic', 'default'], required: true },
+                        originalTokens: { type: 'integer', required: true },
+                        estimatedTokens: { type: 'integer', required: true },
+                        croppedBlocks: { type: 'integer', required: true },
+                        droppedTurns: { type: 'integer', required: true },
+                        droppedMessages: { type: 'integer', required: true },
+                        droppedToolCalls: { type: 'integer', required: true },
+                        droppedToolResults: { type: 'integer', required: true },
+                        droppedOversized: { type: 'integer', required: true },
+                        summaryInserted: { type: 'boolean', required: true },
+                      },
+                    },
                     forceImported: {
                       type: 'object',
                       additionalProperties: false,
@@ -564,6 +682,17 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         ],
       },
       render: (args, value) => {
+        // REQ-37 裁剪上报摘要（trimmed 存在时追加一行人类可读说明）
+        const trimmedNote = (v) => {
+          const t = v && v.trimmed
+          if (!t) return ''
+          const bits = []
+          if (t.droppedTurns > 0) bits.push('裁剪 ' + t.droppedTurns + ' 轮')
+          if (t.croppedBlocks > 0) bits.push('裁剪 ' + t.croppedBlocks + ' 条超长内容')
+          if (t.droppedOversized > 0) bits.push('丢弃 ' + t.droppedOversized + ' 条超半消息')
+          if (t.summaryInserted) bits.push('已插入摘要')
+          return bits.length > 0 ? '（' + bits.join('，') + '，估算 ' + t.estimatedTokens + '/' + t.budget + ' tokens，来源 ' + t.source + '）' : ''
+        }
         if (value.mode === 'batch') {
           const bits = []
           bits.push('共扫描 ' + value.total + ' 个' + batchUnit)
@@ -572,6 +701,8 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
           if (value.alreadyImported) bits.push('已存在 ' + value.alreadyImported + ' 个')
           if (value.skipped) bits.push('跳过 ' + value.skipped + ' 个（' + (skippedNote || '非 ' + sourceLabel + ' transcript') + '）')
           if (value.failed) bits.push('失败 ' + value.failed + ' 个')
+          const trimmedItems = (value.results || []).filter((r) => r.trimmed).length
+          if (trimmedItems) bits.push(trimmedItems + ' 个会话触发预算裁剪')
           // 错误处理打磨：失败/跳过原因要可见，不只计数（最多展示 5 条）
           const problems = (value.results || []).filter((r) => r.status === 'failed' || r.status === 'skipped').slice(0, 5)
           const detail = problems.map((r) => '  - ' + r.path + (r.error ? '：' + r.error : r.reason ? '：' + r.reason : ''))
@@ -589,13 +720,13 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         if (value.status === 'appended') {
           return [{
             type: 'text',
-            text: '会话 ' + value.sessionId + ' 已续写 ' + value.appendedTurns + ' 轮、' + value.appendedEvents + ' 条事件（源文件新增轮次）。',
+            text: '会话 ' + value.sessionId + ' 已续写 ' + value.appendedTurns + ' 轮、' + value.appendedEvents + ' 条事件（源文件新增轮次）。' + trimmedNote(value),
           }]
         }
         if (value.status === 'imported' && value.forceImported) {
           return [{
             type: 'text',
-            text: '已强制导入完整副本 → 会话 ' + value.forceImported.current + '（前身 ' + value.forceImported.previous + ' 原样保留）。',
+            text: '已强制导入完整副本 → 会话 ' + value.forceImported.current + '（前身 ' + value.forceImported.previous + ' 原样保留）。' + trimmedNote(value),
           }]
         }
         if (value.alreadyImported) {
@@ -605,7 +736,9 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
               ? '源文件在既有轮次内变化（append-only 无法改写），跳过'
               : value.argsChanged
                 ? '导入参数已变化（args-changed），跳过；需要按新参数导入请用 force:true'
-                : value.appendedSkipped
+                : value.budgetChanged
+                  ? '上下文预算已变化（budget-changed），跳过；需要按新预算导入请用 force:true'
+                  : value.appendedSkipped
                   ? '源文件已增长但无法确定已存日志长度，跳过增量续写'
                   : value.backfilled
                     ? '已回填导入记录（旧版本导入的会话）'
@@ -617,19 +750,24 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         }
         return [{
           type: 'text',
-          text: '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId + (value.skipped ? '（跳过 ' + value.skipped + ' 行畸形记录）' : ''),
+          text: '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId + (value.skipped ? '（跳过 ' + value.skipped + ' 行畸形记录）' : '') + trimmedNote(value),
         }]
       },
     },
     async execute(args) {
-      const target = await ctx.fs.resolve(args.path)
+      // REQ-37：解析上下文预算（参数 > env > 动态模型窗口 > 静态默认），盖写进
+      // args.budget（token 数，转换层裁剪消费、registry 记录）与 args.budgetSource
+      // （裁剪上报标注来源）；预算变化经 registry 比对 → budgetChanged 跳过。
+      const budgetInfo = await resolveImportBudget(ctx, args)
+      const effective = { ...args, budget: budgetInfo.budget, budgetSource: budgetInfo.source }
+      const target = await ctx.fs.resolve(effective.path)
       const info = await ctx.fs.stat(target)
       if (info && info.type === 'directory') {
-        const batch = await importBatch(ctx, target, args)
+        const batch = await importBatch(ctx, target, effective)
         return { mode: 'batch', ...batch }
       }
       // 单文件：合并按文件派生的转换参数（可 async；Cursor 的 composer id、Reasonix 的 meta）
-      const fileArgs = { ...args, ...(await derive(target)) }
+      const fileArgs = { ...effective, ...(await derive(target)) }
       if (alwaysBatch) {
         // ChatGPT 导出：单文件也含多个会话，恒返回批量形态
         const batch = await importSingle(ctx, target, fileArgs)

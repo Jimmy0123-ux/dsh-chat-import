@@ -102,6 +102,7 @@ function makePersistence() {
 
 // 目录树：path -> 'dir' | content。opts.versions 可钉住某路径的 stat/writeText 版本
 // （测试用：模拟「内容变但 fs 版本不变」的外部修改，隔离 tail-mismatch/预检失败守卫）。
+// opts.services 可注入额外 ctx.get 服务（REQ-37 动态预算的 agentDefaultModel / llm）。
 function makeCtx(tree, opts = {}) {
   const persistence = makePersistence()
   const attached = []
@@ -111,6 +112,7 @@ function makeCtx(tree, opts = {}) {
   const reads = { count: 0 }
   const writes = [] // export_claude / sync_to_claude 的写盘记录（{ path, content, options }）
   const versions = opts.versions || {}
+  const services = opts.services || {}
   const versionOf = (path, v) => (versions[path] !== undefined ? versions[path] : contentVersion(v))
 
   const fs = {
@@ -194,6 +196,7 @@ function makeCtx(tree, opts = {}) {
     get(service) {
       if (service === 'workspaceRegistry') return workspaceRegistry
       if (service === 'sessionPersistence') return persistence
+      if (services[service] !== undefined) return services[service]
       return undefined
     },
     tools: {
@@ -2029,4 +2032,207 @@ test('REQ-36 工具入口：sync_to_claude execute 走 syncClaudeSession（schem
   assert.equal(value.status, 'synced')
   assert.equal(value.dryRun, true)
   assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+// ---- REQ-37 超长会话三层保护 + 预算自适应（mock 集成） ----
+
+// 合成超长 Claude transcript：N 轮，每轮 ~46 tokens（CJK）；giantAt 轮的回答换成
+// 超长文本（巨消息用例，> 预算一半）。> 预算 3 倍 = 80 轮 ≈ 3680 tokens（预算 1000）。
+function hugeClaudeTurns(n, { giantAt = -1, giantChars = 1500 } = {}) {
+  const lines = []
+  const sessionId = 'sess-huge-001'
+  for (let i = 1; i <= n; i++) {
+    lines.push(JSON.stringify({ sessionId, type: 'user', cwd: 'D:\\demo\\proj', message: { role: 'user', content: '问题' + i + '，' + '字'.repeat(18) } }))
+    const answer = i === giantAt ? '回答' + '字'.repeat(giantChars) : '回答' + i + '，' + '字'.repeat(18)
+    lines.push(JSON.stringify({ sessionId, type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: answer }] } }))
+  }
+  return lines.join('\n')
+}
+
+test('REQ-37 超长会话导入：预算环境变量覆盖 → 三层保护生效（seed ≤ 预算、trimmed 上报、锚点+摘要+尾部保留）', async () => {
+  process.env.DSH_IMPORT_CONTEXT_BUDGET = '1000'
+  try {
+    const tree = { 'D:\\demo\\proj\\sess-huge-001.jsonl': hugeClaudeTurns(80, { giantAt: 5 }) }
+    const { ctx, persistence } = makeCtx(tree)
+    apply(ctx)
+    const def = registeredDef(ctx)
+    const value = await def.execute({ path: 'D:\\demo\\proj\\sess-huge-001.jsonl' })
+    assert.equal(value.mode, 'single')
+    assert.equal(value.status, 'imported')
+    assert.ok(value.trimmed)
+    assert.equal(value.trimmed.source, 'env')
+    assert.equal(value.trimmed.budget, 1000)
+    assert.ok(value.trimmed.originalTokens > 3000) // 源 > 预算 3 倍
+    assert.ok(value.trimmed.estimatedTokens <= 1000) // seed 总 token 估算 ≤ 预算
+    assert.ok(value.trimmed.droppedTurns > 0)
+    assert.equal(value.trimmed.summaryInserted, true)
+    // 巨消息（turn5 的回答，1500+ tokens > 预算一半）未落盘（宁缺毋滥）
+    const saved = persistence.sessions.get(value.sessionId)
+    assert.ok(saved)
+    // 注意：user/message 的 data 是扁平 { id, role, content, source }（无 message 壳），
+    // assistant/message 是 { message: { ... } }——两种形状都要兼容
+    const contentOf = (e) => (e.data.message ? e.data.message.content : e.data.content) || []
+    const texts = saved.events
+      .filter((e) => e.type === 'user/message' || e.type === 'assistant/message')
+      .flatMap(contentOf)
+      .filter((b) => b && b.type === 'text')
+      .map((b) => b.text)
+    assert.ok(!texts.some((t) => t.startsWith('回答' + '字'.repeat(1500))))
+    // 开头锚点（最早 3 条 user 文本）保留
+    const userTexts = saved.events.filter((e) => e.type === 'user/message').map((e) => e.data.content[0].text)
+    assert.ok(userTexts[0].startsWith('问题1'))
+    assert.ok(userTexts[1].startsWith('问题2'))
+    assert.ok(userTexts[2].startsWith('问题3'))
+    // 尾部保留（最后一轮）
+    assert.ok(userTexts.some((t) => t.startsWith('问题80')))
+    // 摘要 reasoning 块存在
+    const summaries = saved.events
+      .filter((e) => e.type === 'assistant/message')
+      .flatMap((e) => e.data.message.content)
+      .filter((b) => b && b.type === 'reasoning' && b.text.includes('导入预算裁剪'))
+    assert.ok(summaries.length >= 1)
+    // 事件 seq 连续 + schema 校验
+    assert.ok(saved.events.every((e, i) => e.seq === i))
+    assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  } finally {
+    delete process.env.DSH_IMPORT_CONTEXT_BUDGET
+  }
+})
+
+test('REQ-37 无 provider 配置：走静态默认预算 550k，不报错、小会话无 trimmed 上报', async () => {
+  delete process.env.DSH_IMPORT_CONTEXT_BUDGET
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(value.status, 'imported')
+  assert.equal(value.trimmed, undefined) // 保护未生效 → 不上报
+  const reg = await loadImports(resolveRegistryDir())
+  assert.equal(reg.imports['D:\\demo\\proj\\sess-simple-001.jsonl'].budget, 550000)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('REQ-37 工具参数 budget 覆盖环境变量（优先级最高）', async () => {
+  process.env.DSH_IMPORT_CONTEXT_BUDGET = '500000'
+  try {
+    const simple = load('sess-simple-001.jsonl')
+    const { ctx } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
+    apply(ctx)
+    const def = registeredDef(ctx)
+    const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl', budget: 300000 })
+    assert.equal(value.status, 'imported')
+    const reg = await loadImports(resolveRegistryDir())
+    assert.equal(reg.imports['D:\\demo\\proj\\sess-simple-001.jsonl'].budget, 300000)
+  } finally {
+    delete process.env.DSH_IMPORT_CONTEXT_BUDGET
+  }
+})
+
+test('REQ-37 动态预算：agentDefaultModel + llm 解析模型窗口（窗口 − 输出上限 − max(25%, 40k)）', async () => {
+  delete process.env.DSH_IMPORT_CONTEXT_BUDGET
+  const calls = []
+  const services = {
+    agentDefaultModel: {
+      currentSelection() { return { provider: 'deepseek', model: 'deepseek-chat' } },
+    },
+    llm: {
+      async resolveModelInfo(provider, model) {
+        calls.push([provider, model])
+        return { provider, id: model, name: model, context: { contextWindow: 100000 }, defaultMaxTokens: 4096 }
+      },
+    },
+  }
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple }, { services })
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(value.status, 'imported')
+  assert.deepEqual(calls, [['deepseek', 'deepseek-chat']])
+  // 动态预算 = 100000 − 4096 − max(25%×100000, 40000) = 55904
+  const reg = await loadImports(resolveRegistryDir())
+  assert.equal(reg.imports['D:\\demo\\proj\\sess-simple-001.jsonl'].budget, 55904)
+})
+
+test('REQ-37 动态解析失败（服务抛错）→ 回退静态默认不报错', async () => {
+  delete process.env.DSH_IMPORT_CONTEXT_BUDGET
+  const simple = load('sess-simple-001.jsonl')
+  const services = {
+    agentDefaultModel: {
+      currentSelection() { return { provider: 'deepseek', model: 'deepseek-chat' } },
+    },
+    llm: {
+      async resolveModelInfo() { throw new Error('adapter not found') },
+    },
+  }
+  const { ctx } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple }, { services })
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(value.status, 'imported')
+  const reg = await loadImports(resolveRegistryDir())
+  assert.equal(reg.imports['D:\\demo\\proj\\sess-simple-001.jsonl'].budget, 550000)
+})
+
+test('REQ-37 预算变化：文件未变但预算变 → 跳过并上报 budgetChanged', async () => {
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
+  apply(ctx)
+  const def = registeredDef(ctx)
+  process.env.DSH_IMPORT_CONTEXT_BUDGET = '500000'
+  try {
+    const first = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+    assert.equal(first.status, 'imported')
+    process.env.DSH_IMPORT_CONTEXT_BUDGET = '400000'
+    const second = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+    assert.equal(second.status, 'already-imported')
+    assert.equal(second.budgetChanged, true)
+    assert.deepEqual(validateJsonSchemaValue(def.output.schema, second), [])
+    // 同预算重导：记录未更新前仍报 budgetChanged（同 argsChanged 语义——跳过不
+    // 改写记录，需要按新预算导入用 force:true）
+    const third = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+    assert.equal(third.status, 'already-imported')
+    assert.equal(third.budgetChanged, true)
+    // force:true 按新预算建副本 → 记录更新；之后再导同预算不再报 budgetChanged
+    const forced = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl', force: true })
+    assert.equal(forced.status, 'imported')
+    const reg = await loadImports(resolveRegistryDir())
+    assert.equal(reg.imports['D:\\demo\\proj\\sess-simple-001.jsonl'].budget, 400000)
+    const fourth = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+    assert.equal(fourth.status, 'already-imported')
+    assert.equal(fourth.budgetChanged, undefined)
+  } finally {
+    delete process.env.DSH_IMPORT_CONTEXT_BUDGET
+  }
+})
+
+test('REQ-37 目录批量导入：逐文件 trimmed 进 results（schema 校验）', async () => {
+  process.env.DSH_IMPORT_CONTEXT_BUDGET = '1000'
+  try {
+    const tree = {
+      'D:\\demo\\proj': 'dir',
+      'D:\\demo\\proj\\sess-huge-001.jsonl': hugeClaudeTurns(80, { giantAt: 5 }),
+      'D:\\demo\\proj\\sess-simple-001.jsonl': load('sess-simple-001.jsonl'),
+    }
+    const { ctx, persistence } = makeCtx(tree)
+    apply(ctx)
+    const def = registeredDef(ctx)
+    const value = await def.execute({ path: 'D:\\demo\\proj' })
+    assert.equal(value.mode, 'batch')
+    assert.equal(value.imported, 2)
+    const huge = value.results.find((r) => r.path.endsWith('sess-huge-001.jsonl'))
+    assert.ok(huge)
+    assert.ok(huge.trimmed)
+    assert.equal(huge.trimmed.source, 'env')
+    assert.ok(huge.trimmed.estimatedTokens <= 1000)
+    const small = value.results.find((r) => r.path.endsWith('sess-simple-001.jsonl'))
+    assert.equal(small.trimmed, undefined)
+    assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+    // 落盘会话事件平衡
+    assert.ok(persistence.sessions.get(huge.sessionId))
+    assert.ok(persistence.sessions.get(small.sessionId))
+  } finally {
+    delete process.env.DSH_IMPORT_CONTEXT_BUDGET
+  }
 })
