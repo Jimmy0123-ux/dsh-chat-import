@@ -7,7 +7,9 @@
 // user/message、assistant/message、tool/call、tool/result、step/end、turn/end），
 // 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区；
 // 并注册 `export_claude`（REQ-16）：把 DSH 会话日志只读序列化为 Claude Code
-// JSONL（export.mjs 纯函数），写到 <outputDir>/<slug>/<uuid>.jsonl。
+// JSONL（export.mjs 纯函数），写到 <outputDir>/<slug>/<uuid>.jsonl；
+// 注册 `sync_to_claude`（REQ-36）：把 DSH 会话新增轮次增量写回 Claude Code
+// JSONL（lib/backfill.mjs 纯逻辑 + ctx 注入），守卫冲突绝不静默覆盖。
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +18,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson } from './convert.mjs'
 import { slugifyClaudeCwd, serializeClaudeJsonl } from './export.mjs'
+import { syncClaudeSession } from './lib/backfill.mjs'
 import { resolveRegistryDir, loadImports, rememberImport, unwrapRecord, listPersistedIds, argsFingerprint, isSessionIdChange, decideSingle, decideMulti } from './lib/imports.mjs'
 
 const name = 'import-claude'
@@ -643,9 +646,10 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
 // 绝不 load/prepare、绝不改写会话日志（append-only 只读来源）。文件写到
 // <outputDir>/<slug>/<uuid>.jsonl（新 uuid v4 铸键 + createIfAbsent 不覆盖双保险；
 // dryRun 不写盘）。uuid 工厂可注入（测试确定性），默认 randomUUID。
-// 返回中的 mapping 是 REQ-24/36 imports registry 的预留形状（sourceSessionId →
-// 新 uuid、文件路径、记录计数），本任务只定义形状、不落库。
-async function exportClaudeSession(ctx, args, { uuid = randomUUID } = {}) {
+// 导入会话（日志带 session/imported 标记）导出成功后把 mapping 落进 imports
+// registry（record.exports = [mapping]），供 REQ-36 sync_to_claude 的 target:'copy'
+// 定位写回副本；原生会话无 sourcePath 键，不落库（mapping 仍在返回值里）。
+async function exportClaudeSession(ctx, args, { uuid = randomUUID, registryDir } = {}) {
   const sp = ctx.get('sessionPersistence')
   if (!sp || typeof sp.list !== 'function' || typeof sp.readFrom !== 'function') {
     throw new Error('sessionPersistence 不可用（需要 list + readFrom）')
@@ -666,6 +670,28 @@ async function exportClaudeSession(ctx, args, { uuid = randomUUID } = {}) {
     const target = await ctx.fs.resolve(filePath)
     await ctx.fs.writeText(target, out.jsonl, { kind: 'createIfAbsent', displayPath: filePath })
   }
+  const mapping = {
+    sourceSessionId: args.sessionId,
+    sessionUuid,
+    slug,
+    filePath,
+    turns: (events ?? []).filter((e) => e && e.type === 'turn/start').length,
+    messages: (events ?? []).filter((e) => e && (e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result')).length,
+    toolCalls: out.toolCalls,
+    toolResults: out.toolResults,
+    droppedToolResults: out.droppedToolResults,
+    skippedInjections: out.skippedInjections,
+  }
+  // 导入会话（带 session/imported 标记）导出成功后把 mapping 落进 registry
+  // （exports[0] 即 REQ-36 写回副本映射）；原生会话无 sourcePath 键，跳过
+  if (registryDir && args.dryRun !== true) {
+    const first = Array.isArray(events) && events.length > 0 ? events[0] : undefined
+    if (first && first.type === 'session/imported' && first.data && typeof first.data.sourcePath === 'string') {
+      const reg = await loadImports(registryDir)
+      const record = unwrapRecord(reg.imports[first.data.sourcePath])
+      if (record) await rememberImport(registryDir, first.data.sourcePath, { ...record, exports: [mapping] })
+    }
+  }
   return {
     mode: 'single',
     sessionId: sessionUuid,
@@ -676,18 +702,7 @@ async function exportClaudeSession(ctx, args, { uuid = randomUUID } = {}) {
     recordCount: out.recordCount,
     ...(out.title ? { title: out.title } : {}),
     dryRun: args.dryRun === true,
-    mapping: {
-      sourceSessionId: args.sessionId,
-      sessionUuid,
-      slug,
-      filePath,
-      turns: (events ?? []).filter((e) => e && e.type === 'turn/start').length,
-      messages: (events ?? []).filter((e) => e && (e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result')).length,
-      toolCalls: out.toolCalls,
-      toolResults: out.toolResults,
-      droppedToolResults: out.droppedToolResults,
-      skippedInjections: out.skippedInjections,
-    },
+    mapping,
   }
 }
 
@@ -906,7 +921,128 @@ function apply(ctx) {
       }],
     },
     async execute(args) {
-      return exportClaudeSession(ctx, args)
+      return exportClaudeSession(ctx, args, { registryDir })
+    },
+  }))
+  // REQ-36 反向同步（双向同步桥 B 第一步）：第 9 个工具，把 DSH 会话新增轮次
+  // 增量写回 Claude Code JSONL（目标 = 导入源文件或 export_claude 副本）。写回
+  // 核心在 lib/backfill.mjs（纯逻辑 + ctx 注入，零 DSH 依赖）；uuid 工厂经
+  // syncClaudeSession 的 args.uuid 注入（测试确定性），工具 schema 不暴露它。
+  ctx.tools.register(defineTool({
+    name: 'sync_to_claude',
+    description:
+      '反向同步（REQ-36）：把 DSH 会话新增完整轮次增量写回 Claude Code JSONL，' +
+      '供真实 Claude Code --resume 续聊。目标 target:"source"（默认）写回导入源文件，' +
+      'target:"copy" 写回上次 export_claude 导出的副本（需先导出）。' +
+      '守卫不静默覆盖：源文件缩小（sourceShrunk）、被外部修改（source-modified-externally）、' +
+      '文件尾 uuid 与写回水印失配（tail-mismatch）、并发写者（write-version-mismatch）一律跳过并上报；' +
+      'force:true 跳过三闸并以当前文件重锚定（水印 + 链尾）。' +
+      '只写由 turn/end 闭合的完整轮（半开进行中轮次不写，报 incompleteFinalTurn）；' +
+      'dryRun 只计算不写盘。返回 status: synced | no-new-turns | skipped 与写回水印。',
+    parameters: {
+      sessionId: {
+        type: 'string',
+        required: true,
+        description: '要写回的 DSH 会话 id（必须是由本插件导入的会话，带 session/imported 标记）。',
+      },
+      target: {
+        type: 'string',
+        description: "可选：写回目标 'source'（默认，导入源文件）| 'copy'（export_claude 导出的副本，需先导出）。",
+      },
+      force: {
+        type: 'boolean',
+        description: '可选：true 时跳过三闸守卫并以当前文件重锚定（水印 + 链尾），可能覆盖外部修改；默认 false。',
+      },
+      dryRun: {
+        type: 'boolean',
+        description: '可选：true 时完整计算（含格式预检）但不写盘、不更新 registry。',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          mode: { type: 'string', enum: ['single'], required: true },
+          status: { type: 'string', required: true, enum: ['synced', 'no-new-turns', 'skipped'] },
+          sessionId: { type: 'string', required: true },
+          sourcePath: { type: 'string', required: true },
+          target: { type: 'string', required: true, enum: ['source', 'copy'] },
+          filePath: { type: 'string', required: true },
+          appendedTurns: { type: 'integer' },
+          appendedEvents: { type: 'integer' },
+          appendedRecords: { type: 'integer' },
+          conflictDetected: { type: 'string', enum: ['source-modified-externally', 'tail-mismatch', 'write-version-mismatch'] },
+          sourceShrunk: { type: 'boolean' },
+          storedShrunk: { type: 'boolean' },
+          incompleteFinalTurn: { type: 'boolean' },
+          precheckFailed: { type: 'boolean' },
+          rollbackError: { type: 'string' },
+          reason: { type: 'string' },
+          precheck: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              ok: { type: 'boolean', required: true },
+              recordCount: { type: 'integer' },
+              lastUuid: { type: 'string' },
+              errors: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    line: { type: 'integer', required: true },
+                    error: { type: 'string', required: true },
+                  },
+                },
+              },
+            },
+          },
+          dryRun: { type: 'boolean', required: true },
+          writeback: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              sessionUuid: { type: 'string', required: true },
+              filePath: { type: 'string', required: true },
+              lastWrittenSeq: { type: 'integer', required: true },
+              lastWrittenTurn: { type: 'integer' },
+              prevUuid: { type: 'string' },
+              lastSize: { type: 'integer', required: true },
+              lastVersion: { type: 'string', required: true },
+              writtenAt: { type: 'integer', required: true },
+            },
+          },
+        },
+      },
+      render: (args, value) => {
+        const where = value.target === 'copy' ? '导出副本' : '源文件'
+        if (value.status === 'skipped') {
+          let why
+          if (value.sourceShrunk) why = '源文件缩小（sourceShrunk），跳过写回'
+          else if (value.conflictDetected === 'source-modified-externally') why = '源文件被外部修改（size/version 变化），跳过写回'
+          else if (value.conflictDetected === 'tail-mismatch') why = '文件尾 uuid 与写回水印失配（tail-mismatch），跳过写回'
+          else if (value.conflictDetected === 'write-version-mismatch') why = '并发写者已改动文件（write-version-mismatch），跳过写回'
+          else if (value.storedShrunk) why = 'DSH 会话日志比写回水印短（storedShrunk），跳过写回'
+          else if (value.precheckFailed) why = '写回预检失败（格式校验不通过），已回滚'
+          else why = value.reason || '跳过写回'
+          return [{ type: 'text', text: '会话 ' + value.sessionId + ' ' + why + '（' + where + '）。' }]
+        }
+        if (value.status === 'no-new-turns') {
+          return [{ type: 'text', text: '会话 ' + value.sessionId + ' 无新增完整轮次'
+            + (value.incompleteFinalTurn ? '（存在进行中的半开轮次，闭合后再同步）' : '')
+            + '（' + where + '）。' }]
+        }
+        return [{ type: 'text', text: (value.dryRun ? '写回预览（dryRun，未写盘）：' : '已写回：')
+          + '会话 ' + value.sessionId + ' → ' + value.filePath
+          + '（' + value.appendedTurns + ' 轮、' + value.appendedEvents + ' 条事件、' + value.appendedRecords + ' 条记录'
+          + (value.conflictDetected || value.sourceShrunk ? '，force 覆盖守卫：' + (value.conflictDetected || 'sourceShrunk') : '')
+          + '）。' }]
+      },
+    },
+    async execute(args) {
+      return syncClaudeSession(ctx, args, { registryDir })
     },
   }))
 }
