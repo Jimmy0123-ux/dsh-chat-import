@@ -33,6 +33,18 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   **pagination** (50 per page, `offset`/`limit` + `total` from
   `/api-import/sessions`), with selections kept across pages for bulk imports.
 
+### Fixed
+
+- **`webServer` demoted from hard `inject` to an optional service** — REQ-41 had
+  added `webServer` to the plugin's `inject` list, which made the whole plugin
+  (all 12 import tools included) fail to activate in any dsh profile without a
+  web server (headless CLI sessions, the CI headless smoke job). The
+  `/api-import/*` panel routes are now registered via `ctx.get('webServer')`
+  only when the service exists; without it the plugin applies normally and the
+  import tools stay available. Also regenerated `package-lock.json` so the
+  REQ-41 peer dependencies (`@deepseek-ai/dsh-client-locale`, `react`) are
+  recorded and `npm ci` stops failing with EUSAGE.
+
 ## [0.3.0] - 2026-08-14
 
 Third minor release — shipped 2026-08-14 with four new import sources (Grok

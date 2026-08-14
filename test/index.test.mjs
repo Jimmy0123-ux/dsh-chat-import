@@ -194,15 +194,20 @@ function makeCtx(tree, opts = {}) {
     async create(p) { const ws = { path: p, attachSession: async (id) => attached.push({ ws: p, id }) }; workspaces.set(p, ws); return ws },
   }
 
+  // webServer 是可选服务（REQ-41 路由经 ctx.get 注册）：opts.noWebServer 模拟
+  // headless / 无 Web 的 profile（get 返回 undefined，插件不注册路由但照常 apply）。
+  const webServerStub = {
+    register(def) { webRoutes.push(def); return () => {} },
+  }
+
   const ctx = {
     fs,
     sessionPersistence: persistence,
-    webServer: {
-      register(def) { webRoutes.push(def); return () => {} },
-    },
+    webServer: webServerStub,
     get(service) {
       if (service === 'workspaceRegistry') return workspaceRegistry
       if (service === 'sessionPersistence') return persistence
+      if (service === 'webServer') return opts.noWebServer ? undefined : webServerStub
       if (services[service] !== undefined) return services[service]
       return undefined
     },
@@ -2885,6 +2890,14 @@ test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-im
   assert.equal(typeof sessions.handler, 'function')
   assert.equal(typeof imp.handler, 'function')
   // 只加路由，不加工具：12 导入 + scan/export/sync/list/retract = 17，注册数不变
+  assert.equal(registered.length, 17)
+})
+
+test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、17 工具照常注册、无路由', () => {
+  const { ctx, webRoutes, registered } = makeCtx({}, { noWebServer: true })
+  apply(ctx)
+  // 缺 webServer 只是不注册面板路由，导入工具不受影响（CI headless 冒烟场景）
+  assert.equal(webRoutes.length, 0)
   assert.equal(registered.length, 17)
 })
 

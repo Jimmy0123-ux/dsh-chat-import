@@ -34,7 +34,10 @@ import { readZcodeDb, readZcodeTranscript, zcodeDefaultDbPath, importZcodeFile, 
 import { discoverSessions, FORMATS } from './lib/discovery.mjs'
 
 const name = 'import-claude'
-const inject = ['sessionPersistence', 'fs', 'tools', 'webServer']
+// webServer 不进 inject：它是可选 host 服务（headless / 无 Web 的 profile 不挂载），
+// 硬依赖会让整个插件在 headless 下无法激活（REQ-41 曾把它加进 inject，破坏了
+// CI headless 冒烟与 CLI 会话的导入工具）。面板路由在 apply 内经 ctx.get 可选注册。
+const inject = ['sessionPersistence', 'fs', 'tools']
 
 // ── REQ-37 上下文预算解析（纯 host 面）──────────────────────────────────
 // 导入会话无 provider 配置时不会被 dsh 自动压缩（routedTarget 解析失败），超长
@@ -2356,6 +2359,10 @@ function apply(ctx) {
       return runScanDiscover(ctx, args, registryDir)
     },
   }))
+  // REQ-41 面板路由：webServer 是可选 host 服务，存在才注册 /api-import/* 路由；
+  // 缺失（headless / CI 冒烟）时 12 个导入工具照常可用，apply 不因缺服务失败。
+  const webServer = ctx.get('webServer')
+  if (!webServer) return
   // REQ-41 被动发现路由：POST /api-import/sessions（Browser 面板数据源，不新增工具）。
   // body: { source?, query?, path?, offset?, limit? }——source 是客户端来源 id
   // （SOURCE_FORMAT 映射到 discovery format；省略/空串 = 扫全部格式，面板「全部来源」
@@ -2363,7 +2370,7 @@ function apply(ctx) {
   // 钉扫描根，缺省扫该格式默认数据根）；offset/limit 提供时分页（limit 缺省不分页，
   // 返回全部，limit 字段 = 实际长度）。返回 discoverSessions 结果（{ok, sessions,
   // total, offset, limit}，total 为过滤后总数，供面板分页），错误返回 {ok:false,
-  // error}。webServer 在 inject 里（硬依赖），apply 时必可用。
+  // error}。webServer 由上方可选守卫保证非空（web 环境）。
   ctx.webServer.register({
     kind: 'exact',
     path: '/api-import/sessions',
