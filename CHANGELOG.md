@@ -11,6 +11,8 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-14
+
 ### Added
 
 - **Browser-side session discovery & import panel (REQ-41)** — the dsh web
