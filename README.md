@@ -96,9 +96,11 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 
 Messages carry stable ids and `surfaceOp: 'append'`; `tool/result` events link back to their `tool/call` via `sourceEventSeqs`. Assistant `source` is `{ kind: 'model', provider: 'claude-code', model: <source model> }`; `tool/result` source is `{ kind: 'tool', callId }`. The `SessionHeader` keeps `version: 0`, `id: import-<source sessionId>`, source `createdAt` and `cwd`.
 
+**Call/result pairing invariant:** every `tool/call` is paired with a `tool/result` (`sourceEventSeqs` points back to its call). When the transcript never recorded a result for a call (interrupted sessions, Cursor transcripts that contain no results), the importer synthesizes an empty `tool/result` (`content: []`) so the session still resumes — model APIs reject history in which an assistant `tool_calls` block has no matching tool message. The empty content is not fabricated text; wire adapters normalize it to `"(no output)"`.
+
 ### Claude Code JSONL
 
-Main transcript at `~/.claude/projects/<slug>/<sessionId>.jsonl`; auxiliary subagent / workflow fragments under `<sessionId>/subagents/**` reuse the parent `sessionId` and are skipped (they can never shadow or merge into the main conversation).
+Main transcript at `~/.claude/projects/<slug>/<sessionId>.jsonl`; auxiliary subagent / workflow fragments under `<sessionId>/subagents/**` reuse the parent `sessionId` and are skipped (they can never shadow or merge into the main conversation). A `tool_use` whose result never arrived (session interrupted) gets a synthesized empty `tool/result`, keeping call/result pairing so the session resumes.
 
 | Claude Code JSONL | DSH SessionEvent |
 | --- | --- |
@@ -111,7 +113,7 @@ Main transcript at `~/.claude/projects/<slug>/<sessionId>.jsonl`; auxiliary suba
 
 ### Codex / ChatGPT CLI rollout
 
-Line envelope: `{ timestamp, type, payload }`. `event_msg` user/agent messages duplicate `response_item` records and are ignored; user blocks starting with `<` (`<environment_context>`, `<user_instructions>`, …) are harness injections and never enter the prompt. Codex `reasoning` content is encrypted and skipped.
+Line envelope: `{ timestamp, type, payload }`. `event_msg` user/agent messages duplicate `response_item` records and are ignored; user blocks starting with `<` (`<environment_context>`, `<user_instructions>`, …) are harness injections and never enter the prompt. Codex `reasoning` content is encrypted and skipped. A `function_call` / `custom_tool_call` without a matching `*_output` record (session cut off) gets a synthesized empty `tool/result`.
 
 | Codex rollout | DSH SessionEvent |
 | --- | --- |
@@ -132,25 +134,25 @@ Top level is a JSON array (one file, all conversations); each conversation has a
 | conversation object (`id` / `title` / `create_time`) | `SessionHeader` + `session/title` |
 | `mapping` node with `author.role: "user"` | `turn/start` + `step/start` + `user/message` |
 | node with `author.role: "assistant"` | `assistant/message` |
-| node with `author.role: "tool"` | `tool/result` (attached to the latest step) |
+| node with `author.role: "tool"` | text block appended to the latest step's assistant message (degraded — exports carry no structured tool calls) |
 | `author.role: "system"` / `message: null` | skipped |
 | turn ends | `step/end` + `turn/end` |
 
 ### Cursor agent transcript
 
-Line structure: `{ role: "user" | "assistant", message: { content: [...] } }`. First user message is wrapped in `<user_query>` (stripped); `[REDACTED]` sentinels are filtered. Transcripts contain **no `tool_result`** (results live only in the UI bubble store) and no timestamps / model — the session id comes from the file name, and there is no `cwd`.
+Line structure: `{ role: "user" | "assistant", message: { content: [...] } }`. First user message is wrapped in `<user_query>` (stripped); `[REDACTED]` sentinels are filtered. Transcripts contain **no `tool_result`** (results live only in the UI bubble store) and no timestamps / model — the session id comes from the file name, and there is no `cwd`. Because no results exist, every tool call is paired with a synthesized empty `tool/result` so imported sessions still resume.
 
 | Cursor transcript | DSH SessionEvent |
 | --- | --- |
 | `role: "user"` (text in `<user_query>`) | `turn/start` + `step/start` + `user/message` |
 | `role: "assistant"` text blocks | `assistant/message` |
-| `role: "assistant"` `tool_use` blocks | `tool/call` (no result in transcript) |
+| `role: "assistant"` `tool_use` blocks | `tool/call` + synthesized empty `tool/result` (transcript has no results) |
 | `[REDACTED]` sentinels | filtered |
 | turn ends | `step/end` + `turn/end` |
 
 ### Gemini CLI session JSON
 
-One JSON object per file at `~/.gemini/history/<slot>/chats/session-*.json`. Message types: `user` (parts array) opens a turn; `gemini` (string content, optional `thoughts` and `toolCalls`) is one assistant step; `info` (CLI notices) is skipped. Tool results are **inline** on the same object as the call.
+One JSON object per file at `~/.gemini/history/<slot>/chats/session-*.json`. Message types: `user` (parts array) opens a turn; `gemini` (string content, optional `thoughts` and `toolCalls`) is one assistant step; `info` (CLI notices) is skipped. Tool results are **inline** on the same object as the call; a call without a result gets a synthesized empty `tool/result`.
 
 | Gemini session JSON | DSH SessionEvent |
 | --- | --- |
@@ -164,7 +166,7 @@ One JSON object per file at `~/.gemini/history/<slot>/chats/session-*.json`. Mes
 
 ### Reasonix session JSONL
 
-OpenAI-style messages without envelope at `~/.reasonix/sessions/<stem>.jsonl`; both v1 (nested `{ id, type: "function", function: { name, arguments } }`) and v2 (flat `{ id, name, arguments }`) `tool_calls` are accepted. Tool results (`role: "tool"` with `tool_call_id`) pair by `tool_calls[].id`. A sibling `<stem>.meta.json` provides `workspace` → `cwd` and `summary` → pinned title; when neither the transcript nor the meta carries a timestamp, the creation time falls back to the one embedded in the file name. V2 WAL sidecars (`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`) are excluded from directory scans.
+OpenAI-style messages without envelope at `~/.reasonix/sessions/<stem>.jsonl`; both v1 (nested `{ id, type: "function", function: { name, arguments } }`) and v2 (flat `{ id, name, arguments }`) `tool_calls` are accepted. Tool results (`role: "tool"` with `tool_call_id`) pair by `tool_calls[].id`; a `tool_calls` block without a following `role: "tool"` message gets a synthesized empty `tool/result`. A sibling `<stem>.meta.json` provides `workspace` → `cwd` and `summary` → pinned title; when neither the transcript nor the meta carries a timestamp, the creation time falls back to the one embedded in the file name. V2 WAL sidecars (`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`) are excluded from directory scans.
 
 | Reasonix JSONL | DSH SessionEvent |
 | --- | --- |
@@ -218,7 +220,8 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 - Source transcripts are read-only, never rewritten; DSH history events are append-only (deep-frozen) — new events are added, existing ones are never modified.
 - The plugin never modifies the DSH engine, apiproxy, or official UI packages; it publishes no services, so no isolate realm is needed.
 - Reading transcripts outside the workspace requires the session sandbox to allow access to that path.
-- Known boundaries: `permission` / `summary` auxiliary records are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts are skipped (only the main `<sessionId>.jsonl` becomes a session); Codex `reasoning` is encrypted and skipped; ChatGPT exports rebuild only the main thread (branch = last child) and tool messages attach to the nearest step as text; Cursor transcripts have no `tool_result` and `[REDACTED]` text is filtered; Gemini follows the format observed 2026-04 (no stable official schema); Reasonix reads the JSONL checkpoint (the V2 WAL is excluded); opencode `patch` parts carry no diff (placeholder `[patch: <N> files]` only) and tool output may keep ANSI escapes verbatim.
+- Known boundaries: `permission` / `summary` auxiliary records are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts are skipped (only the main `<sessionId>.jsonl` becomes a session); Codex `reasoning` is encrypted and skipped; ChatGPT exports rebuild only the main thread (branch = last child) and tool messages degrade to text blocks on the nearest step (exports carry no structured tool calls, so no orphan `tool/result` is produced); Cursor transcripts have no `tool_result` (every call gets a synthesized empty `tool/result`) and `[REDACTED]` text is filtered; Gemini follows the format observed 2026-04 (no stable official schema); Reasonix reads the JSONL checkpoint (the V2 WAL is excluded); opencode `patch` parts carry no diff (placeholder `[patch: <N> files]` only) and tool output may keep ANSI escapes verbatim.
+- **Re-import after this fix:** already-imported sessions are immutable logs — the plugin never rewrites existing history, so sessions imported by an older version that lack the call/result pairing cannot be repaired in place. Delete the stale session and re-import to pick up the pairing invariant.
 
 ## 🧪 Tests
 

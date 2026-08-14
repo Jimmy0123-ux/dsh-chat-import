@@ -60,6 +60,15 @@ function synthesizeSession({ meta, turns, title, provider, model, skipped, recor
   // step 到达；按 step 重建索引会让跨 step 的结果丢失 sourceEventSeqs 关联
   const callSeqByCallId = {}
 
+  // 会话级「有真实结果」callId 集合：跨 step 的结果也算覆盖（异步工具），兜底只补
+  // 全程无结果的调用，避免给后续会到达真实结果的调用补出重复空结果
+  const coveredCallIds = new Set()
+  for (const t of turns) {
+    for (const s of t.steps) {
+      for (const tr of s.toolResults) coveredCallIds.add(tr.toolCallId)
+    }
+  }
+
   for (const t of turns) {
     turn += 1
     push('turn/start', { turn })
@@ -120,6 +129,29 @@ function synthesizeSession({ meta, turns, title, provider, model, skipped, recor
                 ...(tr.isError ? { isError: true } : {}),
               }],
               source: { kind: 'tool', callId: tr.toolCallId },
+            },
+          }, true, callSeq !== undefined ? [callSeq] : undefined)
+        }
+        // 兜底配对不变量：每个 tool/call 必须有对应 tool/result，否则 resume 时模型
+        // API 拒绝（assistant 带 tool_calls 但缺 tool 消息）。转录未记录结果的调用
+        // （Cursor 无 tool_result、Claude/Codex/Reasonix/Gemini 中断）补发空 result；
+        // content 用空数组：不虚构文本，wire 适配器会把空内容归一为 "(no output)"
+        // （dsh-llm-deepseek / dsh-llm-pi-ai 的 serialize 均 `|| "(no output)"`）。
+        for (const tc of step.toolCalls) {
+          if (coveredCallIds.has(tc.id)) continue
+          const callSeq = callSeqByCallId[tc.id]
+          push('tool/result', {
+            turn,
+            step: stepNum,
+            message: {
+              id: 'import:' + meta.id + ':t' + turn + ':' + stepNum + ':' + tc.id,
+              role: 'user',
+              content: [{
+                type: 'tool-result',
+                toolCallId: tc.id,
+                content: [],
+              }],
+              source: { kind: 'tool', callId: tc.id },
             },
           }, true, callSeq !== undefined ? [callSeq] : undefined)
         }
@@ -442,13 +474,12 @@ function convertChatgptConversation(conv, args) {
       cur.steps.push(step)
       lastStep = step
     } else if (role === 'tool' && cur && lastStep) {
-      // 工具结果：挂最近一步；ChatGPT 无结构化 callId，用消息 id 关联
+      // 工具消息降级为最近一步的文本块：ChatGPT 网页导出无结构化 tool-call
+      // （assistant 节点从不产生 tool-call block），挂 tool/result 只会产生
+      // 没有对应 tool/call 的孤儿结果，resume 时被模型 API 拒绝。与 README
+      // 契约一致：工具消息按文本挂最近一步。
       const text = chatgptMessageText(msg)
-      lastStep.toolResults.push({
-        toolCallId: String(msg.id ?? 'chatgpt-' + turns.length),
-        content: [{ type: 'text', text: text || '' }],
-        isError: false,
-      })
+      if (text) lastStep.content.push({ type: 'text', text })
     }
     // system 与占位节点跳过
   }

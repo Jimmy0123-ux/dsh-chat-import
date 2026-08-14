@@ -9,6 +9,20 @@ import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCurso
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
 
+// 配对不变量：每个 tool/call 都有对应 tool/result，且 result 的 sourceEventSeqs
+// 指向其 tool/call 的 seq（synthesizeSession 兜底保证，见 convert.mjs）。
+function assertToolPairing(events) {
+  const calls = events.filter((e) => e.type === 'tool/call')
+  const results = events.filter((e) => e.type === 'tool/result')
+  assert.equal(results.length, calls.length, `tool/call(${calls.length}) 与 tool/result(${results.length}) 数量一致`)
+  const resultByCall = new Map(results.map((r) => [r.data.message.content[0].toolCallId, r]))
+  for (const c of calls) {
+    const r = resultByCall.get(c.data.callId)
+    assert.ok(r, `tool/result 存在 for call ${c.data.callId}`)
+    assert.deepEqual(r.sourceEventSeqs, [c.seq], `call ${c.data.callId} 的 result 指向其 seq`)
+  }
+}
+
 test('convertClaudeJsonl: 简单问答合成平衡回合', () => {
   const out = convertClaudeJsonl(load('sess-simple-001.jsonl'))
   assert.equal(out.turns.length, 1)
@@ -160,6 +174,26 @@ test('convertClaudeJsonl: 跨 step 的 tool/result 仍用 sourceEventSeqs 关联
   assert.equal(result.surfaceOp, 'append')
 })
 
+test('convertClaudeJsonl: 中断的 tool_use（无 tool_result）补发空 tool/result', () => {
+  // 会话在工具结果返回前中断：assistant 带 tool_use 但没有后续 tool_result。
+  // 不补 result 的话 resume 时模型 API 拒绝（tool_calls 无对应 tool 消息）。
+  const raw = [
+    '{"sessionId":"sess-cut-001","type":"user","message":{"role":"user","content":"跑一下测试"}}',
+    '{"sessionId":"sess-cut-001","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_02","name":"Bash","input":{"command":"npm test"}}]}}',
+  ].join('\n')
+  const out = convertClaudeJsonl(raw, { fileStem: 'sess-cut-001' })
+  assert.equal(out.toolCalls, 1)
+  const result = out.events.find((e) => e.type === 'tool/result')
+  assert.ok(result)
+  // 补发结果：空 content、sourceEventSeqs 指向其 call、同 step
+  assert.deepEqual(result.data.message.content[0].content, [])
+  assert.equal(result.data.message.content[0].toolCallId, 'toolu_02')
+  assert.equal(result.surfaceOp, 'append')
+  assertToolPairing(out.events)
+  // 平衡：turn/end 收尾
+  assert.equal(out.events.at(-1).type, 'turn/end')
+})
+
 test('mintSessionId: 清理非法字符并截断', () => {
   assert.equal(mintSessionId('abc_123-def'), 'import-abc_123-def')
   // 全非法字符时回退为时间戳（仍是合法 id）
@@ -248,6 +282,25 @@ test('convertCodexJsonl: 注入块被过滤、reasoning 加密被跳过、custom
   assert.deepEqual(result.sourceEventSeqs, [call.seq])
 })
 
+test('convertCodexJsonl: function_call 无 function_call_output 补发空 tool/result', () => {
+  // 工具调用后会话结束/输出缺失：call_id 无对应 output → 合成空 result 保证配对
+  const raw = [
+    '{"timestamp":"2026-05-18T13:21:30.751Z","type":"session_meta","payload":{"id":"019e3b3f-636d-7cb3-aaab-0255eb45ad4f","timestamp":"2026-05-18T13:21:10.510Z","cwd":"D:\\\\demo\\\\codex-proj","originator":"codex-tui"}}',
+    '{"timestamp":"2026-05-18T13:21:30.754Z","type":"turn_context","payload":{"turn_id":"t1","model":"gpt-5.5"}}',
+    '{"timestamp":"2026-05-18T13:21:30.754Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"查一下"}]}}',
+    '{"timestamp":"2026-05-18T13:21:31.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"好"}]}}',
+    '{"timestamp":"2026-05-18T13:21:31.500Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\\"cmd\\":\\"ls\\"}","call_id":"call_orphan_001"}}',
+  ].join('\n')
+  const out = convertCodexJsonl(raw, { sessionId: 'codex-cut' })
+  assert.equal(out.toolCalls, 1)
+  const result = out.events.find((e) => e.type === 'tool/result')
+  assert.ok(result)
+  assert.deepEqual(result.data.message.content[0].content, [])
+  assert.equal(result.data.message.content[0].toolCallId, 'call_orphan_001')
+  assertToolPairing(out.events)
+  assert.equal(out.events.at(-1).type, 'turn/end')
+})
+
 test('convertCodexJsonl: event_msg 重复消息不重复计数、多轮正确切分', () => {
   const out = convertCodexJsonl(load('codex-multi-turn.jsonl'))
   assert.equal(out.turns.length, 2)
@@ -324,6 +377,49 @@ test('convertChatgptJson: 无 cwd（ChatGPT 是聊天，不归组工作区）', 
   assert.equal(c1.meta.cwd, undefined)
 })
 
+test('convertChatgptJson: tool 节点降级为文本块，不再产生孤儿 tool/result', () => {
+  // ChatGPT 导出无结构化 tool-call（assistant 从不带 tool_calls 数组）；tool 节点
+  // 挂 tool/result 只会产生没有对应 tool/call 的孤儿结果，resume 被模型端拒绝。
+  // 按契约降级为最近一步的文本块。
+  const raw = JSON.stringify([{
+    id: 'conv-tool-001',
+    title: 'Tool chat',
+    create_time: 1710009000,
+    mapping: {
+      'n1': {
+        id: 'n1',
+        message: { id: 'm1', author: { role: 'user' }, content: { content_type: 'text', parts: ['跑一下测试'] }, create_time: 1710009000 },
+        parent: null,
+        children: ['n2'],
+      },
+      'n2': {
+        id: 'n2',
+        message: { id: 'm2', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['好的，执行 npm test。'] }, create_time: 1710009050 },
+        parent: 'n1',
+        children: ['n3'],
+      },
+      'n3': {
+        id: 'n3',
+        message: { id: 'm3', author: { role: 'tool' }, content: { content_type: 'code', parts: ['all tests passed'] }, create_time: 1710009060 },
+        parent: 'n2',
+        children: [],
+      },
+    },
+  }])
+  const out = convertChatgptJson(raw)
+  assert.equal(out.conversations.length, 1)
+  const c = out.conversations[0]
+  // 不再产生 tool/result / tool/call 事件
+  assert.equal(c.events.filter((e) => e.type === 'tool/result').length, 0)
+  assert.equal(c.toolCalls, 0)
+  // 工具文本挂到最近一步的 assistant 消息内容里
+  const asst = c.events.find((e) => e.type === 'assistant/message').data.message
+  assert.ok(asst.content.some((b) => b.type === 'text' && b.text === 'all tests passed'))
+  // 平衡：最后（非 title）事件是 turn/end
+  const types = c.events.map((e) => e.type)
+  assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
+})
+
 // ---- Cursor agent transcript ----
 
 test('convertCursorJsonl: 简单问答、user_query 剥离、平衡回合', () => {
@@ -343,15 +439,20 @@ test('convertCursorJsonl: 简单问答、user_query 剥离、平衡回合', () =
   assert.deepEqual(asst.source, { kind: 'model', provider: 'cursor', model: 'cursor' })
 })
 
-test('convertCursorJsonl: tool_use → tool/call（无 tool_result），input 对象序列化', () => {
+test('convertCursorJsonl: tool_use → tool/call + 合成空 tool/result，input 对象序列化', () => {
   const out = convertCursorJsonl(load('cursor-tool.jsonl'))
   assert.equal(out.toolCalls, 2)
   const calls = out.events.filter((e) => e.type === 'tool/call')
+  assert.equal(calls.length, 2)
   assert.equal(calls[0].data.name, 'Glob')
   assert.equal(calls[0].data.arguments, '{"target_directory":".","glob_pattern":"**/*.rs"}')
   assert.equal(calls[1].data.name, 'Read')
-  // transcript 不含 tool_result：没有 tool/result 事件
-  assert.equal(out.events.filter((e) => e.type === 'tool/result').length, 0)
+  // transcript 不含 tool_result → synthesizeSession 为每个 call 补发空 tool/result
+  // （空 content，不虚构文本），保证 resume 时 call/result 配对
+  const results = out.events.filter((e) => e.type === 'tool/result')
+  assert.equal(results.length, 2)
+  assert.deepEqual(results[0].data.message.content[0].content, [])
+  assertToolPairing(out.events)
   // 平衡：最后（非 title）事件是 turn/end
   const types = out.events.map((e) => e.type)
   assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
@@ -416,6 +517,33 @@ test('convertGeminiJson: 内联 toolCalls → tool/call + tool/result（含错�
   assert.equal(results[1].data.message.content[0].content[0].text, 'Compilation error: missing semicolon')
   // info 消息跳过：没有多余回合
   assert.equal(out.turns.length, 1)
+})
+
+test('convertGeminiJson: toolCalls 无 result 补发空 tool/result', () => {
+  // 调用没有内联 result（geminiToolResultText 返回 null）→ 合成空 result 保证配对
+  const raw = JSON.stringify({
+    sessionId: 'gemini-cut-001',
+    startTime: '2026-04-17T18:09:18.567Z',
+    directories: ['D:\\demo\\gemini-proj'],
+    messages: [
+      { id: 'u1', type: 'user', content: [{ text: '跑一下' }] },
+      {
+        id: 'g1', type: 'gemini', content: '好',
+        model: 'gemini-3-flash-preview',
+        toolCalls: [
+          { id: 'tc_01', name: 'run_shell_command', args: { command: 'npm test' }, status: 'success', result: [] },
+        ],
+      },
+    ],
+  })
+  const out = convertGeminiJson(raw)
+  assert.equal(out.toolCalls, 1)
+  const result = out.events.find((e) => e.type === 'tool/result')
+  assert.ok(result)
+  assert.deepEqual(result.data.message.content[0].content, [])
+  assert.equal(result.data.message.content[0].toolCallId, 'tc_01')
+  assertToolPairing(out.events)
+  assert.equal(out.events.at(-1).type, 'turn/end')
 })
 
 test('convertGeminiJson: 多轮切分、kind 缺失兼容', () => {
@@ -483,6 +611,22 @@ test('convertReasonixJsonl: 多轮切分、畸形行计数', () => {
   assert.equal(starts.length, 2)
   // 无 reasonixId 时退化为时间戳 id（仍合法）
   assert.match(out.meta.id, /^import-\d+$/)
+})
+
+test('convertReasonixJsonl: tool_calls 无 tool 消息补发空 tool/result', () => {
+  // assistant 声明 tool_calls 但没有后续 role=tool 消息（会话中断）→ 合成空 result
+  const raw = [
+    '{"role":"user","content":"查一下"}',
+    '{"role":"assistant","content":"好","tool_calls":[{"id":"call_rx_01","type":"function","function":{"name":"search_files","arguments":"{\\"q\\":\\"x\\"}"}}]}',
+  ].join('\n')
+  const out = convertReasonixJsonl(raw, { reasonixId: 'desktop-202606020799-9' })
+  assert.equal(out.toolCalls, 1)
+  const result = out.events.find((e) => e.type === 'tool/result')
+  assert.ok(result)
+  assert.deepEqual(result.data.message.content[0].content, [])
+  assert.equal(result.data.message.content[0].toolCallId, 'call_rx_01')
+  assertToolPairing(out.events)
+  assert.equal(out.events.at(-1).type, 'turn/end')
 })
 
 test('convertReasonixJsonl: 转录无 createdAt 时回退文件名内嵌时间戳', () => {
@@ -577,6 +721,8 @@ test('convertOpencodeJson: file/patch/subtask → text 块，结构块跳过，�
   assert.deepEqual(result.sourceEventSeqs, [call.seq])
   assert.equal(result.data.message.content[0].content[0].text, '')
   assert.equal(result.data.message.content[0].isError, undefined)
+  // 空 output 已有 result → 兜底不重复补：call/result 严格 1:1
+  assertToolPairing(out.events)
   // 消息无模型 → 回退会话级 model（对象解析 id）
   assert.deepEqual(asst.source, { kind: 'model', provider: 'opencode', model: 'deepseek-v4-flash' })
 })

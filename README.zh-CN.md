@@ -96,9 +96,11 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 
 消息体带稳定 id 与 `surfaceOp: 'append'`；`tool/result` 通过 `sourceEventSeqs` 关联回对应的 `tool/call`。assistant 的 `source` 为 `{ kind: 'model', provider: 'claude-code', model: <源模型> }`；`tool/result` 的 source 为 `{ kind: 'tool', callId }`。`SessionHeader` 保留 `version: 0`、`id: import-<源sessionId>`、源 `createdAt` 与 `cwd`。
 
+**call/result 配对不变量：** 每个 `tool/call` 必有对应 `tool/result`（`sourceEventSeqs` 指回其 call）。当 transcript 对某个调用从未记录结果（会话中断、Cursor transcript 本身无结果）时，导入器补发一个空 `tool/result`（`content: []`），保证会话仍可续聊——模型 API 会拒绝「assistant 带 `tool_calls` 但缺对应 tool 消息」的历史。空内容不是虚构文本；wire 适配器会把空内容归一为 `"(no output)"`。
+
 ### Claude Code JSONL
 
-主 transcript 在 `~/.claude/projects/<slug>/<sessionId>.jsonl`；`<sessionId>/subagents/**` 下的辅助 subagent / workflow 片段复用父 `sessionId`，会被跳过（绝不会顶替或并入主会话）。
+主 transcript 在 `~/.claude/projects/<slug>/<sessionId>.jsonl`；`<sessionId>/subagents/**` 下的辅助 subagent / workflow 片段复用父 `sessionId`，会被跳过（绝不会顶替或并入主会话）。`tool_use` 的结果未返回（会话中断）时补发空 `tool/result`，保持 call/result 配对以便续聊。
 
 | Claude Code JSONL | DSH SessionEvent |
 | --- | --- |
@@ -111,7 +113,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 
 ### Codex / ChatGPT CLI rollout
 
-行 envelope：`{ timestamp, type, payload }`。`event_msg` 的 user/agent 消息是 `response_item` 的重复、被忽略；以 `<` 开头的用户消息块（`<environment_context>`、`<user_instructions>` 等）是 harness 注入，不进入 prompt。Codex `reasoning` 内容加密，跳过。
+行 envelope：`{ timestamp, type, payload }`。`event_msg` 的 user/agent 消息是 `response_item` 的重复、被忽略；以 `<` 开头的用户消息块（`<environment_context>`、`<user_instructions>` 等）是 harness 注入，不进入 prompt。Codex `reasoning` 内容加密，跳过。`function_call` / `custom_tool_call` 无对应 `*_output` 记录（会话中断）时补发空 `tool/result`。
 
 | Codex rollout | DSH SessionEvent |
 | --- | --- |
@@ -132,25 +134,25 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 | 会话对象（`id` / `title` / `create_time`） | `SessionHeader` + `session/title` |
 | `mapping` 中 `author.role: "user"` 节点 | `turn/start` + `step/start` + `user/message` |
 | `author.role: "assistant"` 节点 | `assistant/message` |
-| `author.role: "tool"` 节点 | `tool/result`（挂最近一步） |
+| `author.role: "tool"` 节点 | 降级为最近一步 assistant 消息的文本块（导出无结构化 tool call） |
 | `author.role: "system"` / `message: null` | 跳过 |
 | 轮次结束 | `step/end` + `turn/end` |
 
 ### Cursor agent transcript
 
-行结构：`{ role: "user" | "assistant", message: { content: [...] } }`。用户首条消息包在 `<user_query>` 里（剥离）；`[REDACTED]` 哨兵被过滤。transcript **不含 `tool_result`**（工具结果只在 UI 的 bubble store）、无时间戳 / model——会话 id 取文件名，无 `cwd`。
+行结构：`{ role: "user" | "assistant", message: { content: [...] } }`。用户首条消息包在 `<user_query>` 里（剥离）；`[REDACTED]` 哨兵被过滤。transcript **不含 `tool_result`**（工具结果只在 UI 的 bubble store）、无时间戳 / model——会话 id 取文件名，无 `cwd`。因无任何结果，每个工具调用都会补发空 `tool/result`，保证导入的会话仍可续聊。
 
 | Cursor transcript | DSH SessionEvent |
 | --- | --- |
 | `role: "user"`（`<user_query>` 包裹的 text） | `turn/start` + `step/start` + `user/message` |
 | `role: "assistant"` 的 text 块 | `assistant/message` |
-| `role: "assistant"` 的 `tool_use` 块 | `tool/call`（transcript 无结果） |
+| `role: "assistant"` 的 `tool_use` 块 | `tool/call` + 合成空 `tool/result`（transcript 无结果） |
 | `[REDACTED]` 哨兵 | 过滤 |
 | 轮次结束 | `step/end` + `turn/end` |
 
 ### Gemini CLI 会话 JSON
 
-`~/.gemini/history/<slot>/chats/session-*.json`，一文件一 JSON 对象。消息类型：`user`（parts 数组）开新轮；`gemini`（字符串 content，可带 `thoughts` 与 `toolCalls`）是一步 assistant；`info`（CLI 通知）跳过。工具结果**内联**在与调用同一对象上。
+`~/.gemini/history/<slot>/chats/session-*.json`，一文件一 JSON 对象。消息类型：`user`（parts 数组）开新轮；`gemini`（字符串 content，可带 `thoughts` 与 `toolCalls`）是一步 assistant；`info`（CLI 通知）跳过。工具结果**内联**在与调用同一对象上；无结果的调用补发空 `tool/result`。
 
 | Gemini 会话 JSON | DSH SessionEvent |
 | --- | --- |
@@ -164,7 +166,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 
 ### Reasonix 会话 JSONL
 
-`~/.reasonix/sessions/<stem>.jsonl`，无 envelope 的 OpenAI 风格消息；兼容 v1（嵌套 `{ id, type: "function", function: { name, arguments } }`）与 v2（扁平 `{ id, name, arguments }`）两种 `tool_calls`。工具结果（`role: "tool"` 带 `tool_call_id`）按 `tool_calls[].id` 配对。同目录 `<stem>.meta.json` 提供 `workspace` → `cwd` 与 `summary` → 钉住标题；转录与 meta 均无时间戳时，创建时间回退到文件名内嵌时刻。V2 WAL 伴生文件（`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`）在目录扫描时排除。
+`~/.reasonix/sessions/<stem>.jsonl`，无 envelope 的 OpenAI 风格消息；兼容 v1（嵌套 `{ id, type: "function", function: { name, arguments } }`）与 v2（扁平 `{ id, name, arguments }`）两种 `tool_calls`。工具结果（`role: "tool"` 带 `tool_call_id`）按 `tool_calls[].id` 配对；`tool_calls` 块之后没有 `role: "tool"` 消息时补发空 `tool/result`。同目录 `<stem>.meta.json` 提供 `workspace` → `cwd` 与 `summary` → 钉住标题；转录与 meta 均无时间戳时，创建时间回退到文件名内嵌时刻。V2 WAL 伴生文件（`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`）在目录扫描时排除。
 
 | Reasonix JSONL | DSH SessionEvent |
 | --- | --- |
@@ -218,7 +220,8 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 - 源 transcript 只读、绝不原地改写；DSH 历史事件 append-only（deep-frozen）——只新增、绝不修改既有事件。
 - 插件不修改 DSH 引擎、apiproxy 或官方 UI 包；不发布任何服务，无需 isolate realm。
 - 读取工作区之外的 transcript 需要会话沙箱允许访问该路径。
-- 已知边界：不导入 `permission` / `summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃 `message.content` 之外的附加字段；Claude subagent / workflow 片段 transcript 跳过（只有主 `<sessionId>.jsonl` 成为会话）；Codex `reasoning` 加密跳过；ChatGPT 导出只重建主线程（分支取最后 child）、工具消息按文本挂最近一步；Cursor transcript 无 `tool_result`、`[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方无稳定 schema）；Reasonix 读取 JSONL checkpoint（V2 WAL 排除）；opencode `patch` part 无 diff（只发 `[patch: <N> files]` 占位）、工具输出可能原样保留 ANSI 转义。
+- 已知边界：不导入 `permission` / `summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃 `message.content` 之外的附加字段；Claude subagent / workflow 片段 transcript 跳过（只有主 `<sessionId>.jsonl` 成为会话）；Codex `reasoning` 加密跳过；ChatGPT 导出只重建主线程（分支取最后 child）、工具消息降级为最近一步的文本块（导出无结构化 tool call，不再产生孤儿 `tool/result`）；Cursor transcript 无 `tool_result`（每个调用补发合成空 `tool/result`）、`[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方无稳定 schema）；Reasonix 读取 JSONL checkpoint（V2 WAL 排除）；opencode `patch` part 无 diff（只发 `[patch: <N> files]` 占位）、工具输出可能原样保留 ANSI 转义。
+- **本次修复后需重新导入：** 已导入的会话是不可变日志——插件绝不改写既有历史，因此旧版本导入、缺少 call/result 配对的会话无法就地修复。删除旧会话后重新导入，即可获得配对不变量。
 
 ## 🧪 测试
 
