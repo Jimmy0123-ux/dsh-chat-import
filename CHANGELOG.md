@@ -13,6 +13,40 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Added
 
+- **Grok Build source import** (`import_grokbuild`) (REQ-46) — the 9th import
+  source: reads `~/.grok/sessions/<project>/<session_id>/` session
+  directories (archived ones under `~/.grok/archived_sessions/`), each holding
+  `summary.json` (`info.id` / `info.cwd`, `generated_title`,
+  `session_summary`, timestamps) + `chat_history.jsonl` (`user` /
+  `assistant` / `tool` / `system` / `reasoning` records with string or
+  Claude-style block `content`). `reasoning` (encrypted internal state) and
+  `system` (harness injection) records are filtered and counted; `tool_use` /
+  `tool_result` pair by `tool_use_id` back to the declaring step (cross-step
+  async results included), orphan results dropped and counted; titles resolve
+  `generated_title` > `session_summary` (pinned) with a first-question
+  fallback; `provider='grokbuild'`. A single session directory imports as one
+  session, a `sessions` / `archived_sessions` root scans recursively (batch).
+- **OpenClaw source import** (`import_openclaw`) (REQ-47) — the 10th import
+  source: reads `~/.openclaw/agents/<agent>/sessions/*.jsonl` (one session
+  per file) with `{type:"session", id, cwd, timestamp}` metadata lines and
+  `{type:"message", message:{role, content}}` messages; the `toolResult`
+  role pairs results back to their `tool_use` (by `tool_use_id`, or the most
+  recent unresolved call for plain-text results), `[message_id: …]` gateway
+  suffixes are stripped, and results in one step are ordered to match the
+  step's calls; a sibling `sessions.json` index supplies the `displayName`
+  used as the pinned title (fallback: first user text, then the `cwd`
+  basename); `provider='openclaw'`.
+- **Hermes source import** (`import_hermes`) (REQ-48) — the 11th import
+  source: reads `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`) history —
+  `state.db` (SQLite `sessions` + `messages` tables, the authority index;
+  column variants `cwd`/`directory`, `started_at`/`created_at`,
+  `ended_at`/`updated_at`, messages ordered by time) is read first, with a
+  `sessions/*.jsonl` fallback (flat `{role, content, ts}` or nested
+  `{type:"session"|"message", message, timestamp}`) when the DB is
+  unavailable. `thinking` → `reasoning`, `tool_use` / `tool_result` pair by
+  `tool_use_id` back to the declaring step; `provider='hermes'`. A
+  `state.db` always returns the batch shape (one DB holds all sessions); a
+  lone `.jsonl` imports as a single session.
 - **ZCode source import** (`import_zcode`) (REQ-38) — the 8th import source:
   reads the z.ai official CLI's `~/.zcode/cli/db/db.sqlite` (SQLite authority
   index) read-only via `node:sqlite`; the `message` / `part` rows carry no

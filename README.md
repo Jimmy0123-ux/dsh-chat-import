@@ -8,7 +8,7 @@
 
 # DSH Chat Import
 
-> Bring your Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode and ZCode conversations into DeepSeek Harness — and keep talking exactly where you left off.
+> Bring your Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw and Hermes conversations into DeepSeek Harness — and keep talking exactly where you left off.
 
 [![npm version](https://img.shields.io/npm/v/dsh-chat-import)](https://www.npmjs.com/package/dsh-chat-import)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -19,18 +19,18 @@
 
 `dsh-chat-import` turns your external agent chat history into **full-fidelity, resumable DeepSeek Harness sessions** — tool calls, reasoning and all. During import it reads transcripts **read-only** (your source files are never rewritten), never touches the DSH engine, and appends every import as a fresh, event-balanced session log through the public `sessionPersistence` service, grouped into the workspace of its `cwd`. It also works in reverse: `export_claude` serializes a DSH session back into a Claude Code JSONL transcript (read-only — your DSH log is never modified) that Claude Code can load with `--resume`, and `sync_to_claude` incrementally appends a session's new turns back to a Claude Code file — guarded, never silently overwriting.
 
-`8 sources` · `Import + export` · `Seamlessly resumable` · `Auto workspace grouping`
+`11 sources` · `Import + export` · `Seamlessly resumable` · `Auto workspace grouping`
 
 ## ✨ Features
 
-- **📥 Import from 8 sources** — Claude Code JSONL, Codex / ChatGPT CLI rollouts, ChatGPT web exports, Cursor agent transcripts, Gemini CLI sessions, Reasonix sessions, opencode SQLite history, and ZCode (z.ai CLI) SQLite history. One plugin, one call per source.
+- **📥 Import from 11 sources** — Claude Code JSONL, Codex / ChatGPT CLI rollouts, ChatGPT web exports, Cursor agent transcripts, Gemini CLI sessions, Reasonix sessions, opencode SQLite history, ZCode (z.ai CLI) SQLite history, Grok Build session directories, OpenClaw session JSONL, and Hermes SQLite / JSONL storage. One plugin, one call per source.
 - **🔍 Full fidelity** — tool history becomes real `tool/call` + `tool/result` pairs (error flags and `sourceEventSeqs` linkage included), thinking blocks become `reasoning`, multi-step assistant messages are preserved.
 - **▶️ Seamlessly resumable** — every import synthesizes a balanced, loadable session (`turn/start` → `step/start` → `user/message` → `assistant/message` → `tool/call`/`tool/result` → `step/end` → `turn/end`): open it and keep chatting.
 - **🗂 Auto workspace grouping** — sessions land in the workspace of their source `cwd` (no more "ungrouped"); session id, title, model and creation time are preserved where the source records them.
 - **🔁 Idempotent + incremental** — re-importing an unchanged source skips it without re-reading the file; a grown source appends only its **new turns** to the same DSH session (`seq` continues, nothing already imported is rewritten); a truncated source is detected (`sourceShrunk`) and reported without touching the imported session; malformed lines are counted and reported, never aborting the import.
 - **📤 Export back to Claude Code** — `export_claude` serializes any DSH session (imported or native) into Claude Code JSONL at `<outputDir>/<slug>/<uuid>.jsonl`, ready for `--resume`: user / assistant / tool calls & results, thinking blocks and the session title are rebuilt in the Claude record layout.
 - **🔄 Sync back to Claude Code** — `sync_to_claude` incrementally appends a DSH session's **new complete turns** back to the import source (or the `export_claude` copy), chaining to the file's last record; guards report shrink / external edits / tail mismatches / concurrent writers instead of overwriting, and a format pre-check rolls bad writes back.
-- **📦 Batch import** — point at a directory (or a whole opencode / ZCode database) and every file / conversation becomes its own session, with a per-file summary.
+- **📦 Batch import** — point at a directory (or a whole opencode / ZCode / Hermes database) and every file / conversation becomes its own session, with a per-file summary.
 - **🧮 Context budget protection** — imported sessions have no provider configuration, so dsh never auto-compacts them and an all-in history fails with 400 on resume. Oversize sessions are trimmed to fit a context budget (resolved as the `budget` parameter > `DSH_IMPORT_CONTEXT_BUDGET` env > the dynamic model window via `agentDefaultModel` + `llm` > a 550k static default): per-message caps (text ≤16K chars, tool results ≤40K chars, head 75% + tail kept), a message-level truncation (earliest 3 user texts + a compressed summary + the tail), and a last-resort drop of any single message still exceeding half the budget. The trimming is reported back (`trimmed` with budget, token estimates and drop counts).
 
 ## 🚀 Quick start
@@ -63,6 +63,9 @@ import_claude({ path: "~/.claude/projects" })
 | Reasonix | `~/.reasonix/sessions/desktop-*.jsonl` | `import_reasonix` |
 | opencode | `~/.local/share/opencode/opencode.db` (SQLite) | `import_opencode` |
 | ZCode (z.ai CLI) | `~/.zcode/cli/db/db.sqlite` (SQLite) | `import_zcode` |
+| Grok Build | `~/.grok/sessions/<project>/<session_id>/` (`summary.json` + `chat_history.jsonl`) | `import_grokbuild` |
+| OpenClaw | `~/.openclaw/agents/<agent>/sessions/*.jsonl` | `import_openclaw` |
+| Hermes | `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`): `state.db` (SQLite) + `sessions/*.jsonl` | `import_hermes` |
 
 Each import preserves what the source actually records — session id, `cwd`, title, model, creation time, tool calls & results, reasoning — and formats with less data (Cursor transcripts, ChatGPT exports) import what exists and clearly report what they don’t.
 
@@ -79,9 +82,12 @@ import_gemini({ path: "C:\Users\<you>\.gemini\history\<slot>\chats\session-2026-
 import_reasonix({ path: "C:\Users\<you>\.reasonix\sessions\desktop-202606020721-1.jsonl" })
 import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
 import_zcode({ path: "C:\Users\<you>\.zcode\cli\db\db.sqlite" })
+import_grokbuild({ path: "C:\Users\<you>\.grok\sessions\<project>\<session_id>" })
+import_openclaw({ path: "C:\Users\<you>\.openclaw\agents\<agent>\sessions\<session>.jsonl" })
+import_hermes({ path: "C:\Users\<you>\AppData\Local\hermes\state.db" })
 ```
 
-`import_claude` / `import_codex` / `import_cursor` / `import_gemini` / `import_reasonix` behave alike:
+`import_claude` / `import_codex` / `import_cursor` / `import_gemini` / `import_reasonix` / `import_openclaw` behave alike:
 
 - `path` can be a **single file or a directory** (directories are scanned recursively; each file becomes its own session).
 - Optional `sessionId` overrides the target DSH session id (default `import-<source sessionId>`; Cursor uses the file-name composer id, Reasonix the file-name stem). Changing it on a re-import creates a new full copy under the new id (the old session stays untouched).
@@ -94,6 +100,10 @@ import_zcode({ path: "C:\Users\<you>\.zcode\cli\db\db.sqlite" })
 `import_opencode` also always returns the batch shape — one `opencode.db` holds **all** sessions. `path` may be the `.db` file or its data directory; optional `sessionIds` restricts the import to the listed sessions; optional `fullHistory: true` imports the full message history instead of respecting opencode’s conversation compaction (default `false` — compacted sessions import as their last summary plus the retained tail). `fullHistory` is part of the import-args fingerprint: re-importing with a different value reports `argsChanged` (use `force: true` to switch). The database is fingerprinted at the DB level (version + size): an unchanged DB is skipped without re-reading SQLite; per-session growth appends, compaction that removes turns reports `sourceShrunk`. Imported sessions keep their `directory` as `cwd` and are grouped into workspaces.
 
 `import_zcode` also always returns the batch shape — one `db.sqlite` holds **all** ZCode (z.ai official CLI) sessions. `path` may be the `.db` file, a directory containing `db.sqlite` (auto-located, no recursion), or a `zcode://<sessionId>` pseudo-path that imports only that session from the default `~/.zcode/cli/db/db.sqlite`; optional `sessionIds` restricts the import to the listed sessions. The database is fingerprinted at the DB level (version + size): an unchanged DB is skipped without re-reading SQLite; per-session growth appends, compaction that removes turns reports `sourceShrunk`. Imported sessions keep their `directory` as `cwd` and are grouped into workspaces. When the DB is unavailable, the import falls back to the legacy `transcript.jsonl` layout.
+
+`import_grokbuild` treats a single session directory (containing `summary.json` + `chat_history.jsonl`) as a single-session import, or a `~/.grok/sessions` / `~/.grok/archived_sessions` root as a recursive batch scan (each `summary.json` becomes its own session). Titles resolve `generated_title` > `session_summary` (pinned via a `session/title` event), with a first-question fallback; `reasoning` (encrypted internal state) and `system` (harness injection) records are filtered and counted. Imported sessions keep the `summary.json` `info.cwd` and are grouped into workspaces.
+
+`import_hermes` returns the batch shape for a `state.db` — the SQLite authority index that holds **all** Hermes sessions (column-name variants `cwd`/`directory`, `started_at`/`created_at`/`ended_at`/`updated_at` are tolerated). When the DB is unavailable, the import falls back to a recursive scan of `sessions/*.jsonl` (flat or nested lines, one session per file; a lone `.jsonl` imports as a single session). Imported sessions keep their recorded `cwd` and are grouped into workspaces.
 
 ## 🔁 Incremental re-import
 
@@ -169,7 +179,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 
 Messages carry stable ids and `surfaceOp: 'append'`; `tool/result` events link back to their `tool/call` via `sourceEventSeqs`. Assistant `source` is `{ kind: 'model', provider: 'claude-code', model: <source model> }`; `tool/result` source is `{ kind: 'tool', callId }`. The `SessionHeader` keeps `version: 0`, `id: import-<source sessionId>`, source `createdAt` and `cwd`.
 
-**Import marker (`session/imported`):** every imported session opens with a marker event at `seq: 0`, before the first `turn/start`. It carries `ignorable: true`, so the read pipeline accepts it as a known-but-ignorable event (`KNOWN_SESSION_EVENT_TYPES || ignorable`) instead of an unknown one. Its `data` records the provenance — `{ tool, sourceId, sourcePath, importedAt }`: `tool` is the source identifier (`claude-code` / `codex` / `chatgpt` / `cursor` / `gemini` / `reasonix` / `opencode` / `zcode`), `sourceId` the original source session id, `sourcePath` the absolute transcript / database path the session was imported from (the idempotency key for the imports registry), and `importedAt` the import timestamp. The marker is written only when the transcript yields at least one turn — empty imports are skipped without a session or marker.
+**Import marker (`session/imported`):** every imported session opens with a marker event at `seq: 0`, before the first `turn/start`. It carries `ignorable: true`, so the read pipeline accepts it as a known-but-ignorable event (`KNOWN_SESSION_EVENT_TYPES || ignorable`) instead of an unknown one. Its `data` records the provenance — `{ tool, sourceId, sourcePath, importedAt }`: `tool` is the source identifier (`claude-code` / `codex` / `chatgpt` / `cursor` / `gemini` / `reasonix` / `opencode` / `zcode` / `grokbuild` / `openclaw` / `hermes`), `sourceId` the original source session id, `sourcePath` the absolute transcript / database path the session was imported from (the idempotency key for the imports registry), and `importedAt` the import timestamp. The marker is written only when the transcript yields at least one turn — empty imports are skipped without a session or marker.
 
 **Call/result pairing invariant:** every `tool/call` is paired with a `tool/result` (`sourceEventSeqs` points back to its call), and each result is attached to the step that declared its call — so the projected message order stays wire-legal (every `role: 'tool'` message sits immediately after the assistant message whose `tool_calls` it answers, never separated by another assistant). When the transcript never recorded a result for a call (interrupted sessions, Cursor transcripts that contain no results), the importer synthesizes an empty `tool/result` (`content: []`) in the call's own step so the session still resumes — model APIs reject history in which an assistant `tool_calls` block has no matching tool message. The empty content is not fabricated text; wire adapters normalize it to `"(no output)"`.
 
@@ -297,10 +307,55 @@ Reads the `session` / `message` / `part` tables of `~/.zcode/cli/db/db.sqlite` �
 | user message containing `<system-reminder>` | filtered (injection) |
 | turn ends | `step/end` + `turn/end` |
 
+### Grok Build session directory
+
+Each session lives in its own directory at `~/.grok/sessions/<project>/<session_id>/` (archived sessions under `~/.grok/archived_sessions/`), holding `summary.json` (metadata) plus `chat_history.jsonl` (the conversation). Records are `{ type, content, timestamp }` with `type` ∈ `user` / `assistant` / `tool` / `system` / `reasoning`: `reasoning` (encrypted internal state) and `system` (harness injection) records are filtered and counted (`filtered`). `content` is a string or a Claude-style block array (`text` / `input_text` / `output_text` / `thinking` / `tool_use` / `tool_result`); `input_text` / `output_text` normalize to text blocks.
+
+| Grok Build storage | DSH SessionEvent |
+| --- | --- |
+| `summary.json` `info.id` / `info.cwd` / `created_at`→`updated_at`→`last_active_at` | `SessionHeader` (id / cwd / createdAt) |
+| `generated_title` > `session_summary` | `session/title` (pinned; a blank title falls back to the first user text on the `title` field) |
+| `chat_history.jsonl` `type: "user"` (text content) | `turn/start` + `step/start` + `user/message` |
+| `type: "assistant"` text / `thinking` blocks | `assistant/message` / `reasoning` content block |
+| `type: "assistant"` `tool_use` block | `tool/call` + `tool-call` content block |
+| `type: "tool"` record / `tool_result` block (`tool_use_id`, or the sole unresolved call) | `tool/result` on the step that declared the call (`sourceEventSeqs` linkage) |
+| orphan tool results | dropped + counted (`droppedToolResults`) |
+| `type: "reasoning"` / `type: "system"` | filtered + counted (`filtered`) |
+| turn ends | `step/end` + `turn/end` |
+
+### OpenClaw session JSONL
+
+One file per session at `~/.openclaw/agents/<agent>/sessions/*.jsonl`; a sibling `sessions.json` index supplies the display name used as the pinned title. Lines are either `{ type: "session", id, cwd, timestamp }` metadata or `{ type: "message", message: { role, content }, timestamp }` with `role` ∈ `user` / `assistant` / `toolResult` (→ tool result). `content` is a string or Claude-style block array; `[message_id: …]` gateway suffixes appended by OpenClaw are stripped. Titles resolve `sessions.json` `displayName` > first user text > `cwd` basename (the latter two only fill the `title` field).
+
+| OpenClaw JSONL | DSH SessionEvent |
+| --- | --- |
+| `{ type: "session" }` (`id` / `cwd` / `timestamp`) | `SessionHeader` (id / cwd / createdAt) |
+| `sessions.json` `displayName` (per `sessionId`) | `session/title` (pinned; first user text / `cwd` basename fall back to the `title` field) |
+| `{ type: "message", role: "user" }` | `turn/start` + `step/start` + `user/message` |
+| `role: "assistant"` text / `thinking` blocks | `assistant/message` / `reasoning` content block |
+| `role: "assistant"` `tool_use` block | `tool/call` + `tool-call` content block |
+| `role: "toolResult"` (`tool_use_id`, or the most recent unresolved call for plain-text results) | `tool/result` on the step that declared the call (`sourceEventSeqs` linkage) |
+| orphan / duplicate tool results | dropped + counted (`droppedToolResults`) |
+| turn ends | `step/end` + `turn/end` |
+
+### Hermes session storage
+
+Hermes keeps its history at `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`). `state.db` (SQLite `sessions` + `messages` tables) is the authority index and is read first — column-name variants (`cwd`/`directory`, `started_at`/`created_at`, `ended_at`/`updated_at`) are tolerated and messages are ordered by time; when the DB is unavailable the import falls back to `sessions/*.jsonl` (flat `{ role, content, ts }` or nested `{ type: "session" | "message", message, timestamp }`). `content` is a string or Claude-style block array; `session` / `init` lines supply `id` / `title` / `cwd` / `model` metadata.
+
+| Hermes storage | DSH SessionEvent |
+| --- | --- |
+| `sessions` row / `session` line (`id` / `title` / `cwd` / `started_at`) | `SessionHeader` + `session/title` |
+| `messages` row / JSONL `role: "user"` (text content) | `turn/start` + `step/start` + `user/message` |
+| `role: "assistant"` text / `thinking` blocks | `assistant/message` / `reasoning` content block |
+| `role: "assistant"` `tool_use` block | `tool/call` + `tool-call` content block |
+| user `tool_result` block (`tool_use_id`) | `tool/result` on the step that declared the call (`sourceEventSeqs` linkage) |
+| orphan tool results | dropped + counted (`droppedToolResults`) |
+| turn ends | `step/end` + `turn/end` |
+
 ## ⚙️ Compatibility
 
 - Consumes only public host plugin APIs (`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`, plus optional `agentDefaultModel` / `llm` for the dynamic context-budget resolution — absent or failing services fall back to the static default silently) and `@deepseek-ai/dsh-tools`, declared as a `peerDependencies` range `^0.1.0-rc.6` (currently resolving to `0.1.0-rc.6`, the version the plugin is tested against).
-- Requires **Node.js >= 22.13** — the first release where `node:sqlite` (`DatabaseSync`, used by `import_opencode` and `import_zcode`) is available without the `--experimental-sqlite` flag (see `engines` in `package.json`).
+- Requires **Node.js >= 22.13** — the first release where `node:sqlite` (`DatabaseSync`, used by `import_opencode`, `import_zcode` and `import_hermes`) is available without the `--experimental-sqlite` flag (see `engines` in `package.json`).
 
 | Source format | Import tool | Verified |
 | --- | --- | --- |
@@ -312,10 +367,13 @@ Reads the `session` / `message` / `part` tables of `~/.zcode/cli/db/db.sqlite` �
 | Reasonix | `import_reasonix` | ✅ unit + mock integration (`npm test`); dry-run on 55 real sessions |
 | opencode | `import_opencode` | ✅ unit + mock integration (`npm test`) |
 | ZCode (z.ai CLI) | `import_zcode` | ✅ unit + mock integration (`npm test`) |
+| Grok Build | `import_grokbuild` | ✅ unit + mock integration (`npm test`) |
+| OpenClaw | `import_openclaw` | ✅ unit + mock integration (`npm test`) |
+| Hermes | `import_hermes` | ✅ unit + mock integration (`npm test`) |
 | DSH → Claude Code | `export_claude` | ✅ unit + mock integration (`npm test`) |
 | DSH → Claude Code (incremental) | `sync_to_claude` | ✅ unit + mock integration (`npm test`) |
 
-- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (210 cases) covers the pure conversion logic (including the REQ-37 `estimateTokens` / `cropContentBlocks` / `trimTurns` pure functions), the pure `export.mjs` serializer (full + incremental tail + format pre-check), and mock integration paths for all eight source formats plus `export_claude`, `sync_to_claude` and the budget-adaptive import (env / parameter / dynamic / default resolution, `trimmed` reporting, `budgetChanged`).
+- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (269 cases) covers the pure conversion logic (including the REQ-37 `estimateTokens` / `cropContentBlocks` / `trimTurns` pure functions), the pure `export.mjs` serializer (full + incremental tail + format pre-check), and mock integration paths for all eleven source formats plus `export_claude`, `sync_to_claude` and the budget-adaptive import (env / parameter / dynamic / default resolution, `trimmed` reporting, `budgetChanged`).
 - **Expected**: `dsh-tools ^0.1.0-rc.6` — the `dsh 0.1.x` line, the same range the host install uses.
 - **Out of band**: `<0.1.0-rc.6` and `>=0.2.0` are untested — after a `dsh` major upgrade, run a headless smoke test first, then update this matrix.
 - **Export / sync gate**: `export_claude` / `sync_to_claude` output is covered by unit + mock integration tests; loading an exported or synced file with real Claude Code `--resume` is the release gate for the reverse direction (the written format may be rejected by Claude Code's validator — validate before relying on it).
@@ -325,7 +383,7 @@ Reads the `session` / `message` / `part` tables of `~/.zcode/cli/db/db.sqlite` �
 - Import never rewrites source transcripts (read-only); DSH history events are append-only (deep-frozen) — new events are added, existing ones are never modified. `export_claude` reads the session log read-only and never modifies it; `sync_to_claude` only appends complete turns to the target file through a guarded CAS write (shrink / external edits / tail mismatches / concurrent writers are reported, never overwritten; a failed format pre-check rolls the write back).
 - The plugin never modifies the DSH engine, apiproxy, or official UI packages; it publishes no services, so no isolate realm is needed.
 - Reading transcripts outside the workspace requires the session sandbox to allow access to that path; exporting writes `<outputDir>/<slug>/<uuid>.jsonl`, so a target outside the workspace likewise requires the session sandbox to allow it.
-- Known boundaries: `permission` / `summary` auxiliary records are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts are skipped (only the main `<sessionId>.jsonl` becomes a session) and a `tool_result` with no matching `tool_use` is dropped and counted (`droppedToolResults`); Codex `reasoning` is encrypted and skipped; Codex `custom_tool_call` inputs in JS call form are converted to standard JSON arguments — unconvertible ones stay verbatim and are counted (`droppedMalformedArgs`); ChatGPT exports rebuild only the main thread (branch = last child) and tool messages degrade to text blocks on the nearest step (exports carry no structured tool calls, so no orphan `tool/result` is produced); Cursor transcripts have no `tool_result` (every call gets a synthesized empty `tool/result`) and `[REDACTED]` text is filtered; Gemini follows the format observed 2026-04 (no stable official schema); Reasonix reads the JSONL checkpoint (the V2 WAL is excluded); opencode `patch` parts carry no diff (placeholder `[patch: <N> files]` only) and tool output may keep ANSI escapes verbatim; ZCode imports the z.ai CLI SQLite index (no `sequence` column — the stream is rebuilt by `time_created, id`), compaction parts import as a leading `reasoning` summary (the compaction body itself never enters the conversation), and db-unavailable imports fall back to the legacy `transcript.jsonl`.
+- Known boundaries: `permission` / `summary` auxiliary records are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts are skipped (only the main `<sessionId>.jsonl` becomes a session) and a `tool_result` with no matching `tool_use` is dropped and counted (`droppedToolResults`); Codex `reasoning` is encrypted and skipped; Codex `custom_tool_call` inputs in JS call form are converted to standard JSON arguments — unconvertible ones stay verbatim and are counted (`droppedMalformedArgs`); ChatGPT exports rebuild only the main thread (branch = last child) and tool messages degrade to text blocks on the nearest step (exports carry no structured tool calls, so no orphan `tool/result` is produced); Cursor transcripts have no `tool_result` (every call gets a synthesized empty `tool/result`) and `[REDACTED]` text is filtered; Gemini follows the format observed 2026-04 (no stable official schema); Reasonix reads the JSONL checkpoint (the V2 WAL is excluded); opencode `patch` parts carry no diff (placeholder `[patch: <N> files]` only) and tool output may keep ANSI escapes verbatim; ZCode imports the z.ai CLI SQLite index (no `sequence` column — the stream is rebuilt by `time_created, id`), compaction parts import as a leading `reasoning` summary (the compaction body itself never enters the conversation), and db-unavailable imports fall back to the legacy `transcript.jsonl`; Grok Build filters `reasoning` (encrypted internal state) and `system` (harness injection) records, and a session directory is recognized by its `summary.json`; OpenClaw strips `[message_id: …]` gateway suffixes and derives the pinned title from the sibling `sessions.json` index; Hermes reads the SQLite `state.db` authority index (column-variant tolerant) with a `sessions/*.jsonl` fallback.
 - **Context budget protection:** the three layers described under Data model — per-message caps (16K / 40K chars, applied to every import), message-level budget truncation (anchor 3 user texts + summary + tail), and single-message drop above half the budget — run purely in `convert.mjs` before session synthesis and are reported in `trimmed`. Dropped turns are counted (`droppedTurns` / `droppedMessages` / `droppedToolCalls` / `droppedToolResults` / `droppedOversized`) and a compressed summary (`reasoning`) is inserted so the session still reads coherently; the full source history stays untouched on disk.
 - **Re-import after this fix:** already-imported sessions are immutable logs — the plugin never rewrites existing history. Growth is appended incrementally; sessions imported by an older version that lack the call/result pairing cannot be repaired in place (delete the stale session and re-import to pick up the pairing invariant). A source that shrank (`sourceShrunk`) or changed inside already-imported turns (`changedInPlace`) is skipped and reported — `force: true` gives a complete fresh copy. A context-budget change on re-import reports `budgetChanged` and skips (like `argsChanged`): the stored session was trimmed under the old budget, so switching budgets requires `force: true` (or a new `sessionId`) to rebuild it.
 - **Export boundaries:** exported `thinking` blocks carry an empty `signature` (Claude Code drops such thinking on resume — documented degradation); non-human prompt injections and non-text content blocks (e.g. images) are skipped and counted (`skippedInjections` / `skippedBlocks`); orphan `tool_result` records with no matching `tool/call` in the DSH log are dropped and counted (`droppedToolResults`); interrupted sessions get a trailing empty `tool_result`.
@@ -336,7 +394,7 @@ Reads the `session` / `message` / `part` tables of `~/.zcode/cli/db/db.sqlite` �
 npm test
 ```
 
-`test/convert.test.mjs` covers the pure conversion logic for all eight source formats (turn balance, tool linkage, titles, malformed lines, injection filtering, dedup, mapping branches, REDACTED filtering, inline tool results, v1/v2 tool-call shapes, opencode part mapping and model fallback, zcode db reconstruction and compaction restore); `test/export.test.mjs` covers the pure `export.mjs` serializer (record mapping, tool pairing, parallel fan-out, cross-step results, trailing empty results, orphan dropping, injection skipping, slugify, deterministic uuids, timestamps) plus the REQ-36 incremental tail (`tailClaudeEvents`, `serializeClaudeJsonlTail`, `verifyClaudeJsonl`); `test/index.test.mjs` runs the full `apply → execute` path with mock `fs` / `sessionPersistence` / `tools` / `workspaceRegistry` (and a real SQLite temp DB for `import_opencode` and `import_zcode`), validates the return value against the output schema, and covers the `sync_to_claude` write-back guards, CAS race, rollback and idempotent re-import paths.
+`test/convert.test.mjs` covers the pure conversion logic for all eleven source formats (turn balance, tool linkage, titles, malformed lines, injection filtering, dedup, mapping branches, REDACTED filtering, inline tool results, v1/v2 tool-call shapes, opencode part mapping and model fallback, zcode db reconstruction and compaction restore, grokbuild summary/chat-history pairing and reasoning/system filtering, openclaw displayName titles and toolResult pairing, hermes db intermediate-JSON and flat/nested JSONL shapes); `test/export.test.mjs` covers the pure `export.mjs` serializer (record mapping, tool pairing, parallel fan-out, cross-step results, trailing empty results, orphan dropping, injection skipping, slugify, deterministic uuids, timestamps) plus the REQ-36 incremental tail (`tailClaudeEvents`, `serializeClaudeJsonlTail`, `verifyClaudeJsonl`); `test/index.test.mjs` runs the full `apply → execute` path with mock `fs` / `sessionPersistence` / `tools` / `workspaceRegistry` (and a real SQLite temp DB for `import_opencode`, `import_zcode` and `import_hermes`), validates the return value against the output schema, and covers the `sync_to_claude` write-back guards, CAS race, rollback and idempotent re-import paths. Per-source unit tests also live in `test/grokbuild.test.mjs`, `test/openclaw.test.mjs` and `test/hermes.test.mjs`.
 
 ## 📦 Install & uninstall
 
