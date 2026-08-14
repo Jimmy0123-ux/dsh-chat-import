@@ -35,6 +35,14 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Changed
 
+- **Export serializer split into `lib/export/`** — the reverse-export
+  serializer (DSH session events → Claude Code JSONL) moved from the root
+  `export.mjs` into `lib/export/claude.mjs`, mirroring how `convert.mjs` keeps
+  its implementation in `lib/convert/`. The root `export.mjs` is now a
+  re-export shim, so the `exports["./export.mjs"]` subpath contract and every
+  existing `import` stay intact; `lib/export/` is reserved per target format
+  (future REQ-23 interchange targets).
+
 - **Cross-platform path discipline guard — `npm run check:linux`** — CI's
   `npm test` (ubuntu / node 22) used to stay red while the suite passed on
   Windows: tests build synthetic trees with backslash paths while the code's
