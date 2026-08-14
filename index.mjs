@@ -37,6 +37,21 @@ async function attachToWorkspace(ctx, meta) {
   }
 }
 
+// 预热投影缓存：冷读一次持久化会话并回写，让侧边栏无需打开会话即可显示
+// 标题/模型等元数据（否则列表先显示 cwd 目录名，点开后才出现真实标题）。
+// 失败不影响导入结果，仅记录日志。
+async function warmProjection(ctx, sessionId) {
+  const projectionCache = ctx.get('sessionProjectionCache')
+  if (!projectionCache || typeof projectionCache.coldSnapshot !== 'function') return false
+  try {
+    await projectionCache.coldSnapshot(sessionId)
+    return true
+  } catch (err) {
+    console.error('projection warm-up failed:', String((err && err.message) || err))
+    return false
+  }
+}
+
 // 执行 decideSingle / decideMulti 返回的决策并落盘；剥离 __ 载荷后返回公开结果。
 // create 时才归组（append 续写不重复 attachToWorkspace）；persisted 就地更新供批量
 // 内 id 避让；__record（新导入记录）经 rememberImport 写回 registry。
@@ -46,6 +61,7 @@ async function runDecision(ctx, decision, registryDir, sourcePath, persisted) {
     await ctx.sessionPersistence.create(__meta)
     await ctx.sessionPersistence.append(__meta.id, __events)
     await attachToWorkspace(ctx, __meta)
+    await warmProjection(ctx, __meta.id)
     persisted.add(__meta.id)
   } else if (decision.__action === 'append') {
     await ctx.sessionPersistence.append(decision.__targetId, decision.__tailEvents)
@@ -54,6 +70,7 @@ async function runDecision(ctx, decision, registryDir, sourcePath, persisted) {
       await ctx.sessionPersistence.create(c.meta)
       await ctx.sessionPersistence.append(c.meta.id, c.events)
       await attachToWorkspace(ctx, c.meta)
+      await warmProjection(ctx, c.meta.id)
       persisted.add(c.meta.id)
     }
     for (const a of decision.__appends) {
