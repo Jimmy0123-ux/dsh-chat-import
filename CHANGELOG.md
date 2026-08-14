@@ -13,6 +13,34 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Added
 
+- **Automatic session discovery — `scan_discover`** (REQ-25) — a new
+  read-only tool that scans the known data roots of all **11 source
+  formats** (Claude / Codex / ChatGPT CLI / Cursor / Gemini / Reasonix /
+  opencode / ZCode / Grok Build / OpenClaw / Hermes, plus ChatGPT web
+  exports) and returns a structured session index
+  (`format` / `sessionId` / `title` / `project` / `createdAt` /
+  `lastActiveAt` / `messageCount` / `sourcePath` / `importStatus`) for
+  previewing before a batch import. Optional `path` (scan root or single
+  file), `format` (restrict one format) and `query` (title / project /
+  path substring filter) parameters; zero side effects (no `create` /
+  `append`, no registry writes, no workspace attach); injection-filtered
+  title extraction and an in-process **30s TTL scan cache** (a same-key
+  re-scan within 30s hits the cache without re-reading source files).
+- **Malformed-line line numbers + secret locations + permission counts**
+  (REQ-26) — import reports now carry `skippedLines` (malformed-record
+  details `{ line, error }`, line numbers from 1 — count unlimited,
+  detail list capped at 200), `secrets` (suspected-secret locations
+  `{ line, kind }` — position only, content is never output) and
+  `permissionCount` (Claude-source permission records, counted only),
+  alongside the existing `skipped` count.
+- **Zero-side-effect import preview — `preview` / `dryRun`** (REQ-17) —
+  every `import_*` tool accepts `preview: true` (alias `dryRun: true`):
+  the source is resolved / read / converted exactly like a real import
+  but nothing is persisted (no `create` / `append`, no registry read or
+  write, no workspace attach). It returns the same `mode` / `total` /
+  `results` skeleton with a `preview: true` marker and no write-state
+  fields; each entry carries the would-be session's title / `cwd` /
+  creation time / scale (turns / messages / tool calls) and skip details.
 - **Grok Build source import** (`import_grokbuild`) (REQ-46) — the 9th import
   source: reads `~/.grok/sessions/<project>/<session_id>/` session
   directories (archived ones under `~/.grok/archived_sessions/`), each holding
@@ -176,6 +204,18 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   marker), and the imports registry records the budget so a budget change skips
   with `budgetChanged` (same semantics as `argsChanged`; `force: true`
   rebuilds).
+
+### Fixed
+
+- **`trimTurns` L2 anchor shrink silently dropped turns** (REQ-49) — when
+  the whole turn list was within the 3-anchor minimum and the budget was
+  so small that even the anchor plus summary allowance exceeded it, turns
+  shrunk off the anchor tail vanished without being counted, so `trimmed`
+  could report `null` despite real loss (violating "fail loudly"). Turns
+  dropped by anchor shrink are now counted into `trimmed`
+  (`droppedTurns` / `droppedMessages` / `droppedToolCalls` /
+  `droppedToolResults`) so the report reflects the real loss; at least
+  one resumable turn is still guaranteed.
 
 ### Changed
 

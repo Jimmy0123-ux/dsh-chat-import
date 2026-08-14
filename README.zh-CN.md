@@ -110,8 +110,9 @@ import_hermes({ path: "C:\Users\<you>\AppData\Local\hermes\state.db" })
 - `path` 可以是**单个文件或目录**（目录递归扫描，每个文件成为独立会话）。
 - 可选 `sessionId` 覆盖目标 DSH 会话 id（默认 `import-<源sessionId>`；Cursor 取文件名的 composer id，Reasonix 取文件名 stem）。重导时变更它会以新 id 另存一份完整副本（旧会话原样保留）。
 - 可选 `force: true`：即使已导入也以新 id（`import-<sessionId>-<n>`，`n` 为下一个空闲后缀）另存一份**完整副本**——旧会话绝不修改、绝不归档。
-- 返回 `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported, status }`，`status` 为 `imported` | `already-imported` | `appended` | `skipped`；另含可选 `appendedTurns` / `appendedEvents`（增长续写）、`sourceShrunk`（源截断）、`changedInPlace`（既有轮次内变化，append-only 无法改写）、`argsChanged`（导入参数变化）、`budgetChanged`（上下文预算变化）、`backfilled`（旧版本导入回填 registry 基线）、`forceImported: { previous, current }`（force / sessionId 变更副本）与 `droppedBoundaryResults`。
+- 返回 `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported, status }`，`status` 为 `imported` | `already-imported` | `appended` | `skipped`；另含可选 `appendedTurns` / `appendedEvents`（增长续写）、`sourceShrunk`（源截断）、`changedInPlace`（既有轮次内变化，append-only 无法改写）、`argsChanged`（导入参数变化）、`budgetChanged`（上下文预算变化）、`backfilled`（旧版本导入回填 registry 基线）、`forceImported: { previous, current }`（force / sessionId 变更副本）与 `droppedBoundaryResults`。畸形行 / secrets / permission 随行上报：`skippedLines` 列畸形记录明细 `{ line, error }`（行号从 1 起——计数不设限、明细封顶 200 条），`secrets` 列疑似 secret 位置 `{ line, kind }`（只报位置、绝不输出内容），`permissionCount` 计 Claude 源 permission 类记录条数（0 不占键）；批量模式下同样出现在每条 `results` 条目内。
 - 可选 `budget`（整数 token）设置本次导入的上下文预算（解析优先级：本参数 > 环境变量 `DSH_IMPORT_CONTEXT_BUDGET` > 动态模型窗口 > 静态默认 550k）。当三层保护实际生效时，返回值带 `trimmed: { budget, source, originalTokens, estimatedTokens, croppedBlocks, droppedTurns, droppedMessages, droppedToolCalls, droppedToolResults, droppedOversized, summaryInserted }`——详见数据模型的「上下文预算保护」。
+- 可选 `preview: true`（别名 `dryRun: true`）以**只读**方式运行导入——照常 resolve / 读文件 / 转换（与正式导入同源），但**零副作用**：不 create/append、不读写 imports registry、不归组。返回与正式导入同骨架的 `mode` / `total` / `results`，带 `preview: true` 标记、不含写入态字段；每条预览条目携带将导入会话的 `turns` / `messages` / `toolCalls` / `skipped`，以及 `title`、`cwd`、`createdAt`（无可导入内容时带 `skipReason`）。去掉该参数再调一次即正式导入。
 
 **`import_chatgpt`** 不同：一个 `conversations.json` 包含**全部**会话，所以即使单文件也返回批量形态 `{ mode: 'batch', total, imported, alreadyImported, appended, skipped, failed, results: [...] }`（每个 `results` 项是一个会话，status 为 `imported` | `already-imported` | `appended` | `skipped` | `failed`）。增量逻辑逐会话生效：增长的会话被 append，从导出里消失的会话报进 `missingFromSource`（其会话原样保留），`force: true` 为每个会话建完整副本。ChatGPT 导出无 `cwd`，导入的会话不归组工作区。
 
@@ -122,6 +123,22 @@ import_hermes({ path: "C:\Users\<you>\AppData\Local\hermes\state.db" })
 **`import_grokbuild`** 把单个会话目录（含 `summary.json` + `chat_history.jsonl`）当作单会话导入，或把 `~/.grok/sessions` / `~/.grok/archived_sessions` 根目录当作递归批量扫描（每个 `summary.json` 成为独立会话）。标题按 `generated_title` > `session_summary` 解析（显式标题钉 `session/title` 事件），空白时回退首问；`reasoning`（加密内部状态）与 `system`（harness 注入）记录过滤并计数。导入的会话保留 `summary.json` 的 `info.cwd`，归组工作区。
 
 **`import_hermes`** 对 `state.db` 恒返回批量形态——SQLite 权威索引包含**全部** Hermes 会话（兼容列名变体 `cwd`/`directory`、`started_at`/`created_at`/`ended_at`/`updated_at`）。db 不可用时回退递归扫描 `sessions/*.jsonl`（flat 或 nested 行，每文件一个会话；单个 `.jsonl` 按单会话导入）。导入的会话保留记录的 `cwd`，归组工作区。
+
+### scan_discover — 只读会话发现
+
+`scan_discover` 是插件的只读发现侧：扫描**全部 11 种格式**的已知数据根（Claude Code / Codex / ChatGPT CLI / Cursor / Gemini / Reasonix / opencode / ZCode / Grok Build / OpenClaw / Hermes，以及 ChatGPT 网页导出），返回结构化会话索引，供批导入前预览：
+
+```
+scan_discover()
+scan_discover({ path: "~/.claude/projects" })
+scan_discover({ path: "~/.codex/sessions", format: "codex", query: "import" })
+```
+
+- `path`（可选）— 扫描根：目录（如 `~/.claude/projects`）或单个文件（如某个 `.jsonl` transcript 或 `conversations.json`）。缺省时扫描全部格式的默认数据根（ChatGPT 无自动根——需显式把 `path` 指向其 `conversations.json`）。
+- `format`（可选）— 只扫指定格式（`claude` / `codex` / `cursor` / `gemini` / `reasonix` / `opencode` / `zcode` / `grokbuild` / `openclaw` / `hermes` / `chatgpt`）；缺省按路径自动探测格式。
+- `query`（可选）— 按标题 / 项目 / 路径子串过滤（忽略大小写）。
+
+返回 `{ total, sessions }`，每条会话为 `{ format, sessionId, title, project, createdAt, lastActiveAt, messageCount, sourcePath, importStatus }`——`importStatus` 为 `imported` | `partial` | `not-imported`，由 imports registry 只读解析。扫描**零副作用**（不 create/append、不写 registry、不归组），结果进程内 **30s TTL 缓存**（同 key 30 秒内重复扫描直接命中，不重读源文件）。
 
 ## 🔁 增量续写（重导）
 
@@ -391,7 +408,7 @@ Hermes 历史存于 `~/.hermes/`（Windows `%LOCALAPPDATA%\hermes`）。`state.d
 | DSH → Claude Code | `export_claude` | ✅ 单测 + mock 集成（`npm test`） |
 | DSH → Claude Code（增量） | `sync_to_claude` | ✅ 单测 + mock 集成（`npm test`） |
 
-- **实测（Tested）**：`dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6`——2026-08 于 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（269 个用例）覆盖十一种源格式的转换纯函数（含 REQ-37 的 `estimateTokens` / `cropContentBlocks` / `trimTurns` 纯函数）、`export.mjs` 序列化纯函数（全量 + 增量尾部 + 格式预检）与 mock 集成路径（含 `export_claude`、`sync_to_claude` 与预算自适应导入——参数 / 环境变量 / 动态 / 默认解析、`trimmed` 上报、`budgetChanged`）。
+- **实测（Tested）**：`dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6`——2026-08 于 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（309 个用例）覆盖十一种源格式的转换纯函数（含 REQ-37 的 `estimateTokens` / `cropContentBlocks` / `trimTurns` 纯函数）、`export.mjs` 序列化纯函数（全量 + 增量尾部 + 格式预检）与 mock 集成路径（含 `export_claude`、`sync_to_claude` 与预算自适应导入——参数 / 环境变量 / 动态 / 默认解析、`trimmed` 上报、`budgetChanged`）。
 - **预期兼容（Expected）**：`dsh-tools ^0.1.0-rc.6`——`dsh 0.1.x` 线，与宿主安装使用同一区间。
 - **区间外（Out of band）**：`<0.1.0-rc.6` 与 `>=0.2.0` 未测试——`dsh` 主版本升级后先跑 headless 冒烟，再更新本矩阵。
 - **导出 / 写回门槛（Export / sync gate）**：`export_claude` / `sync_to_claude` 输出由单测 + mock 集成覆盖；用真实 Claude Code `--resume` 加载导出或写回文件是反向方向的发布门槛（写出的格式可能被 Claude Code 校验拒绝——依赖前务必实测）。
