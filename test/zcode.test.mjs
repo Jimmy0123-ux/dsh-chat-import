@@ -106,7 +106,13 @@ function makeCtx(tree = {}) {
     fs,
     sessionPersistence: persistence,
     webServer: { register() {} }, // REQ-41：apply 注册 /api-import/sessions 路由（zcode 测试不关心）
-    inject(serviceList, cb) { return cb(ctx) }, // 模拟 Cordis ctx.inject：webServer 在场，立即执行路由注册回调
+    // 模拟 Cordis ctx.inject：依赖服务在 ctx 上存在才执行回调（webServer 在场 →
+    // 路由注册执行；commands 缺席 → /import 命令不注册，插件照常激活）。
+    inject(serviceList, cb) {
+      const list = Array.isArray(serviceList) ? serviceList : Object.keys(serviceList || {})
+      if (list.every((s) => ctx[s] !== undefined)) return cb(ctx)
+      return undefined
+    },
     get(service) {
       if (service === 'workspaceRegistry') return workspaceRegistry
       if (service === 'sessionPersistence') return persistence

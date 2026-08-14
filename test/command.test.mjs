@@ -1,0 +1,158 @@
+// test/command.test.mjs — REQ-42 /import 命令面
+//
+// 用真实 registerTools（填充 IMPORT_SPECS）+ registerImportCommand + mock ctx 验证
+// 命令 handler：解析（短名/全名/客户端 id 三态）、单文件导入、幂等重导、未知来源
+// 与缺参错误路径。fixture 用真实临时目录（mkdtemp，跨平台安全，check:linux 规则）。
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync, readFileSync, statSync, mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { registerTools } from '../lib/tools.mjs'
+import { registerImportCommand } from '../lib/command.mjs'
+
+// 最小 Claude transcript（user + assistant 两行；cwd 用不存在路径触发 REQ-39-lite
+// 回退归组到源目录——mkdtemp 目录真实存在，attach 不落「未分组」）。
+function simpleClaudeJsonl(sessionId) {
+  return [
+    JSON.stringify({ parentUuid: null, userType: 'user', cwd: 'D:\\no-such\\proj', sessionId, type: 'user', message: { role: 'user', content: '你好' }, uuid: 'u-1', timestamp: '2026-08-01T10:00:00.000Z' }),
+    JSON.stringify({ parentUuid: null, userType: 'user', cwd: 'D:\\no-such\\proj', sessionId, type: 'assistant', message: { role: 'assistant', content: '好的' }, uuid: 'a-1', timestamp: '2026-08-01T10:00:01.000Z' }),
+  ].join('\n') + '\n'
+}
+
+function makeCtx() {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-cmd-'))
+  const registryDir = join(home, 'dsh-chat-import')
+  mkdirSync(registryDir, { recursive: true })
+  const sessions = new Map() // id → { header, events }
+  const attached = []
+  const registered = []
+  let commandDef = null
+
+  const fs = {
+    async resolve(path) { return { targetKey: path, displayPath: path } },
+    async stat(target) {
+      try {
+        const st = statSync(target.targetKey)
+        return { type: st.isDirectory() ? 'directory' : 'file', size: st.size, version: String(st.mtimeMs) }
+      } catch { return undefined }
+    },
+    async readText(target) { return readFileSync(target.targetKey, 'utf8') },
+    async listDir() { return [] },
+    async writeText(target, content) { writeFileSync(target.targetKey, content, 'utf8'); return { path: target.targetKey } },
+    processPath(target) { return target.targetKey },
+  }
+  const persistence = {
+    async create(meta) { sessions.set(meta.id, { header: meta, events: [] }) },
+    async append(id, events) { const s = sessions.get(id); if (s) s.events.push(...events) },
+    async list() { return [...sessions.values()].map((s) => s.header) },
+    async locate() { return undefined },
+    async readFrom() { return undefined },
+  }
+  const workspaces = new Map()
+  const workspaceRegistry = {
+    async resolveByPath(p) { return workspaces.get(p) ?? null },
+    async create(p) {
+      // 模拟真实 workspaceRegistry：路径必须真实存在（fs.realpath 校验），
+      // 不存在 → 失败 → attachToWorkspace 触发 REQ-39-lite 回退源目录
+      let real = null
+      try { if (statSync(p).isDirectory()) real = p } catch { real = null }
+      if (!real) return undefined
+      const ws = { path: p, attachSession: async (id) => attached.push({ ws: p, id }) }
+      workspaces.set(p, ws)
+      return ws
+    },
+  }
+  const ctx = {
+    fs,
+    sessionPersistence: persistence,
+    workspaceRegistry,
+    tools: { register(def) { registered.push(def); return () => {} } },
+    get(service) {
+      if (service === 'workspaceRegistry') return workspaceRegistry
+      if (service === 'sessionPersistence') return persistence
+      return undefined // agentDefaultModel / llm 缺失 → 预算回退默认（不报错）
+    },
+    inject(serviceList, cb) {
+      if (Array.isArray(serviceList) && serviceList.includes('commands')) {
+        cb({ ...ctx, commands: { register(def) { commandDef = def; return () => {} } } })
+      }
+      return undefined
+    },
+  }
+  return { ctx, registryDir, sessions, attached, registered, getCommand: () => commandDef }
+}
+
+function setup() {
+  const env = makeCtx()
+  registerTools(env.ctx, env.registryDir)
+  registerImportCommand(env.ctx)
+  const cmd = env.getCommand()
+  assert.ok(cmd, 'commands.register 应被调用（commands 服务在场）')
+  return { ...env, cmd }
+}
+
+test('REQ-42 /import 命令注册契约（name/description/input.hint）', () => {
+  const { cmd } = setup()
+  assert.equal(cmd.name, 'import')
+  assert.equal(cmd.input.hint, '<source> <path>')
+  assert.ok(cmd.description.includes('/import <source> <path>'))
+  assert.equal(typeof cmd.handler, 'function')
+})
+
+test('REQ-42 /import claude <path>：单文件导入成功并落盘会话', async () => {
+  const { cmd, sessions, attached } = setup()
+  const file = join(mkdtempSync(join(tmpdir(), 'dsh-cmd-src-')), 'cmd-sess.jsonl')
+  writeFileSync(file, simpleClaudeJsonl('cmd-sess'), 'utf8')
+
+  const out = await cmd.handler({ rawInput: 'claude ' + file })
+  assert.equal(out.kind, 'success')
+  assert.ok(out.text.includes('已导入'), 'text: ' + out.text)
+  assert.ok(out.text.includes('cmd-sess'), 'text 含会话 id: ' + out.text)
+  assert.ok([...sessions.keys()].some((id) => id.includes('cmd-sess')),
+    '会话已落盘（import-<src> 前缀）: ' + [...sessions.keys()].join(','))
+  // REQ-39-lite：cwd 不可解析 → 回退源目录归组（mkdtemp 目录存在）
+  assert.ok(attached.length > 0, '已归组到工作区')
+  assert.ok(attached[0].ws.includes('cmd-src-'), '归组到源目录: ' + attached[0].ws)
+})
+
+test('REQ-42 /import：幂等重导跳过（源未变）', async () => {
+  const { cmd } = setup()
+  const file = join(mkdtempSync(join(tmpdir(), 'dsh-cmd-src2-')), 'cmd-sess.jsonl')
+  writeFileSync(file, simpleClaudeJsonl('cmd-sess'), 'utf8')
+
+  const first = await cmd.handler({ rawInput: 'claude ' + file })
+  assert.equal(first.kind, 'success')
+  const second = await cmd.handler({ rawInput: 'claude ' + file })
+  assert.equal(second.kind, 'success')
+  assert.ok(second.text.includes('已存在'), '重导应幂等跳过: ' + second.text)
+})
+
+test('REQ-42 /import：工具全名 import_claude 与客户端来源 id claude-code 均接受', async () => {
+  const { cmd } = setup()
+  const file = join(mkdtempSync(join(tmpdir(), 'dsh-cmd-src3-')), 'cmd-sess.jsonl')
+  writeFileSync(file, simpleClaudeJsonl('cmd-sess'), 'utf8')
+
+  const a = await cmd.handler({ rawInput: 'import_claude ' + file })
+  assert.equal(a.kind, 'success', a.text)
+  const b = await cmd.handler({ rawInput: 'claude-code ' + file })
+  assert.equal(b.kind, 'success', b.text)
+})
+
+test('REQ-42 /import：未知来源报错', async () => {
+  const { cmd } = setup()
+  const out = await cmd.handler({ rawInput: 'foobar C:\\x.jsonl' })
+  assert.equal(out.kind, 'error')
+  assert.ok(out.text.includes('未知来源'), out.text)
+})
+
+test('REQ-42 /import：缺 path 报用法', async () => {
+  const { cmd } = setup()
+  const out = await cmd.handler({ rawInput: 'claude' })
+  assert.equal(out.kind, 'error')
+  assert.ok(out.text.includes('用法'), out.text)
+  const empty = await cmd.handler({ rawInput: '' })
+  assert.equal(empty.kind, 'error')
+  assert.ok(empty.text.includes('用法'), empty.text)
+})

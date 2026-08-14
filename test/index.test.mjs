@@ -222,11 +222,12 @@ function makeCtx(tree, opts = {}) {
       if (services[service] !== undefined) return services[service]
       return undefined
     },
-    // 模拟 Cordis ctx.inject：依赖可用（webServer 在场）才同步执行回调；缺依赖
-    // （noWebServer）时不执行——对齐真实 Cordis「依赖可用再启动回调」语义。
+    // 模拟 Cordis ctx.inject：依赖可用（webServer 在场 / 服务在 ctx 上存在）才同步
+    // 执行回调；缺依赖（noWebServer / commands 缺席）时不执行——对齐真实 Cordis
+    // 「依赖可用再启动回调」语义。
     inject(serviceList, cb) {
       const list = Array.isArray(serviceList) ? serviceList : Object.keys(serviceList || {})
-      if (list.every((s) => (s === 'webServer' ? !opts.noWebServer : true))) return cb(ctx)
+      if (list.every((s) => (s === 'webServer' ? !opts.noWebServer : ctx[s] !== undefined))) return cb(ctx)
       return undefined
     },
     tools: {

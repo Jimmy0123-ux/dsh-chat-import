@@ -21,6 +21,7 @@
     "lib/imports.mjs",
     "lib/backfill.mjs",
     "lib/client.js",
+    "lib/command.mjs",
     "lib/discovery.mjs",
     "lib/budget.mjs",
     "lib/import-core.mjs",

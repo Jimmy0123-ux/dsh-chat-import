@@ -27,6 +27,7 @@
 import { resolveRegistryDir } from './lib/imports.mjs'
 import { registerTools } from './lib/tools.mjs'
 import { registerPanelRoutes } from './lib/panel.mjs'
+import { registerImportCommand } from './lib/command.mjs'
 import { exportClaudeSession } from './lib/export-tool.mjs'
 import { readOpencodeDb } from './lib/opencode.mjs'
 import { readZcodeDb } from './lib/zcode.mjs'
@@ -49,6 +50,9 @@ function apply(ctx) {
   ctx.inject(['webServer'], (webCtx) => {
     registerPanelRoutes(ctx, webCtx.webServer, registryDir)
   })
+  // REQ-42 /import 命令面：commands 同样可选（headless / CLI 会话可能不挂载），
+  // 服务可用时注册（不阻塞插件激活）。
+  registerImportCommand(ctx)
 }
 
 export { apply, inject, name, readOpencodeDb, readZcodeDb, exportClaudeSession }
