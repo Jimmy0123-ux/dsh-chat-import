@@ -1,57 +1,58 @@
-<p align="center">
-  <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a>
-</p>
+<div align="center">
 
-<p align="center">
-  <img src="assets/import.svg" width="120" alt="dsh-chat-import">
-</p>
+# 📥 DSH Chat Import
 
-# DSH Chat Import
+**把 13 种外部 Agent 聊天历史全保真导入 DeepSeek Harness 为可继续（resume）会话——并可导出 / 同步回 Claude Code。**
+
+[![English](https://img.shields.io/badge/Language-English-blue?style=for-the-badge)](README.md)
+[![简体中文](https://img.shields.io/badge/Language-简体中文-blue?style=for-the-badge)](#)
+
+[![npm version](https://img.shields.io/npm/v/dsh-chat-import?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/dsh-chat-import)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-chat-import?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/dsh-chat-import)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
+[![Node.js >= 22.13](https://img.shields.io/badge/Node.js-%3E%3D22.13-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](package.json)
+[![CI](https://img.shields.io/github/actions/workflow/status/Nwflower/dsh-chat-import/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml)
+[![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nwflower/dsh-chat-import)
+
+[💡 概念](#-概念) · [✨ 功能特性](#-功能特性) · [🗂 支持的来源](#-支持的来源) · [🚀 快速开始](#-快速开始) · [🛠 使用](#-使用) · [🔑 关键行为](#-关键行为) · [🏗️ 技术栈](#-技术栈) · [🗺️ 路线图](#-路线图) · [🤝 贡献](#-贡献)
+
+</div>
 
 > **一个插件，13 种来源** —— 全保真导入 DeepSeek Harness，无缝续聊，并可导出 / 同步回 Claude Code。
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/dsh-chat-import"><img src="https://img.shields.io/npm/v/dsh-chat-import" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/dsh-chat-import"><img src="https://img.shields.io/npm/dm/dsh-chat-import" alt="npm downloads"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license: MIT"></a>
-  <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.13-339933?logo=node.js&logoColor=white" alt="Node.js >= 22.13"></a>
-  <a href="https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml"><img src="https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/Nwflower/dsh-chat-import"><img src="https://img.shields.io/github/stars/Nwflower/dsh-chat-import" alt="GitHub stars"></a>
-  <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="Awesome DSH Plugin"></a>
-</p>
+<div align="center">
 
-<p align="center">
-  <b>已收录于：</b> <a href="https://github.com/0xsline/awesome-deepseek-harness">Awesome DeepSeek Harness</a> · <a href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin">Awesome DSH Plugin</a> · <a href="https://github.com/Dominic789654/awesome-deepseek-harness">Awesome DSH Plugins</a> · <a href="https://www.npmjs.com/package/dsh-chat-import">npm</a>
-  &nbsp;&nbsp;·&nbsp;&nbsp; <b>更新日志（英文）：</b> <a href="CHANGELOG.md">CHANGELOG.md</a>
-</p>
+<img src="./assets/image-20260814205401839.png" alt="从多个来源导入会话到侧边栏面板" width="600" />
+
+**已收录于：** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import) · [更新日志（英文）](CHANGELOG.md)
+
+</div>
+
+---
+
+## 💡 概念
+
 `dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw、Pi Coding Agent、Hermes 与 Kimi CLI** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区。
-
-<img src="./assets/image-20260814205401839.png" alt="可以从多个来源导入会话" style="zoom: 67%;" />
 
 反向方向同样覆盖：`export_claude` 把 DSH 会话序列化回 Claude Code JSONL（只读——绝不修改你的 DSH 日志），Claude Code 可用 `--resume` 加载续聊；`sync_to_claude` 再把会话新增轮次增量写回 Claude Code 文件——带守卫、绝不静默覆盖。
 
+---
+
 ## ✨ 功能特性
 
-**📥 导入**
+| 分类 | 特性 | 说明 |
+| --- | --- | --- |
+| 导入 | **13 种来源，一个插件** | 每种来源一条命令——从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录。 |
+| 导入 | **全保真** | 工具调用与结果、思考块、标题、模型与时间戳，源有记录就原样保留。 |
+| 导入 | **批量导入** | 指向一个目录（或整个数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。 |
+| 续聊 | **可无缝续聊** | 打开导入的会话，从源记录停下的地方继续对话。 |
+| 续聊 | **自动归组工作区** | 会话按源 `cwd` 挂进对应工作区（本机无此路径时回退到源文件所在目录）——不再「未分组」。 |
+| 反向 | **导出回 Claude Code** | `export_claude` 把任意 DSH 会话（导入的或原生的）写到 `<outputDir>/<slug>/<uuid>.jsonl`，可直接 `--resume`。 |
+| 反向 | **反向同步** | `sync_to_claude` 把会话新增完整轮次追加回 Claude Code 文件——带守卫、绝不覆盖。 |
+| 保护 | **幂等 + 增量** | 重复导入未变化的源直接跳过；增长的源只追加新增轮次。 |
+| 保护 | **上下文预算保护** | 超长会话按安全上下文预算裁剪，裁剪结果显式上报。 |
 
-- **13 种来源，一个插件** — 每种来源一条命令，从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录。
-- **🔍 全保真** — 工具调用与结果、思考块、标题、模型与时间戳，源有记录就原样保留。
-- **📦 批量导入** — 指向一个目录（或整个数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。
-
-**▶️ 续聊**
-
-- **可无缝续聊** — 打开导入的会话，从源记录停下的地方继续对话。
-- **🗂 自动归组工作区** — 会话按源 `cwd` 挂进对应工作区（本机无此路径时回退到源文件所在目录）——不再「未分组」。
-
-**🔄 反向**
-
-- **📤 导出回 Claude Code** — `export_claude` 把任意 DSH 会话（导入的或原生的）写到 `<outputDir>/<slug>/<uuid>.jsonl`，可直接 `--resume`。
-- **🔄 反向同步** — `sync_to_claude` 把会话新增完整轮次追加回 Claude Code 文件——带守卫、绝不覆盖。
-
-**🛡️ 保护**
-
-- **🔁 幂等 + 增量** — 重复导入未变化的源直接跳过；增长的源只追加新增轮次。
-- **🧮 上下文预算保护** — 超长会话按安全上下文预算裁剪，裁剪结果显式上报。
+---
 
 ## 🗂 支持的来源
 
@@ -73,6 +74,8 @@
 
 每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、时间戳、工具调用与结果、思考过程。数据较少的源导入其已有的内容；源格式无法保留的部分，会在导入报告里显式标注（如 Kimi 镜像进父 wire 的 `SubagentEvent` 子代理对话会跳过——父 `Agent` 工具调用与结果保留，子代理自己的 `subagents/<agentId>/wire.jsonl` 可直接导入）。
 
+---
+
 ## 🚀 快速开始
 
 **1. 安装** — 把插件加进 profile：
@@ -90,6 +93,15 @@ import_claude({ path: "~/.claude/projects" })
 
 **3. 续聊** — 刷新一次会话列表，打开导入的会话，继续对话——它会从源记录停下的地方无缝接上。
 
+<details>
+<summary><b>卸载</b></summary>
+
+`dsh plugin` 把插件的 bundle 声明收编进 profile；重启 dsh 后插件生效。卸载：从 profile 的 bundles 移除 `import-claude` insert 行并重启 dsh。已导入的会话保留在 DSH 数据目录，不受影响。
+
+</details>
+
+---
+
 ## 🛠 使用
 
 > **注意**：导入会即时落盘，但 DSH 的会话列表不会自动刷新——导入后请刷新页面（或会话列表）才能看到新会话。
@@ -105,15 +117,21 @@ import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
 
 `import_chatgpt` / `import_opencode` / `import_zcode` / `import_hermes` 恒返回批量结果——一个文件 / 数据库包含全部会话，一次调用即可让每段对话成为独立会话。
 
+<details>
+<summary><b>导入参数与行为</b></summary>
+
 - `preview: true`（别名 `dryRun: true`）— **只读**运行：照常解析 / 读取 / 转换，但**零副作用**、不落盘。去掉该参数再调一次即正式导入。
 - `force: true` — 即使已导入，也以新 id（`import-<sessionId>-<n>`）另存一份**完整副本**；旧会话绝不修改。
 - `sessionId`（可选）— 覆盖目标 DSH 会话 id（默认 `import-<源sessionId>`）。
+- **已归档会话可重新导入** — DSH 的归档会把会话从侧边栏隐藏，但保留在持久化里（及其 id）——面板与 `scan_discover` 现在把已归档目标标记为 **已归档 / Archived** 并提供重新导入按钮。再次导入以新 id（`import-<sessionId>-<n>`，与 `force` 同一铸键）另存完整副本，不触碰已归档会话；多会话源（chatgpt / opencode / zcode / hermes 库）内逐会话同样适用。
 - **增量续写（重导）** — 重导同一源路径绝不改写已导入历史：未变文件跳过（`already-imported`，不重读）；增长文件只把**新增轮次** append 进同一会话（`appended`）；截断文件检测并上报（`sourceShrunk`）——需要完整新副本时用 `force: true`：
 
 ```
 import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl" })
 // 未变化 → "already-imported" · 增长 → "appended"（只追加新轮次）
 ```
+
+</details>
 
 每次导入结果都会上报 `status` 与任何异常——畸形行、疑似敏感信息、逐源丢弃——绝不静默吞掉。
 
@@ -172,6 +190,8 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 - **迁移提示（默认开）**——当会话工作区存在可发现的（已导入或可导入）外部聊天历史时，注入一行 `PromptContext`，告诉模型如何继续（`/import <source> <path>` 命令或侧边栏面板）。per-project 记忆保证同一工作区只提示一次；设 `DSH_IMPORT_SESSION_HINT=0` 关闭。
 - **Claude 上下文桥接（默认关）**——设 `DSH_IMPORT_CONTEXT_BRIDGE=1` 把 Claude Code 的上下文资产桥进会话：`~/.claude/memory/*.md`（按 `feedback` > `project` > `reference` > `user` 分组、8 KiB 上限、mtime 缓存重读）、项目根 `CLAUDE.md`、以及 `~/.claude/skills/*/SKILL.md`（注册为该 agent 独有的 `claude-<name>` 技能）。
 
+---
+
 ## 🔑 关键行为
 
 - **只读导入** — 源转录与数据库绝不改写；导入的 DSH 历史 append-only（既有事件绝不修改）。
@@ -181,18 +201,57 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 - **失败要大声，绝不静默** — 畸形行与疑似敏感信息按位置计数上报（行号 / kind——绝不输出内容）；源格式无法保留的部分在导入报告里显式标注。
 - **沙箱** — 读取工作区之外的源文件或写工作区之外的导出目标，需要会话沙箱放行该路径。
 
-## ⚙️ 兼容性
+---
 
-面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 367 个用例。
+## 🏗️ 技术栈
 
-## 📦 安装与卸载
+| 层 | 技术 |
+| --- | --- |
+| 运行时 | Node.js ≥ 22.13 — 纯 ESM，零构建 |
+| 平台 | DeepSeek Harness 插件 — Cordis「一切皆插件」，只消费公开 host 服务 |
+| 解析器 | Claude/Codex/Cursor/Gemini/Reasonix/Pi/Kimi JSONL · ChatGPT JSON · opencode/ZCode/Hermes SQLite（`node:sqlite`） |
+| UI | dsh web 侧边栏面板（手写 CJS bundle）· 经 `@deepseek-ai/dsh-client-locale` 多语言 |
+| CI | GitHub Actions — test / lint / `check:linux` 跨平台护栏 / headless 冒烟 |
 
-```bash
-dsh plugin --profile web add dsh-chat-import        # npm 包
-dsh plugin --profile web add -w link:/path/to/dsh-chat-import   # 本地源码（符号链接）
+```
+lib/
+├── convert/          # 纯函数按源转换器（零 DSH 依赖，可独立单测）
+├── export/           # 反向序列化器（DSH → Claude Code JSONL）
+├── imports.mjs       # 幂等导入 registry
+├── import-core.mjs   # 共享导入状态机
+├── toolkit.mjs       # makeImportTool 工厂 + IMPORT_SPECS
+├── panel.mjs         # 浏览器面板 JSON 路由
+├── command.mjs       # /import 斜杠命令
+├── prompt-hint.mjs   # 会话启动迁移提示（REQ-53）
+└── context-bridge.mjs # Claude memory / CLAUDE.md / skills 桥接（REQ-28）
 ```
 
-`dsh plugin` 把插件的 bundle 声明收编进 profile；重启 dsh 后插件生效。卸载：从 profile 的 bundles 移除 `import-claude` insert 行并重启 dsh。已导入的会话保留在 DSH 数据目录，不受影响。
+---
+
+## ⚙️ 兼容性
+
+面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 385 个用例。
+
+---
+
+## 🗺️ 路线图
+
+- [x] 13 种来源导入 + 反向导出 / 同步回 Claude Code
+- [x] 浏览器导入面板 + `/import` 斜杠命令 + 会话启动迁移提示与上下文桥接
+- [ ] Interchange IR v1 + 便携备份 bundle（REQ-18 / REQ-56）
+- [ ] `/import-all` 批量命令 · Codex 官方 App Server API 源（REQ-52）
+- [ ] 更多来源：Reasonix 桌面版、Claude-3p · Hermes lineage（REQ-45 / REQ-51）
+
+---
+
+## 🤝 贡献
+
+欢迎贡献——fork 本仓库，新建 `feature/<name>` 分支，提交 PR。
+
+- **测试：** `npm test` · **跨平台护栏：** `npm run check:linux`
+- 仓库规范见 [AGENTS.md](AGENTS.md)：conventional commit（中文）、双语 README 必须保持同步、插件只消费公开 dsh host 服务、多会话并发走文件认领协议。
+
+---
 
 ## 📄 许可证
 

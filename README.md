@@ -1,56 +1,58 @@
-<p align="center">
-  <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a>
-</p>
+<div align="center">
 
-<p align="center">
-  <img src="assets/import.svg" width="120" alt="dsh-chat-import">
-</p>
+# 📥 DSH Chat Import
 
-# DSH Chat Import
+**Import 13 external agent conversation histories into DeepSeek Harness as full-fidelity, resumable sessions — and export / sync back to Claude Code.**
+
+[![English](https://img.shields.io/badge/Language-English-blue?style=for-the-badge)](#)
+[![简体中文](https://img.shields.io/badge/Language-简体中文-blue?style=for-the-badge)](README.zh-CN.md)
+
+[![npm version](https://img.shields.io/npm/v/dsh-chat-import?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/dsh-chat-import)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-chat-import?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/dsh-chat-import)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
+[![Node.js >= 22.13](https://img.shields.io/badge/Node.js-%3E%3D22.13-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](package.json)
+[![CI](https://img.shields.io/github/actions/workflow/status/Nwflower/dsh-chat-import/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml)
+[![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nwflower/dsh-chat-import)
+
+[💡 Concept](#-concept) · [✨ Features](#-features) · [🗂 Supported sources](#-supported-sources) · [🚀 Quick start](#-quick-start) · [🛠 Usage](#-usage) · [🔑 Key behaviors](#-key-behaviors) · [🏗️ Tech Stack](#-tech-stack) · [🗺️ Roadmap](#-roadmap) · [🤝 Contributing](#-contributing)
+
+</div>
 
 > **13 agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, and export / sync back to Claude Code.
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/dsh-chat-import"><img src="https://img.shields.io/npm/v/dsh-chat-import" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/dsh-chat-import"><img src="https://img.shields.io/npm/dm/dsh-chat-import" alt="npm downloads"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license: MIT"></a>
-  <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.13-339933?logo=node.js&logoColor=white" alt="Node.js >= 22.13"></a>
-  <a href="https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml"><img src="https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/Nwflower/dsh-chat-import"><img src="https://img.shields.io/github/stars/Nwflower/dsh-chat-import" alt="GitHub stars"></a>
-  <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="Awesome DSH Plugin"></a>
-</p>
+<div align="center">
 
-<p align="center">
-  <b>Listed in:</b> <a href="https://github.com/0xsline/awesome-deepseek-harness">Awesome DeepSeek Harness</a> · <a href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin">Awesome DSH Plugin</a> · <a href="https://github.com/Dominic789654/awesome-deepseek-harness">Awesome DSH Plugins</a> · <a href="https://www.npmjs.com/package/dsh-chat-import">npm</a>
-  &nbsp;&nbsp;·&nbsp;&nbsp; <b>Changelog:</b> <a href="CHANGELOG.md">CHANGELOG.md</a>
-</p>
+<img src="./assets/image-20260814205401839.png" alt="Import sessions from multiple sources into the dsh sidebar panel" width="600" />
+
+**Listed in:** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import) · [Changelog](CHANGELOG.md)
+
+</div>
+
+---
+
+## 💡 Concept
 
 `dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes and Kimi CLI** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd`.
 
 The reverse direction is covered too: `export_claude` serializes a DSH session back into a Claude Code JSONL transcript that Claude Code can load with `--resume` (read-only — your DSH log is never modified), and `sync_to_claude` incrementally appends a session's new turns back to a Claude Code file — guarded, never silently overwriting.
 
+---
+
 ## ✨ Features
 
-**📥 Import**
+| Category | Feature | Description |
+| --- | --- | --- |
+| Import | **13 sources, one plugin** | One tool per source — from Claude Code JSONL and Codex rollouts to SQLite databases and session directories. |
+| Import | **Full fidelity** | Tool calls & results, thinking blocks, titles, models and timestamps carry over wherever the source records them. |
+| Import | **Batch import** | Point at a directory (or a whole database) and every file / conversation becomes its own session, with a per-file summary. |
+| Resume | **Seamlessly resumable** | Open an imported session and keep chatting exactly where the source left off. |
+| Resume | **Auto workspace grouping** | Sessions land in the workspace of their source `cwd` (falling back to the source file's directory when that path does not exist locally) — no more "ungrouped". |
+| Reverse | **Export to Claude Code** | `export_claude` writes any DSH session (imported or native) to `<outputDir>/<slug>/<uuid>.jsonl`, ready for `--resume`. |
+| Reverse | **Sync back** | `sync_to_claude` appends a session's new complete turns to its Claude Code file — guarded, never overwriting. |
+| Protection | **Idempotent + incremental** | Re-importing an unchanged source skips it; a grown source appends only its new turns. |
+| Protection | **Context budget protection** | Oversized sessions are trimmed to fit a safe context budget, and the trim is reported. |
 
-- **13 sources, one plugin** — one tool per source, from Claude Code JSONL and Codex rollouts to SQLite databases and session directories.
-- **🔍 Full fidelity** — tool calls & results, thinking blocks, titles, models and timestamps carry over wherever the source records them.
-- **📦 Batch import** — point at a directory (or a whole database) and every file / conversation becomes its own session, with a per-file summary.
-
-**▶️ Resume**
-
-- **Seamlessly resumable** — open an imported session and keep chatting exactly where the source left off.
-- **🗂 Auto workspace grouping** — sessions land in the workspace of their source `cwd` (falling back to the source file's directory when that path does not exist locally) — no more "ungrouped".
-
-**🔄 Reverse**
-
-- **📤 Export to Claude Code** — `export_claude` writes any DSH session (imported or native) to `<outputDir>/<slug>/<uuid>.jsonl`, ready for `--resume`.
-- **🔄 Sync back** — `sync_to_claude` appends a session's new complete turns to its Claude Code file — guarded, never overwriting.
-
-**🛡️ Protection**
-
-- **🔁 Idempotent + incremental** — re-importing an unchanged source skips it; a grown source appends only its new turns.
-- **🧮 Context budget protection** — oversized sessions are trimmed to fit a safe context budget, and the trim is reported.
+---
 
 ## 🗂 Supported sources
 
@@ -72,6 +74,8 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 
 Each import preserves what the source actually records — session id, `cwd`, title, model, timestamps, tool calls & results, reasoning. Sources that record less import what exists; anything a format cannot preserve is explicitly flagged in the import report (e.g. Kimi sub-agent conversations mirrored into the parent wire as `SubagentEvent` are skipped — the parent's `Agent` tool call & result are kept, and a sub-agent's own `subagents/<agentId>/wire.jsonl` can be imported directly).
 
+---
+
 ## 🚀 Quick start
 
 **1. Install** — add the plugin to a profile:
@@ -89,6 +93,15 @@ import_claude({ path: "~/.claude/projects" })
 
 **3. Resume** — refresh the session list once, open the imported session, and continue chatting — it resumes exactly where the source left off.
 
+<details>
+<summary><b>Uninstall</b></summary>
+
+`dsh plugin` folds the plugin's bundle declaration into the profile; the plugin becomes active after restarting dsh. To uninstall, remove the `import-claude` insert line from the profile's bundles and restart dsh. Already-imported sessions stay in the DSH data directory and are unaffected.
+
+</details>
+
+---
+
 ## 🛠 Usage
 
 > **Note:** imports persist to disk immediately, but the DSH session list does not auto-refresh — refresh the page (or the session list) after importing to see the new sessions.
@@ -104,15 +117,21 @@ import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
 
 `import_chatgpt` / `import_opencode` / `import_zcode` / `import_hermes` always return a batch result — one file / database holds all conversations, so each conversation becomes its own session in a single call.
 
+<details>
+<summary><b>Import parameters & behaviors</b></summary>
+
 - `preview: true` (alias `dryRun: true`) — run the import **read-only**: resolve, read and convert exactly like a real import, but persist nothing (zero side effects). Drop the flag and call again to actually import.
 - `force: true` — create a **fresh full copy** under a new id (`import-<sessionId>-<n>`) even when the source was already imported; the old session is never modified.
 - `sessionId` (optional) — override the target DSH session id (default `import-<source sessionId>`).
+- **Archived sessions are re-importable** — DSH's archive hides a session from the sidebar but keeps it (and its id) in persistence, so the panel and `scan_discover` now report an archived target as **已归档 / Archived** with a re-import button. Importing again creates a fresh copy under a new id (`import-<sessionId>-<n>`, same minting as `force`) without touching the archived session; the same applies per-session inside multi-session sources (chatgpt / opencode / zcode / hermes DBs).
 - **Incremental re-import** — re-importing the same source never rewrites imported history. Unchanged files are skipped (`already-imported`) without re-reading; grown files append only their **new turns** to the same session (`appended`); truncated files are detected and reported (`sourceShrunk`) — use `force: true` for a complete fresh copy:
 
 ```
 import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl" })
 // unchanged → "already-imported" · grew → "appended" (new turns only)
 ```
+
+</details>
 
 Every import result reports its `status` and any anomalies — malformed lines, suspected secrets, per-source drops — nothing is silently swallowed.
 
@@ -171,6 +190,8 @@ Two optional hooks run when a DSH session starts (the host `agent/session-start`
 - **Migration hint (default on)** — when the session's workspace has discoverable external history (already-imported or importable), a one-line `PromptContext` is injected telling the model how to continue (`/import <source> <path>` or the sidebar panel). Per-project memory shows the hint only once per workspace; set `DSH_IMPORT_SESSION_HINT=0` to disable.
 - **Claude context bridge (default off)** — set `DSH_IMPORT_CONTEXT_BRIDGE=1` to bridge Claude Code context assets into the session: `~/.claude/memory/*.md` (grouped `feedback` > `project` > `reference` > `user`, 8 KiB cap, re-read via mtime cache), the project-root `CLAUDE.md`, and `~/.claude/skills/*/SKILL.md` (registered as `claude-<name>` skills on this agent only).
 
+---
+
 ## 🔑 Key behaviors
 
 - **Read-only import** — source transcripts and databases are never rewritten; imported DSH history is append-only (existing events are never modified).
@@ -180,18 +201,57 @@ Two optional hooks run when a DSH session starts (the host `agent/session-start`
 - **Fail loudly, never silently** — malformed lines and suspected secrets are counted and reported by position (line numbers / kind — content is never output); anything a source format cannot preserve is explicitly flagged in the import report.
 - **Sandbox** — reading source files or writing exports outside the workspace requires the session sandbox to allow the path.
 
-## ⚙️ Compatibility
+---
 
-Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6`) and requires **Node.js >= 22.13** (the first release where `node:sqlite` is available without a flag). `npm test` — 367 cases.
+## 🏗️ Tech Stack
 
-## 📦 Install & uninstall
+| Layer | Technology |
+| --- | --- |
+| Runtime | Node.js ≥ 22.13 — pure ESM, zero build |
+| Platform | DeepSeek Harness plugin — Cordis `everything-is-a-plugin`, consumes only public host services |
+| Parsers | Claude/Codex/Cursor/Gemini/Reasonix/Pi/Kimi JSONL · ChatGPT JSON · opencode/ZCode/Hermes SQLite (`node:sqlite`) |
+| UI | dsh web sidebar panel (hand-written CJS bundle) · i18n via `@deepseek-ai/dsh-client-locale` |
+| CI | GitHub Actions — test / lint / `check:linux` cross-platform guard / headless smoke |
 
-```bash
-dsh plugin --profile web add dsh-chat-import        # npm package
-dsh plugin --profile web add -w link:/path/to/dsh-chat-import   # local checkout (symlink)
+```
+lib/
+├── convert/          # pure per-source converters (zero DSH deps, unit-tested)
+├── export/           # reverse serializer (DSH → Claude Code JSONL)
+├── imports.mjs       # idempotent import registry
+├── import-core.mjs   # shared import state machine
+├── toolkit.mjs       # makeImportTool factory + IMPORT_SPECS
+├── panel.mjs         # browser panel JSON routes
+├── command.mjs       # /import slash command
+├── prompt-hint.mjs   # session-start migration hint (REQ-53)
+└── context-bridge.mjs # Claude memory / CLAUDE.md / skills bridge (REQ-28)
 ```
 
-`dsh plugin` folds the plugin's bundle declaration into the profile; the plugin becomes active after restarting dsh. To uninstall, remove the `import-claude` insert line from the profile's bundles and restart dsh. Already-imported sessions stay in the DSH data directory and are unaffected.
+---
+
+## ⚙️ Compatibility
+
+Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6`) and requires **Node.js >= 22.13** (the first release where `node:sqlite` is available without a flag). `npm test` — 385 cases.
+
+---
+
+## 🗺️ Roadmap
+
+- [x] 13 import sources + reverse export / sync back to Claude Code
+- [x] Browser import panel + `/import` slash command + session-start migration hint & context bridge
+- [ ] Interchange IR v1 + portable backup bundle (REQ-18 / REQ-56)
+- [ ] `/import-all` batch command · Codex App Server API source (REQ-52)
+- [ ] More sources: Reasonix desktop, Claude-3p · Hermes lineage (REQ-45 / REQ-51)
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome — fork the repo, create a `feature/<name>` branch, and open a PR.
+
+- **Tests:** `npm test` · **Cross-platform guard:** `npm run check:linux`
+- Repo conventions live in [AGENTS.md](AGENTS.md): conventional commits (Chinese), bilingual README must stay in sync, plugin consumes only public dsh host services, multi-session coordination via the file-claim protocol.
+
+---
 
 ## 📄 License
 
