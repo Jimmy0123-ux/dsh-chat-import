@@ -118,9 +118,18 @@ function makeCtx(tree, opts = {}) {
   const versions = opts.versions || {}
   const services = opts.services || {}
   const versionOf = (path, v) => (versions[path] !== undefined ? versions[path] : contentVersion(v))
+  // 分隔符归一（跨平台：代码 join() 在 Linux 产正斜杠、Windows 产反斜杠）
+  const norm = (p) => String(p).replace(/\\/g, '/')
 
   const fs = {
     async resolve(path) { return { targetKey: path, displayPath: path } },
+    // 跨平台分隔符兜底：代码里的 join() 在 Linux（posix）对反斜杠合成路径会产出
+    // 混合分隔符（如 'D:\\demo\\x/summary.json'），而测试树键是反斜杠——查树按
+    // 原键 + 正斜杠归一 + 反斜杠归一三种形式都试（Windows 下 join 产反斜杠直中）。
+    lookup(p) {
+      const f = norm(p)
+      return tree[p] ?? tree[f] ?? tree[f.replace(/\//g, '\\')]
+    },
     // REQ-16 导出写面：createIfAbsent 对已存在（tree 已 seed 或已写过）路径抛 EEXIST，
     // 模拟「新 uuid + createIfAbsent 不覆盖」双保险的第二道闸。
     // REQ-36 写回写面：replaceIfVersion 只在观测版本上替换（失配抛 FS_STALE_VERSION，
@@ -145,7 +154,7 @@ function makeCtx(tree, opts = {}) {
     },
     async stat(target) {
       const path = target.targetKey
-      const v = tree[path]
+      const v = this.lookup(path)
       if (v !== undefined) {
         // 内容派生指纹：size + version（变则 version 变，REQ-24 短路径判定依据）
         return v === 'dir' ? { type: 'directory' } : { type: 'file', size: v.length, version: versionOf(path, v) }
@@ -161,7 +170,7 @@ function makeCtx(tree, opts = {}) {
     },
     async readText(target) {
       reads.count++
-      const v = tree[target.targetKey]
+      const v = this.lookup(target.targetKey)
       if (v === undefined || v === 'dir') throw new Error('FS_NOT_FOUND ' + target.targetKey)
       return v
     },
@@ -603,7 +612,7 @@ test('import_chatgpt 单文件：一文件多会话、恒返回 batch、schema �
   assertImportedMarker(saved2.events, { tool: 'chatgpt', sourceId: 'conv-002', sourcePath: 'D:\\demo\\chatgpt\\conversations.json' })
   // ChatGPT 无 cwd → REQ-39-lite 回退归到导出文件所在目录（否则堆进「未分组」找不到）
   assert.equal(attached.length, 2)
-  assert.ok(attached.every((a) => a.ws === 'D:\\demo\\chatgpt'))
+  assert.ok(attached.every((a) => a.ws === dirname('D:\\demo\\chatgpt\\conversations.json')))
   assert.deepEqual(attached.map((a) => a.id).sort(), ['import-conv-001', 'import-conv-002'])
 })
 
