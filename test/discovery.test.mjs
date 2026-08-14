@@ -1,5 +1,5 @@
 // discovery.test.mjs — REQ-25/REQ-40 会话发现单测：mock host（纯函数核心零真实 I/O）
-// 覆盖：claude/codex/reasonix/grokbuild/openclaw/hermes 六种格式发现（标题注入过滤、
+// 覆盖：claude/codex/reasonix/grokbuild/openclaw/pi/hermes 七种格式发现（标题注入过滤、
 // 项目名提取、sessionId、importStatus）、30s TTL 缓存命中不重读（可观测读计数）、
 // query 过滤、multi 源 partial 状态、chatgpt 显式路径、目录探测格式自拒。
 import { test, beforeEach } from 'node:test'
@@ -216,6 +216,36 @@ test('openclaw：sessions.json displayName 标题、项目名（记录 cwd > age
   assert.equal(b.project, 'main') // 无 cwd → agents/<agent> 布局回退
 })
 
+test('pi：会话头签名（version 字段）、session_info 名称标题、cwd 项目名、旁支/他格式自拒', async () => {
+  const root = join(HOME, '.pi', 'agent', 'sessions', '--demo-pi-proj--')
+  const s1 = join(root, '2026-06-01T10-00-00-000Z_019f0a11.jsonl')
+  const files = new Map([
+    [root, { type: 'dir' }],
+    [s1, { type: 'file', mtimeMs: 1786000002000, text: [
+      j({ type: 'session', version: 3, id: '019f0a11', timestamp: '2026-06-01T10:00:00.000Z', cwd: 'D:\\demo\\pi-proj' }),
+      j({ type: 'message', id: 'a1', parentId: null, timestamp: '2026-06-01T10:00:01.000Z', message: { role: 'user', content: '帮我重构这个模块', timestamp: 1786000001000 } }),
+      j({ type: 'session_info', id: 'z9', parentId: 'a1', timestamp: '2026-06-01T10:05:00.000Z', name: '重构模块讨论' }),
+    ].join('\n') }],
+    // 无 version 的 session 头（hermes/openclaw 形态）→ Pi 签名自拒
+    [join(root, 'sess-other.jsonl'), { type: 'file', text: [
+      j({ type: 'session', id: 'other', timestamp: '2026-06-01T10:00:00.000Z' }),
+      j({ type: 'message', message: { role: 'user', content: '不是 Pi' }, timestamp: '2026-06-01T10:01:00.000Z' }),
+    ].join('\n') }],
+  ])
+  const host = mockHost(files)
+
+  const { sessions, total } = await discoverSessions({ path: root, format: 'pi', host, imports: {} })
+  assert.equal(total, 1)
+  const s = sessions[0]
+  assert.equal(s.format, 'pi')
+  assert.equal(s.sessionId, '019f0a11')
+  assert.equal(s.title, '重构模块讨论') // session_info 名称优先
+  assert.equal(s.project, 'pi-proj') // 记录内 cwd basename
+  assert.equal(s.createdAt, Date.parse('2026-06-01T10:00:00.000Z'))
+  assert.equal(s.lastActiveAt, 1786000002000)
+  assert.equal(s.messageCount, null)
+})
+
 test('hermes：state.db 恒批量（复用读取器）+ db 不可用回退 JSONL', async () => {
   const root = join(HOME, '.hermes')
   const dbPath = join(root, 'state.db')
@@ -423,7 +453,7 @@ test('isInjectedTitle / normalizeTitle / layoutProject 纯函数', () => {
   assert.equal(layoutProject('/home/u/.cursor/projects/slug-c/agent-transcripts/abc/abc.jsonl', 'cursor'), 'slug-c')
 })
 
-test('FORMATS 与工具 schema enum 一致（11 种）', () => {
-  assert.equal(FORMATS.length, 11)
-  assert.deepEqual([...FORMATS].sort(), ['chatgpt', 'claude', 'codex', 'cursor', 'gemini', 'grokbuild', 'hermes', 'openclaw', 'opencode', 'reasonix', 'zcode'])
+test('FORMATS 与工具 schema enum 一致（12 种）', () => {
+  assert.equal(FORMATS.length, 12)
+  assert.deepEqual([...FORMATS].sort(), ['chatgpt', 'claude', 'codex', 'cursor', 'gemini', 'grokbuild', 'hermes', 'openclaw', 'opencode', 'pi', 'reasonix', 'zcode'])
 })

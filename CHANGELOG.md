@@ -11,11 +11,12 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ## [0.3.0] - 2026-08-14
 
-Third minor release — shipped 2026-08-14 with three new import sources (Grok
-Build, OpenClaw, Hermes — the 9th–11th), automatic session discovery with
-persistent scan bookmarks, import identification / retraction, zero-side-effect
-import preview, and the reverse export + incremental write-back bridge
-(`export_claude` / `sync_to_claude`). Release tag `v0.3.0` pending publish.
+Third minor release — shipped 2026-08-14 with four new import sources (Grok
+Build, OpenClaw, Hermes, Pi Coding Agent — the 9th–12th), automatic session
+discovery with persistent scan bookmarks, import identification / retraction,
+zero-side-effect import preview, and the reverse export + incremental
+write-back bridge (`export_claude` / `sync_to_claude`). Release tag `v0.3.0`
+pending publish.
 
 ### Added
 
@@ -42,10 +43,10 @@ import preview, and the reverse export + incremental write-back bridge
   corrupted or missing cache falls back to a full scan with a warning and never
   affects results.
 - **Automatic session discovery — `scan_discover`** (REQ-25) — a new
-  read-only tool that scans the known data roots of all **11 source
+  read-only tool that scans the known data roots of all **12 source
   formats** (Claude / Codex / ChatGPT CLI / Cursor / Gemini / Reasonix /
-  opencode / ZCode / Grok Build / OpenClaw / Hermes, plus ChatGPT web
-  exports) and returns a structured session index
+  opencode / ZCode / Grok Build / OpenClaw / Pi Coding Agent / Hermes,
+  plus ChatGPT web exports) and returns a structured session index
   (`format` / `sessionId` / `title` / `project` / `createdAt` /
   `lastActiveAt` / `messageCount` / `sourcePath` / `importStatus`) for
   previewing before a batch import. Optional `path` (scan root or single
@@ -136,6 +137,31 @@ import preview, and the reverse export + incremental write-back bridge
   descriptive note text instead of passing JS code through as `arguments`;
   conversion failures are counted (`droppedMalformedArgs`) and never break the
   message stream.
+- **Pi Coding Agent import — `import_pi`** — the 12th import source:
+  imports Pi Coding Agent session
+  JSONL (`~/.pi/agent/sessions/--<cwd>--/<timestamp>_<uuid>.jsonl`) as
+  resumable DSH sessions: header `id`/`timestamp`/`cwd` → session id / creation
+  time / workspace grouping, the tree structure rebuilt along the **active
+  branch only** (last entry → root walk via `id`/`parentId`; v1 linear files
+  chain in file order), `toolCall`/`toolResult` paired by `toolCallId` (orphan
+  results dropped and counted), `thinking` → `reasoning`, and
+  `bashExecution` / `custom` / `branchSummary` / `compactionSummary` injected
+  messages mapped with Pi’s own `convertToLlm` wording onto the adjacent
+  assistant step. Context compaction is respected by default (last summary +
+  `retainedTail` / legacy `firstKeptEntryId` range + tail) with an optional
+  `fullHistory: true` (part of the import-args fingerprint → `argsChanged` on
+  a value switch), `session_info` name → title, `model_change` / per-message
+  model → session / step model. Single-file and recursive-directory modes,
+  idempotent re-import, incremental append and budget trimming reuse the
+  shared import machinery. `scan_discover` gains the `pi` format (root
+  `~/.pi/agent/sessions`, header `version` as the format signature,
+  `session_info` name → title).
+- **Pi converter unit + integration coverage** — synthetic fixtures
+  (`pi-simple` / `pi-tool` / `pi-branch` / `pi-compaction` / `pi-v1`) covering
+  turn balance, tool pairing, active-branch walk, branch-summary reasoning,
+  compaction default vs `fullHistory`, v1 linear fallback and malformed-input
+  skipping; `import_pi` integration tests cover persist + workspace attach,
+  directory batch import, idempotency and the `fullHistory` args fingerprint.
 
 - **Incremental re-import** (REQ-24) — re-importing the same source path no
   longer just skips: a grown source file appends only its **new turns** to the
@@ -173,7 +199,7 @@ import preview, and the reverse export + incremental write-back bridge
   `sessions` sub-records: DB-level version/size fingerprinting, compaction
   shrinking turns → `sourceShrunk`, `fullHistory` in the args fingerprint →
   `argsChanged`).
-- **Shared `force: boolean` parameter** on all eleven import tools, and extended
+- **Shared `force: boolean` parameter** on all twelve import tools, and extended
   return shapes: single-mode `status` (`imported` / `already-imported` /
   `appended` / `skipped`) plus optional `appendedTurns`, `appendedEvents`,
   `appendedSkipped`, `sourceShrunk`, `changedInPlace`, `argsChanged`,
@@ -236,7 +262,7 @@ import preview, and the reverse export + incremental write-back bridge
   budget are left intact except for L1 single-block cropping. The pure core
   lives in `convert.mjs` (`estimateTokens` — CJK 1 token/char, ASCII 1
   token/4 chars — plus `cropContentBlocks`, `trimTurns`, `applyBudgetTrim`) and
-  is wired into all eleven sources before `synthesizeSession`; trimming reports
+  is wired into all twelve sources before `synthesizeSession`; trimming reports
   `trimmed: null` when nothing was actually cut.
 - **Adaptive import budget + explicit trim reporting** (REQ-37) —
   `resolveImportBudget` in `index.mjs` resolves the per-import context budget as

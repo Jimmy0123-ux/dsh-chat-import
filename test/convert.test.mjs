@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION, tailSessionEvents, codexCustomToolArguments, jsObjectLiteralToJson, estimateTokens, cropContentBlocks, trimTurns, applyBudgetTrim, TEXT_BLOCK_CHAR_LIMIT, TOOL_RESULT_CHAR_LIMIT } from '../convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertPiJsonl, convertOpencodeJson, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION, tailSessionEvents, codexCustomToolArguments, jsObjectLiteralToJson, estimateTokens, cropContentBlocks, trimTurns, applyBudgetTrim, TEXT_BLOCK_CHAR_LIMIT, TOOL_RESULT_CHAR_LIMIT } from '../convert.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -933,6 +933,108 @@ test('reasonixStemTime: desktop/subagent 命名解析、无或非法时间戳回
   assert.equal(reasonixStemTime('code-tmp'), null)
   assert.equal(reasonixStemTime('desktop-202613990000-1'), null) // 非法月份
 })
+// ---- Pi Coding Agent 会话 JSONL ----
+
+test('convertPiJsonl: 简单问答、头行元数据、平衡回合', () => {
+  const out = convertPiJsonl(load('pi-simple.jsonl'), { sourcePath: 'D:\\demo\\pi-proj\\2025-06-01_pi-simple.jsonl' })
+  assert.equal(out.turns.length, 2)
+  assert.equal(out.messages, 4)
+  assert.equal(out.toolCalls, 0)
+  assert.equal(out.meta.id, 'import-019f0a11-2222-7333-8444-555566667777')
+  assert.equal(out.meta.sourceId, '019f0a11-2222-7333-8444-555566667777')
+  assert.equal(out.meta.version, SESSION_FORMAT_VERSION)
+  assert.equal(out.meta.cwd, 'D:\\demo\\pi-proj')
+  assert.ok(out.meta.createdAt)
+  assertImportedMarker(out.events, { tool: 'pi-coding-agent', sourceId: '019f0a11-2222-7333-8444-555566667777', sourcePath: 'D:\\demo\\pi-proj\\2025-06-01_pi-simple.jsonl' })
+  const types = out.events.map((e) => e.type)
+  assert.equal(types.at(-1), 'turn/end')
+  out.events.forEach((e, i) => assert.equal(e.seq, i))
+  assert.equal(out.events.filter((e) => e.type === 'turn/start').length, 2)
+  // assistant source.model 来自消息级 model
+  const asst = out.events.find((e) => e.type === 'assistant/message').data.message
+  assert.deepEqual(asst.source, { kind: 'model', provider: 'pi-coding-agent', model: 'claude-sonnet-4-5' })
+})
+
+test('convertPiJsonl: 工具历史（arguments 对象序列化、thinking→reasoning、配对、孤儿丢弃、bash 注入文本）', () => {
+  const out = convertPiJsonl(load('pi-tool.jsonl'), {})
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.toolCalls, 1)
+  assert.equal(out.droppedToolResults, 1) // call-missing 无对应调用 → 孤儿结果丢弃
+  const asst = out.events.find((e) => e.type === 'assistant/message').data.message
+  const kinds = asst.content.map((c) => c.type)
+  assert.ok(kinds.includes('reasoning'))
+  assert.ok(kinds.includes('text'))
+  assert.ok(kinds.includes('tool-call'))
+  const call = out.events.find((e) => e.type === 'tool/call')
+  const result = out.events.find((e) => e.type === 'tool/result')
+  assert.equal(call.data.callId, 'call-1')
+  assert.equal(call.data.name, 'bash')
+  assert.equal(call.data.arguments, '{"command":"ls -la"}')
+  assert.equal(result.data.message.content[0].toolCallId, 'call-1')
+  assert.deepEqual(result.sourceEventSeqs, [call.seq])
+  assertToolPairing(out.events)
+  assertMessageOrderLegal(out.events)
+  // bashExecution 用 Pi 自身文本格式（Ran `cmd` + 输出）挂到当前轮最后一步
+  const bash = out.turns[0].steps.at(-1).content.find((c) => c.type === 'text' && c.text.startsWith('Ran `git status`'))
+  assert.ok(bash)
+  assert.ok(bash.text.includes('On branch main'))
+})
+
+test('convertPiJsonl: 树结构——只重建活动分支、branch_summary→reasoning、session_info→标题、model_change→模型', () => {
+  const out = convertPiJsonl(load('pi-branch.jsonl'), {})
+  assert.equal(out.turns.length, 3) // 旁支「换成方案 B」不在活动路径上
+  assert.deepEqual(out.turns.map((t) => t.prompt), ['重构这个模块', '试试方案 A', '继续方案 A'])
+  // branch_summary 摘要用 Pi 固定措辞前置到下一个 assistant 步骤的 reasoning
+  const head = out.turns[2].steps[0].content
+  assert.equal(head[0].type, 'reasoning')
+  assert.ok(head[0].text.includes('The following is a summary of a branch'))
+  assert.ok(head[0].text.includes('方案 B 被放弃：性能不达标。'))
+  // session_info 名称 → session/title；model_change 更新会话级模型
+  assert.equal(out.title, '重构模块讨论')
+  const titleEv = out.events.find((e) => e.type === 'session/title')
+  assert.equal(titleEv.data.title, '重构模块讨论')
+  const assts = out.events.filter((e) => e.type === 'assistant/message')
+  assert.equal(assts[0].data.message.source.model, 'claude-sonnet-4-5')
+  assert.equal(assts[2].data.message.source.model, 'gpt-5')
+  assertMessageOrderLegal(out.events)
+})
+
+test('convertPiJsonl: compaction 默认尊重（摘要+retainedTail+尾部），fullHistory 导全量', () => {
+  const out = convertPiJsonl(load('pi-compaction.jsonl'), {})
+  assert.equal(out.turns.length, 2) // 第一个问题被压进摘要
+  assert.deepEqual(out.turns.map((t) => t.prompt), ['第二个问题', '第三个问题'])
+  const head = out.turns[0].steps[0].content
+  assert.equal(head[0].type, 'reasoning')
+  assert.ok(head[0].text.includes('The conversation history before this point was compacted'))
+  assert.ok(head[0].text.includes('用户问了两个问题，都已经回答。'))
+  assertMessageOrderLegal(out.events)
+
+  const full = convertPiJsonl(load('pi-compaction.jsonl'), { fullHistory: true })
+  assert.equal(full.turns.length, 3) // 全量：三个问题都在
+  assert.deepEqual(full.turns.map((t) => t.prompt), ['第一个问题', '第二个问题', '第三个问题'])
+  assertMessageOrderLegal(full.events)
+})
+
+test('convertPiJsonl: v1 线性条目（无 id/parentId）顺序链兼容', () => {
+  const out = convertPiJsonl(load('pi-v1.jsonl'), {})
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.messages, 2)
+  assert.equal(out.meta.sourceId, '019f0a11-6666-7777-8888-999900001111')
+  assert.equal(out.events.at(-1).type, 'turn/end')
+  assertToolPairing(out.events)
+})
+
+test('convertPiJsonl: 无 session 头行 / 无用户回合 → skipped', () => {
+  const out = convertPiJsonl('not json\n', {})
+  assert.equal(out.meta, null)
+  assert.equal(out.skipped, 1)
+  assert.match(out.skipReason, /no session header/)
+  // 只有 session 头、没有任何消息 → 不落空会话
+  const empty = convertPiJsonl('{"type":"session","version":3,"id":"x","timestamp":"2025-06-05T10:00:00.000Z","cwd":"D:\\\\demo"}', {})
+  assert.equal(empty.meta, null)
+  assert.equal(empty.skipped, 1)
+})
+
 // ---- opencode 会话（SQLite → 中间 JSON） ----
 
 test('convertOpencodeJson: 简单问答、元数据、平衡回合', () => {
