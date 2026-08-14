@@ -19,6 +19,7 @@
     "lib/backfill.mjs",
     "lib/convert",
     "lib/opencode.mjs",
+    "lib/zcode.mjs",
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",

@@ -222,12 +222,12 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册九个工具（7 导入 + export_claude + sync_to_claude）', () => {
+test('apply 注册十个工具（8 导入 + export_claude + sync_to_claude）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 9)
+  assert.equal(registered.length, 10)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_opencode', 'import_reasonix', 'sync_to_claude'])
+  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_opencode', 'import_reasonix', 'import_zcode', 'sync_to_claude'])
   for (const def of registered) {
     if (def.name === 'export_claude' || def.name === 'sync_to_claude') {
       // 导出 / 写回工具：单对象输出 schema（非 oneOf）

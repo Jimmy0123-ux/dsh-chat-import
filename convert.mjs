@@ -5,7 +5,7 @@
 // index.mjs / lib/ / test/ 等既有 import 路径无需改动。各源格式的 `convertXxx(raw, args)`
 // 把原始 transcript 文本解析成统一的回合中间结构，再交给共享的 synthesizeSession
 // 合成 DSH 事件日志，保证所有源（Claude Code / Codex-ChatGPT / ChatGPT / Cursor /
-// Gemini / Reasonix / opencode）事件纪律一致。
+// Gemini / Reasonix / opencode / zcode）事件纪律一致。
 
 export {
   SESSION_FORMAT_VERSION,
@@ -51,3 +51,7 @@ export {
 export {
   convertOpencodeJson,
 } from './lib/convert/opencode.mjs'
+
+export {
+  convertZcodeJson,
+} from './lib/convert/zcode.mjs'

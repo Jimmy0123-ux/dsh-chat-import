@@ -1,5 +1,6 @@
 // index.mjs — 外部聊天记录（Claude Code / Codex-ChatGPT / ChatGPT / Cursor /
-// Gemini / Reasonix / opencode）→ DSH 会话导入器 + DSH → Claude Code JSONL 反向导出
+// Gemini / Reasonix / opencode / zcode）→ DSH 会话导入器 + DSH → Claude Code JSONL
+// 反向导出
 //
 // 消费 host 的 sessionPersistence / fs / tools / workspaceRegistry 服务，注册
 // `import_claude` 等导入工具：读取各自源格式的 transcript（单个文件或整个目录；
@@ -15,11 +16,12 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson } from './convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, convertZcodeJson } from './convert.mjs'
 import { slugifyClaudeCwd, serializeClaudeJsonl } from './export.mjs'
 import { syncClaudeSession } from './lib/backfill.mjs'
 import { resolveRegistryDir, loadImports, rememberImport, unwrapRecord, listPersistedIds, argsFingerprint, isSessionIdChange, decideSingle, decideMulti } from './lib/imports.mjs'
 import { readOpencodeDb, importOpencodeFile, importOpencodeDirectory } from './lib/opencode.mjs'
+import { readZcodeDb, importZcodeFile, importZcodeDirectory } from './lib/zcode.mjs'
 
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
@@ -825,7 +827,49 @@ function apply(ctx) {
       '默认尊重对话压缩（compaction，只导最后一次摘要+尾巴，摘要作 reasoning 块前置），可选 fullHistory 导全量；' +
       '可选 sessionIds 只导指定源会话；重复导入同一会话会幂等跳过。返回批量统计与逐会话明细。',
   }))
-  // REQ-16 反向导出：第 8 个工具，独立注册（导出流程与导入状态机完全不同）。
+  // REQ-38 zcode 源（第 8 个导入源）：z.ai 官方 CLI（zcode.z.ai）会话存储
+  // ~/.zcode/cli/db/db.sqlite（SQLite 权威索引）+ 旧版 transcript.jsonl 回退。
+  // 一库多会话：单 .db / 单 transcript.jsonl 也恒返回批量形态；目录模式自动定位
+  // db.sqlite（无递归）；zcode://<id> 伪路径走默认库只导该会话。
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_zcode',
+    sourceLabel: 'zcode',
+    convert: convertZcodeJson,
+    importFile: (c, t, a) => importZcodeFile(c, t, a, { registryDir, runDecision, markTrimmedSource }),
+    importDir: (c, d, a) => importZcodeDirectory(c, d, a, { registryDir, runDecision, markTrimmedSource }),
+    alwaysBatch: true,
+    registryDir,
+    // zcode 无单会话 id 覆盖、无递归（目录里就是 db.sqlite）；伪路径的会话 id
+    // 由 deriveArgs 从 zcode://<id> 取出（fs.resolve 归一化后 importZcodeFile 还会
+    // 从原始 args.path 兜底再取一次，见 lib/zcode.mjs）
+    dropParameters: ['sessionId', 'recursive'],
+    deriveArgs: (target) => {
+      const p = target.displayPath || ctx.fs.processPath(target)
+      if (typeof p === 'string' && p.startsWith('zcode://')) {
+        return { zcodeId: p.slice('zcode://'.length) }
+      }
+      return {}
+    },
+    pathDescription: 'zcode 会话数据库（db.sqlite）的文件路径、包含 db.sqlite 的数据目录路径，或 zcode://<sessionId> 伪路径（走默认 ~/.zcode/cli/db/db.sqlite）。',
+    batchUnit: '会话',
+    skippedNote: '无用户回合',
+    extraParameters: {
+      sessionIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '可选：只导入指定源会话 id（缺省导入全部会话）。',
+      },
+    },
+    description:
+      '从 z.ai 官方 CLI（zcode）的 SQLite 历史库 db.sqlite 导入历史会话为可继续的 DSH 会话（默认位置 ~/.zcode/cli/db/db.sqlite）。' +
+      'path 可以是 .db 文件、包含 db.sqlite 的数据目录（目录模式自动定位，无递归），或 zcode://<sessionId> 伪路径（走默认库，只导该会话）。' +
+      '读取 session/message/part 表重建对话（message/part 无 sequence 列，按 time_created, id 升序；主会话 parent_id IS NULL）；' +
+      '文本/工具调用（tool/call + tool/result 成对输出，含错误标记与 sourceEventSeqs 关联）完整保留；' +
+      'compaction 自动压缩摘要（part.type === "compaction" 的 data.summary.body）还原为前置上下文 reasoning 块；' +
+      '含 <system-reminder> 的系统注入 user 消息过滤；db 不可用时回退读旧版 transcript.jsonl；' +
+      '可选 sessionIds 只导指定源会话；重复导入同一会话会幂等跳过。返回批量统计与逐会话明细。',
+  }))
+  // REQ-16 反向导出：第 9 个工具，独立注册（导出流程与导入状态机完全不同）。
   ctx.tools.register(defineTool({
     name: 'export_claude',
     description:
@@ -899,7 +943,7 @@ function apply(ctx) {
       return exportClaudeSession(ctx, args, { registryDir })
     },
   }))
-  // REQ-36 反向同步（双向同步桥 B 第一步）：第 9 个工具，把 DSH 会话新增轮次
+  // REQ-36 反向同步（双向同步桥 B 第一步）：第 10 个工具，把 DSH 会话新增轮次
   // 增量写回 Claude Code JSONL（目标 = 导入源文件或 export_claude 副本）。写回
   // 核心在 lib/backfill.mjs（纯逻辑 + ctx 注入，零 DSH 依赖）；uuid 工厂经
   // syncClaudeSession 的 args.uuid 注入（测试确定性），工具 schema 不暴露它。
@@ -1022,4 +1066,4 @@ function apply(ctx) {
   }))
 }
 
-export { apply, inject, name, readOpencodeDb, exportClaudeSession }
+export { apply, inject, name, readOpencodeDb, readZcodeDb, exportClaudeSession }
