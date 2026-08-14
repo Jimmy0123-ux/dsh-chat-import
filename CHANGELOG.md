@@ -35,6 +35,12 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Fixed
 
+- **Import panel reports actionable errors instead of a raw `Failed to execute
+  'json'…Unexpected end of JSON input`** — the panel's `fetch` now reads the
+  response as text and parses defensively: an empty / non-JSON response (e.g.
+  the host route not being registered because the dsh process predates the
+  `webServer`-optional fix) shows a clear hint ("路由可能未注册，请重启 dsh 后
+  重试") instead of surfacing the browser's `Response.json()` exception.
 - **Import-panel trigger no longer covered by other footer entries (REQ-41)** —
   `sidebar.footer.action` is a 256px flex row; the official Cordis plugin badge
   is a `flex: none; width: 256px` entry that occupies the whole row, squeezing
