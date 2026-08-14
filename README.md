@@ -96,11 +96,11 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 
 Messages carry stable ids and `surfaceOp: 'append'`; `tool/result` events link back to their `tool/call` via `sourceEventSeqs`. Assistant `source` is `{ kind: 'model', provider: 'claude-code', model: <source model> }`; `tool/result` source is `{ kind: 'tool', callId }`. The `SessionHeader` keeps `version: 0`, `id: import-<source sessionId>`, source `createdAt` and `cwd`.
 
-**Call/result pairing invariant:** every `tool/call` is paired with a `tool/result` (`sourceEventSeqs` points back to its call). When the transcript never recorded a result for a call (interrupted sessions, Cursor transcripts that contain no results), the importer synthesizes an empty `tool/result` (`content: []`) so the session still resumes — model APIs reject history in which an assistant `tool_calls` block has no matching tool message. The empty content is not fabricated text; wire adapters normalize it to `"(no output)"`.
+**Call/result pairing invariant:** every `tool/call` is paired with a `tool/result` (`sourceEventSeqs` points back to its call), and each result is attached to the step that declared its call — so the projected message order stays wire-legal (every `role: 'tool'` message sits immediately after the assistant message whose `tool_calls` it answers, never separated by another assistant). When the transcript never recorded a result for a call (interrupted sessions, Cursor transcripts that contain no results), the importer synthesizes an empty `tool/result` (`content: []`) in the call's own step so the session still resumes — model APIs reject history in which an assistant `tool_calls` block has no matching tool message. The empty content is not fabricated text; wire adapters normalize it to `"(no output)"`.
 
 ### Claude Code JSONL
 
-Main transcript at `~/.claude/projects/<slug>/<sessionId>.jsonl`; auxiliary subagent / workflow fragments under `<sessionId>/subagents/**` reuse the parent `sessionId` and are skipped (they can never shadow or merge into the main conversation). A `tool_use` whose result never arrived (session interrupted) gets a synthesized empty `tool/result`, keeping call/result pairing so the session resumes.
+Main transcript at `~/.claude/projects/<slug>/<sessionId>.jsonl`; auxiliary subagent / workflow fragments under `<sessionId>/subagents/**` reuse the parent `sessionId` and are skipped (they can never shadow or merge into the main conversation). Claude emits consecutive assistant records first and their `tool_result` records after — results attach to the step that declared their `tool_use` (paired by `tool_use_id`), so the projected messages stay wire-legal; results inside one step are ordered to match the step's tool calls. A `tool_use` whose result never arrived (session interrupted) gets a synthesized empty `tool/result` in its own step. A `tool_result` with no matching `tool_use` in the transcript is an orphan: it is dropped and counted (`droppedToolResults`) instead of emitting an orphan tool message the model API would reject.
 
 | Claude Code JSONL | DSH SessionEvent |
 | --- | --- |
@@ -108,7 +108,7 @@ Main transcript at `~/.claude/projects/<slug>/<sessionId>.jsonl`; auxiliary suba
 | `{ type: "assistant", content: [{ type: "text", text }] }` | `assistant/message` |
 | `{ type: "assistant", content: [{ type: "thinking", … }] }` | `reasoning` content block |
 | `{ type: "assistant", content: [{ type: "tool_use", … }] }` | `tool/call` + `tool-call` content block |
-| `{ type: "user", content: [{ type: "tool_result", … }] }` | `tool/result` (`sourceEventSeqs` links its `tool/call`) |
+| `{ type: "user", content: [{ type: "tool_result", … }] }` | `tool/result` on the step that declared the call (`sourceEventSeqs` links its `tool/call`) |
 | turn ends | `step/end` + `turn/end` |
 
 ### Codex / ChatGPT CLI rollout
@@ -120,7 +120,7 @@ Line envelope: `{ timestamp, type, payload }`. `event_msg` user/agent messages d
 | `session_meta` / `turn_context` | `SessionHeader` (id / cwd / createdAt / model) |
 | `response_item message role=user` (`input_text`) | `turn/start` + `step/start` + `user/message` |
 | `response_item message role=assistant` (`output_text`) | `assistant/message` |
-| `response_item function_call` / `custom_tool_call` | `tool/call` |
+| `response_item function_call` / `custom_tool_call` | `tool/call` + `tool-call` content block on the nearest assistant step |
 | `response_item function_call_output` / `custom_tool_call_output` | `tool/result` (paired by `call_id`, `sourceEventSeqs` linkage) |
 | `response_item reasoning` | skipped (encrypted, unreadable) |
 | turn ends | `step/end` + `turn/end` |
@@ -220,7 +220,7 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 - Source transcripts are read-only, never rewritten; DSH history events are append-only (deep-frozen) — new events are added, existing ones are never modified.
 - The plugin never modifies the DSH engine, apiproxy, or official UI packages; it publishes no services, so no isolate realm is needed.
 - Reading transcripts outside the workspace requires the session sandbox to allow access to that path.
-- Known boundaries: `permission` / `summary` auxiliary records are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts are skipped (only the main `<sessionId>.jsonl` becomes a session); Codex `reasoning` is encrypted and skipped; ChatGPT exports rebuild only the main thread (branch = last child) and tool messages degrade to text blocks on the nearest step (exports carry no structured tool calls, so no orphan `tool/result` is produced); Cursor transcripts have no `tool_result` (every call gets a synthesized empty `tool/result`) and `[REDACTED]` text is filtered; Gemini follows the format observed 2026-04 (no stable official schema); Reasonix reads the JSONL checkpoint (the V2 WAL is excluded); opencode `patch` parts carry no diff (placeholder `[patch: <N> files]` only) and tool output may keep ANSI escapes verbatim.
+- Known boundaries: `permission` / `summary` auxiliary records are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts are skipped (only the main `<sessionId>.jsonl` becomes a session) and a `tool_result` with no matching `tool_use` is dropped and counted (`droppedToolResults`); Codex `reasoning` is encrypted and skipped; ChatGPT exports rebuild only the main thread (branch = last child) and tool messages degrade to text blocks on the nearest step (exports carry no structured tool calls, so no orphan `tool/result` is produced); Cursor transcripts have no `tool_result` (every call gets a synthesized empty `tool/result`) and `[REDACTED]` text is filtered; Gemini follows the format observed 2026-04 (no stable official schema); Reasonix reads the JSONL checkpoint (the V2 WAL is excluded); opencode `patch` parts carry no diff (placeholder `[patch: <N> files]` only) and tool output may keep ANSI escapes verbatim.
 - **Re-import after this fix:** already-imported sessions are immutable logs — the plugin never rewrites existing history, so sessions imported by an older version that lack the call/result pairing cannot be repaired in place. Delete the stale session and re-import to pick up the pairing invariant.
 
 ## 🧪 Tests

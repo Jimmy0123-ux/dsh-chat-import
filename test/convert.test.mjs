@@ -23,6 +23,48 @@ function assertToolPairing(events) {
   }
 }
 
+// 投影 LLM 消息序列：DSH 的 deriveMessages 按事件顺序扁平投影 surface 事件
+// （user/message / assistant/message / tool/result），不做重排——事件顺序即
+// wire 消息顺序。返回 [{role:'user'} | {role:'assistant', toolCallIds} |
+// {role:'tool', toolCallId}] 序列。
+function projectSurfaceMessages(events) {
+  return events
+    .filter((e) => e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result')
+    .map((e) => {
+      if (e.type === 'user/message') return { role: 'user' }
+      if (e.type === 'assistant/message') {
+        return {
+          role: 'assistant',
+          toolCallIds: e.data.message.content.filter((c) => c.type === 'tool-call').map((c) => c.id),
+        }
+      }
+      return { role: 'tool', toolCallId: e.data.message.content[0].toolCallId }
+    })
+}
+
+// 消息投影顺序合法（wire 规则）：带 tool-call 块的 assistant 消息之后、到下一个
+// assistant / user 消息之前，其全部 toolCallId 必须已有对应 tool 消息——不允许
+// 「带 tool_calls 的 assistant 后紧跟另一条 assistant 而中间无 tool 消息」，
+// 也不允许无对应 tool-call 的孤儿 tool 消息。返回投影序列供精确断言。
+function assertMessageOrderLegal(events) {
+  const msgs = projectSurfaceMessages(events)
+  let open = []
+  for (const m of msgs) {
+    if (m.role === 'assistant') {
+      assert.equal(open.length, 0, `assistant 前有未配对的 tool_calls（残留 ${open.join(',')}）`)
+      open = [...m.toolCallIds]
+    } else if (m.role === 'tool') {
+      const i = open.indexOf(m.toolCallId)
+      assert.ok(i !== -1, `tool 消息 ${m.toolCallId} 前没有对应的 tool-call`)
+      open.splice(i, 1)
+    } else {
+      assert.equal(open.length, 0, `user 消息前有未配对的 tool_calls（残留 ${open.join(',')}）`)
+    }
+  }
+  assert.equal(open.length, 0, `末尾残留未配对的 tool_calls（${open.join(',')}）`)
+  return msgs
+}
+
 test('convertClaudeJsonl: 简单问答合成平衡回合', () => {
   const out = convertClaudeJsonl(load('sess-simple-001.jsonl'))
   assert.equal(out.turns.length, 1)
@@ -74,6 +116,7 @@ test('convertClaudeJsonl: 工具历史（tool/call + tool/result + thinking + �
   assert.equal(result.data.message.content[0].toolCallId, 'toolu_01')
   assert.deepEqual(result.sourceEventSeqs, [call.seq])
   assert.equal(result.surfaceOp, 'append')
+  assertMessageOrderLegal(out.events)
 })
 
 test('convertClaudeJsonl: 多步回合（一步一个 assistant 消息）', () => {
@@ -91,6 +134,7 @@ test('convertClaudeJsonl: 多步回合（一步一个 assistant 消息）', () =
   // user/message 只在第一步出现
   const users = out.events.filter((e) => e.type === 'user/message')
   assert.equal(users.length, 1)
+  assertMessageOrderLegal(out.events)
 })
 
 test('convertClaudeJsonl: ai-title → session/title 事件', () => {
@@ -155,8 +199,10 @@ test('convertClaudeJsonl: 无 fileStem 参数保持原行为（纯函数直接�
   assert.equal(out.meta.id, 'import-sess-simple-001')
 })
 
-test('convertClaudeJsonl: 跨 step 的 tool/result 仍用 sourceEventSeqs 关联其 tool/call', () => {
-  // 异步工具：调用在 step1，结果随后续 step2 到达；sourceEventSeqs 必须跨 step 关联
+test('convertClaudeJsonl: 后置的 tool/result 挂到 call 所属 step（不落最近一步）', () => {
+  // 异步工具：调用在 step1，结果随后续 assistant（step2）之后到达。tool_result
+  // 必须挂回 call 所属 step（step1），否则投影顺序里带 tool_calls 的 assistant
+  // 后面紧跟另一条 assistant（step2），违反 wire 规则。
   const raw = [
     '{"sessionId":"sess-cross-001","type":"user","message":{"role":"user","content":"请查一下"}}',
     '{"sessionId":"sess-cross-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"好"},{"type":"tool_use","id":"toolu_01","name":"fs_read","input":{}}]}}',
@@ -169,9 +215,12 @@ test('convertClaudeJsonl: 跨 step 的 tool/result 仍用 sourceEventSeqs 关联
   assert.ok(call)
   assert.ok(result)
   assert.equal(call.data.step, 1)
-  assert.equal(result.data.step, 2)
+  assert.equal(result.data.step, 1) // 挂到 call 所属 step，而不是结果到达时的最近一步（2）
   assert.deepEqual(result.sourceEventSeqs, [call.seq])
   assert.equal(result.surfaceOp, 'append')
+  // 投影顺序：user → assistant(带 tool-call) → tool → assistant，合法
+  const msgs = assertMessageOrderLegal(out.events)
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant'])
 })
 
 test('convertClaudeJsonl: 中断的 tool_use（无 tool_result）补发空 tool/result', () => {
@@ -192,6 +241,82 @@ test('convertClaudeJsonl: 中断的 tool_use（无 tool_result）补发空 tool/
   assertToolPairing(out.events)
   // 平衡：turn/end 收尾
   assert.equal(out.events.at(-1).type, 'turn/end')
+  assertMessageOrderLegal(out.events)
+})
+
+test('convertClaudeJsonl: assistant 连续 tool_use、结果后置 → 投影顺序合法', () => {
+  // Claude 源格式：assistant[callA] assistant[callB] user[resultA] user[resultB]
+  // （结果后置）。结果必须挂回各自 call 的 step，投影顺序才是
+  // user → assistant(A) → tool(A) → assistant(B) → tool(B)；挂最近一步会变成
+  // assistant(A) → assistant(B) → tool(A) → tool(B)，被模型 API 拒绝。
+  const raw = [
+    '{"sessionId":"sess-post-001","type":"user","message":{"role":"user","content":"并行读两个文件"}}',
+    '{"sessionId":"sess-post-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"读 A"},{"type":"tool_use","id":"toolu_A","name":"Read","input":{"file":"a.txt"}}]}}',
+    '{"sessionId":"sess-post-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"读 B"},{"type":"tool_use","id":"toolu_B","name":"Read","input":{"file":"b.txt"}}]}}',
+    '{"sessionId":"sess-post-001","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"A 内容"}]}]}}',
+    '{"sessionId":"sess-post-001","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_B","content":[{"type":"text","text":"B 内容"}]}]}}',
+  ].join('\n')
+  const out = convertClaudeJsonl(raw, { fileStem: 'sess-post-001' })
+  assert.equal(out.toolCalls, 2)
+  assert.equal(out.droppedToolResults, 0)
+  const msgs = assertMessageOrderLegal(out.events)
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant', 'tool'])
+  // 每条 tool 消息与其 call 的 assistant 同 step
+  const calls = out.events.filter((e) => e.type === 'tool/call')
+  const results = out.events.filter((e) => e.type === 'tool/result')
+  assert.deepEqual(calls.map((c) => [c.data.callId, c.data.step]), [['toolu_A', 1], ['toolu_B', 2]])
+  assert.deepEqual(results.map((r) => [r.data.message.content[0].toolCallId, r.data.step]), [['toolu_A', 1], ['toolu_B', 2]])
+})
+
+test('convertClaudeJsonl: 同 step 内多个 tool_result 按 call 顺序对齐', () => {
+  // 并行工具：一个 assistant 消息带两个 tool_use，结果乱序返回（resultB 先到）。
+  // 结果必须按该 step 的 toolCalls 顺序（A 在 B 前）对齐，保证投影出的 tool
+  // 消息与 assistant 的 tool_calls 一一对应、顺序一致。
+  const raw = [
+    '{"sessionId":"sess-align-001","type":"user","message":{"role":"user","content":"读两个文件"}}',
+    '{"sessionId":"sess-align-001","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file":"a"}},{"type":"tool_use","id":"toolu_2","name":"Read","input":{"file":"b"}}]}}',
+    '{"sessionId":"sess-align-001","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"text","text":"B"}]},{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"A"}]}]}}',
+  ].join('\n')
+  const out = convertClaudeJsonl(raw, { fileStem: 'sess-align-001' })
+  const results = out.events.filter((e) => e.type === 'tool/result').map((r) => r.data.message.content[0].toolCallId)
+  assert.deepEqual(results, ['toolu_1', 'toolu_2'])
+  assertMessageOrderLegal(out.events)
+})
+
+test('convertClaudeJsonl: 无对应 tool_use 的孤儿 tool_result 丢弃并计数', () => {
+  // transcript 里出现没有对应 tool_use 的 tool_result（如从中途开始的文件）。
+  // 挂 lastStep 会投影出无 call 的孤儿 tool 消息，被模型 API 拒绝 → 丢弃并计数。
+  const raw = [
+    '{"sessionId":"sess-orphan-001","type":"user","message":{"role":"user","content":"继续"}}',
+    '{"sessionId":"sess-orphan-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"好的"}]}}',
+    '{"sessionId":"sess-orphan-001","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_ghost","content":[{"type":"text","text":"幽灵结果"}]}]}}',
+  ].join('\n')
+  const out = convertClaudeJsonl(raw, { fileStem: 'sess-orphan-001' })
+  assert.equal(out.droppedToolResults, 1)
+  assert.equal(out.events.filter((e) => e.type === 'tool/result').length, 0)
+  assertMessageOrderLegal(out.events)
+})
+
+test('convertClaudeJsonl: 部分调用无结果 → 空 result 补在 call 所属 step', () => {
+  // step1 调用 A 有真实结果；step2 调用 B 的结果从未到达（中断）。
+  // 兜底空 result 必须补在 B 自己的 step，保持每条 tool 消息紧邻其 assistant。
+  const raw = [
+    '{"sessionId":"sess-mix-001","type":"user","message":{"role":"user","content":"跑一下"}}',
+    '{"sessionId":"sess-mix-001","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_A","name":"Bash","input":{"command":"a"}}]}}',
+    '{"sessionId":"sess-mix-001","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"A 结果"}]}]}}',
+    '{"sessionId":"sess-mix-001","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_B","name":"Bash","input":{"command":"b"}}]}}',
+  ].join('\n')
+  const out = convertClaudeJsonl(raw, { fileStem: 'sess-mix-001' })
+  assert.equal(out.toolCalls, 2)
+  const results = out.events.filter((e) => e.type === 'tool/result')
+  assert.equal(results.length, 2)
+  const byId = Object.fromEntries(results.map((r) => [r.data.message.content[0].toolCallId, r]))
+  assert.equal(byId['toolu_A'].data.step, 1)
+  assert.equal(byId['toolu_A'].data.message.content[0].content[0].text, 'A 结果')
+  assert.equal(byId['toolu_B'].data.step, 2) // 空 result 补在 call 自己的 step
+  assert.deepEqual(byId['toolu_B'].data.message.content[0].content, [])
+  assertToolPairing(out.events)
+  assertMessageOrderLegal(out.events)
 })
 
 test('mintSessionId: 清理非法字符并截断', () => {
@@ -258,6 +383,7 @@ test('convertCodexJsonl: function_call + function_call_output 按 call_id 跨行
   assert.equal(result.surfaceOp, 'append')
   // output 是纯文本，直接作为 text block
   assert.equal(result.data.message.content[0].content[0].text, 'README.md\nsrc\n')
+  assertMessageOrderLegal(out.events)
 })
 
 test('convertCodexJsonl: 注入块被过滤、reasoning 加密被跳过、custom_tool_call 用 input', () => {
@@ -299,6 +425,7 @@ test('convertCodexJsonl: function_call 无 function_call_output 补发空 tool/r
   assert.equal(result.data.message.content[0].toolCallId, 'call_orphan_001')
   assertToolPairing(out.events)
   assert.equal(out.events.at(-1).type, 'turn/end')
+  assertMessageOrderLegal(out.events)
 })
 
 test('convertCodexJsonl: event_msg 重复消息不重复计数、多轮正确切分', () => {
@@ -456,6 +583,7 @@ test('convertCursorJsonl: tool_use → tool/call + 合成空 tool/result，input
   // 平衡：最后（非 title）事件是 turn/end
   const types = out.events.map((e) => e.type)
   assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
+  assertMessageOrderLegal(out.events)
 })
 
 test('convertCursorJsonl: [REDACTED] 哨兵过滤', () => {
@@ -517,6 +645,7 @@ test('convertGeminiJson: 内联 toolCalls → tool/call + tool/result（含错�
   assert.equal(results[1].data.message.content[0].content[0].text, 'Compilation error: missing semicolon')
   // info 消息跳过：没有多余回合
   assert.equal(out.turns.length, 1)
+  assertMessageOrderLegal(out.events)
 })
 
 test('convertGeminiJson: toolCalls 无 result 补发空 tool/result', () => {
@@ -586,6 +715,7 @@ test('convertReasonixJsonl: v1 嵌套 tool_calls + tool_call_id 配对 + reasoni
   assert.ok(asst.some((m) => m.content.some((c) => c.type === 'reasoning')))
   // provider
   assert.deepEqual(asst[0].source, { kind: 'model', provider: 'reasonix', model: 'reasonix' })
+  assertMessageOrderLegal(out.events)
 })
 
 test('convertReasonixJsonl: v2 扁平 tool_calls + createdAt 时间戳', () => {
@@ -701,6 +831,7 @@ test('convertOpencodeJson: reasoning + tool/call + tool/result（error 标记、
   assert.equal(asst.content.find((c) => c.type === 'reasoning').text, '先跑一下复现命令看崩溃栈。')
   // 平铺 modelID 优先
   assert.deepEqual(asst.source, { kind: 'model', provider: 'opencode', model: 'deepseek-v4-max' })
+  assertMessageOrderLegal(out.events)
 })
 
 test('convertOpencodeJson: file/patch/subtask → text 块，结构块跳过，空 output 工具仍配对', () => {

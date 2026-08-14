@@ -180,7 +180,10 @@ function synthesizeSession({ meta, turns, title, provider, model, skipped, recor
 }
 
 // 逐行解析 JSONL：直连人类提问（type==='user' 且 content 为字符串）开新轮；每条
-// assistant 消息 = 一步；其后的 tool_result 挂到最近一步。
+// assistant 消息 = 一步。Claude 源格式把多条连续 assistant（各带 tool_use）与后置的
+// tool_result 分开（assistant[callA] assistant[callB] user[resultA] user[resultB]）；
+// tool_result 按 tool_use_id 挂到 call 所属 step（而非最近一步），保证投影出的 LLM
+// 消息里每条 tool 消息紧邻其 tool_calls 的 assistant（wire 规则：中间不能插 assistant）。
 export function convertClaudeJsonl(raw, args = {}) {
   const recs = []
   let skipped = 0
@@ -198,7 +201,12 @@ export function convertClaudeJsonl(raw, args = {}) {
 
   const turns = []
   let cur = null
-  let lastStep = null
+  // callId → 它所属的 step：Claude 的 tool_result 全部后置（在连续 assistant 之后
+  // 到达），必须按 callId 挂回 call 所在 step；挂最近一步会让投影出的消息里带
+  // tool_calls 的 assistant 后面紧跟另一条 assistant，违反 wire 规则
+  const callSteps = new Map()
+  // 丢弃的孤儿 tool_result 计数（transcript 里没有对应 tool_use）
+  let droppedToolResults = 0
 
   for (const rec of recs) {
     if (rec && typeof rec.sessionId === 'string' && !sourceId) sourceId = rec.sessionId
@@ -212,7 +220,6 @@ export function convertClaudeJsonl(raw, args = {}) {
       // 直连人类提问 → 新轮
       cur = { prompt: rec.message.content, steps: [] }
       turns.push(cur)
-      lastStep = null
     } else if (rec && rec.type === 'assistant' && cur) {
       // 一条 assistant 消息 = 一步
       const step = { content: [], toolCalls: [], toolResults: [] }
@@ -231,21 +238,42 @@ export function convertClaudeJsonl(raw, args = {}) {
         step.content.push({ type: 'text', text: rec.message.content })
       }
       cur.steps.push(step)
-      lastStep = step
-    } else if (rec && rec.type === 'user' && Array.isArray(rec.message?.content) && cur && lastStep) {
-      // 工具结果：挂在最近一步
+      for (const tc of step.toolCalls) callSteps.set(tc.id, step)
+    } else if (rec && rec.type === 'user' && Array.isArray(rec.message?.content)) {
+      // 工具结果：按 tool_use_id 挂到 call 所属 step。Claude 的 tool_result 在所有
+      // assistant（各带 tool_use）之后到达；挂最近一步会让带 tool_calls 的 assistant
+      // 后面紧跟另一条 assistant，投影出的 LLM 消息违反 wire 规则。查不到对应调用
+      // （如 transcript 从中途开始）的孤儿结果直接丢弃并计数：挂 lastStep 会投影出
+      // 无 call 的孤儿 tool 消息，同样被模型 API 拒绝。
       for (const block of rec.message.content) {
         if (block && block.type === 'tool_result') {
+          const step = callSteps.get(block.tool_use_id)
+          if (!step) { droppedToolResults++; continue }
           const inner = (Array.isArray(block.content) ? block.content : [])
             .map(mapContentBlock)
             .filter(Boolean)
-          lastStep.toolResults.push({
+          step.toolResults.push({
             toolCallId: block.tool_use_id,
             content: inner,
             isError: block.is_error === true,
           })
         }
       }
+    }
+  }
+
+  // 同一步内多个结果按 call 顺序对齐：Claude 的 tool_result 块可能乱序返回
+  // （并行工具），按该 step 的 toolCalls 顺序稳定排序，保证投影出的 tool 消息
+  // 与 assistant 的 tool_calls 一一对应、顺序一致。
+  for (const t of turns) {
+    for (const s of t.steps) {
+      if (s.toolResults.length < 2 || s.toolCalls.length === 0) continue
+      const order = new Map(s.toolCalls.map((c, i) => [c.id, i]))
+      s.toolResults.sort((a, b) => {
+        const ia = order.get(a.toolCallId)
+        const ib = order.get(b.toolCallId)
+        return (ia === undefined ? s.toolCalls.length : ia) - (ib === undefined ? s.toolCalls.length : ib)
+      })
     }
   }
 
@@ -257,7 +285,7 @@ export function convertClaudeJsonl(raw, args = {}) {
   if (fileStem && sourceId && fileStem !== sourceId) {
     return {
       meta: null, events: [], turns: [], title: null, messages: 0, toolCalls: 0,
-      skipped: 0, records: recs.length,
+      skipped: 0, records: recs.length, droppedToolResults: 0,
       skipReason: 'auxiliary transcript (file "' + fileStem + '" does not match sessionId "' + sourceId + '"); only the main <sessionId>.jsonl becomes a session',
     }
   }
@@ -266,7 +294,8 @@ export function convertClaudeJsonl(raw, args = {}) {
   const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: createdAt ?? Date.now() }
   if (cwd) meta.cwd = cwd
 
-  return synthesizeSession({ meta, turns, title, provider: 'claude-code', model, skipped, records: recs.length })
+  const syn = synthesizeSession({ meta, turns, title, provider: 'claude-code', model, skipped, records: recs.length })
+  return { ...syn, droppedToolResults }
 }
 
 // Codex / ChatGPT CLI rollout JSONL → 统一的回合中间结构。
@@ -364,6 +393,10 @@ export function convertCodexJsonl(raw, args = {}) {
         name: payload.name || 'unknown',
         arguments: argumentsText,
       }
+      // assistant 消息内容必须携带 tool-call block：wire 适配器的 tool_calls 只从
+      // assistant 消息的 content 块派生（dsh-llm-deepseek serializeAssistant），
+      // 只挂 step.toolCalls 会让 tool/result 成为无前置 tool_calls 的孤儿 tool 消息
+      step.content.push({ type: 'tool-call', ...mapped })
       step.toolCalls.push(mapped)
       if (callId) callSteps.set(callId, step)
     } else if ((payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') && cur) {
