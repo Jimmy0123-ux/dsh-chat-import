@@ -10,6 +10,12 @@
 // 非 text 内容块（图片等）→ skippedBlocks；孤儿 tool/result（查不到 tool/call）→
 // droppedToolResults；有 call 无 result（中断的原生会话）→ 文件末尾补发空
 // tool_result（content:[]，parentUuid 指向声明该调用的 assistant）。
+//
+// REQ-36 增量写回共用同一记录生成循环（serializeClaudeRecords）：
+// serializeClaudeJsonlTail 省略 mode/permission-mode/ai-title 头，首条记录
+// parentUuid=prevUuid（接续上一水印），供 lib/backfill.mjs 追加到既有文件；
+// tailClaudeEvents 按 turn/end 闭合边界截取完整轮（半开尾轮整轮丢弃）；
+// verifyClaudeJsonl 是写回前的格式预检（写坏即回滚，不推进水印）。
 
 import { randomUUID, createHash } from 'node:crypto'
 
@@ -46,32 +52,26 @@ function safeParseJson(s) {
   try { return JSON.parse(s) } catch { return {} }
 }
 
-/**
- * 把 DSH 会话日志序列化为 Claude Code JSONL。
- *
- * @param {{meta?: object, events?: object[], sessionUuid: string, cwd: string,
- *         version?: string, gitBranch?: string, title?: string}} input
- *        events 为按 seq 升序的 SessionEvent[]；title 入参优先，缺省从
- *        session/title 事件取首个；version/gitBranch 可选透传到 user 记录。
- * @param {{uuid?: () => string}} [options] uuid 工厂（测试注入确定性序列，
- *        默认 randomUUID）。
- * @returns {{jsonl: string, recordCount: number, toolCalls: number,
- *          toolResults: number, droppedToolResults: number,
- *          skippedInjections: number, skippedBlocks: number, title?: string}}
- *          空会话（无任何可导出 surface 事件）抛错「无可导出内容」。
- */
-export function serializeClaudeJsonl({ meta, events, sessionUuid, cwd, version, gitBranch, title }, { uuid = randomUUID } = {}) {
-  const list = Array.isArray(events) ? events : []
-  const hasSurface = list.some((ev) => ev && (
+// 是否存在可导出 surface 事件（user 直连提问 / assistant / tool/result）。
+function hasSurfaceEvents(events) {
+  return (Array.isArray(events) ? events : []).some((ev) => ev && (
     (ev.type === 'user/message' && ev.data && ev.data.source && ev.data.source.kind === 'user') ||
     ev.type === 'assistant/message' ||
     ev.type === 'tool/result'
   ))
-  if (!hasSurface) throw new Error('无可导出内容')
+}
 
+// 共享记录生成循环（serializeClaudeJsonl 与 serializeClaudeJsonlTail 共用）：
+//   emitHeader=true  推 mode/permission-mode 头（全量导出）；
+//   emitTitle=true   首个 user 后推 ai-title（全量导出；标题入参优先，缺省扫
+//                    session/title 事件取首个）；
+//   prevUuid=非 null  首条记录 parentUuid=prevUuid（尾部接续上一水印，链不重开）。
+// 返回 records 与降级计数；lastUuid = 最后一条记录的 uuid（尾部写回的水印）。
+function serializeClaudeRecords(events, { meta, sessionUuid, cwd, version, gitBranch, prevUuid = null, emitHeader = true, emitTitle = true, title }, { uuid }) {
+  const list = Array.isArray(events) ? events : []
   const sessionId = String(sessionUuid)
-  let resolvedTitle = typeof title === 'string' && title.trim() ? title.trim() : undefined
-  if (!resolvedTitle) {
+  let resolvedTitle = emitTitle && typeof title === 'string' && title.trim() ? title.trim() : undefined
+  if (emitTitle && !resolvedTitle) {
     for (const ev of list) {
       if (ev && ev.type === 'session/title' && ev.data && typeof ev.data.title === 'string' && ev.data.title.trim()) {
         resolvedTitle = ev.data.title.trim()
@@ -92,7 +92,6 @@ export function serializeClaudeJsonl({ meta, events, sessionUuid, cwd, version, 
   let skippedBlocks = 0
   let toolCalls = 0
   let toolResults = 0
-  let prevUuid = null
   let firstUserEmitted = false
   let lastTimeMs = null
   let currentTurn = null
@@ -100,8 +99,10 @@ export function serializeClaudeJsonl({ meta, events, sessionUuid, cwd, version, 
 
   const stepKey = (turn, step) => 't:' + turn + ':s:' + step
 
-  records.push({ type: 'mode', mode: 'normal', sessionId })
-  records.push({ type: 'permission-mode', permissionMode: 'default', sessionId })
+  if (emitHeader) {
+    records.push({ type: 'mode', mode: 'normal', sessionId })
+    records.push({ type: 'permission-mode', permissionMode: 'default', sessionId })
+  }
 
   for (const ev of list) {
     if (!ev) continue
@@ -145,7 +146,7 @@ export function serializeClaudeJsonl({ meta, events, sessionUuid, cwd, version, 
         prevUuid = record.uuid
         if (!firstUserEmitted) {
           firstUserEmitted = true
-          if (resolvedTitle) records.push({ type: 'ai-title', aiTitle: resolvedTitle, sessionId })
+          if (emitTitle && resolvedTitle) records.push({ type: 'ai-title', aiTitle: resolvedTitle, sessionId })
         }
         break
       }
@@ -255,15 +256,174 @@ export function serializeClaudeJsonl({ meta, events, sessionUuid, cwd, version, 
     toolResults++
   }
 
-  const jsonl = records.map((r) => JSON.stringify(r)).join('\n') + '\n'
   return {
-    jsonl,
-    recordCount: records.length,
+    records,
     toolCalls,
     toolResults,
     droppedToolResults,
     skippedInjections,
     skippedBlocks,
-    title: firstUserEmitted && resolvedTitle ? resolvedTitle : undefined,
+    title: emitTitle && firstUserEmitted && resolvedTitle ? resolvedTitle : undefined,
+    lastUuid: prevUuid, // 循环结束后 prevUuid = 最后一条记录的 uuid
   }
+}
+
+/**
+ * 把 DSH 会话日志序列化为 Claude Code JSONL。
+ *
+ * @param {{meta?: object, events?: object[], sessionUuid: string, cwd: string,
+ *         version?: string, gitBranch?: string, title?: string}} input
+ *        events 为按 seq 升序的 SessionEvent[]；title 入参优先，缺省从
+ *        session/title 事件取首个；version/gitBranch 可选透传到 user 记录。
+ * @param {{uuid?: () => string}} [options] uuid 工厂（测试注入确定性序列，
+ *        默认 randomUUID）。
+ * @returns {{jsonl: string, recordCount: number, toolCalls: number,
+ *          toolResults: number, droppedToolResults: number,
+ *          skippedInjections: number, skippedBlocks: number, title?: string}}
+ *          空会话（无任何可导出 surface 事件）抛错「无可导出内容」。
+ */
+export function serializeClaudeJsonl({ meta, events, sessionUuid, cwd, version, gitBranch, title }, { uuid = randomUUID } = {}) {
+  if (!hasSurfaceEvents(events)) throw new Error('无可导出内容')
+  const out = serializeClaudeRecords(events, { meta, sessionUuid, cwd, version, gitBranch, title }, { uuid })
+  const jsonl = out.records.map((r) => JSON.stringify(r)).join('\n') + '\n'
+  return {
+    jsonl,
+    recordCount: out.records.length,
+    toolCalls: out.toolCalls,
+    toolResults: out.toolResults,
+    droppedToolResults: out.droppedToolResults,
+    skippedInjections: out.skippedInjections,
+    skippedBlocks: out.skippedBlocks,
+    title: out.title,
+  }
+}
+
+/**
+ * 截取 seq>=fromSeq 且已由 turn/end 闭合的完整轮（REQ-36 增量写回）。
+ * 半开尾轮（turn/start 之后没有 turn/end 的进行中轮次）整轮丢弃并置
+ * droppedIncompleteTurn——写回只落完整轮，避免把未闭合的半截对话写进文件。
+ * 无 turn 包裹的裸 surface 事件（续写轮）不当作半开，原样保留。
+ *
+ * @param {object[]} events 按 seq 升序的 SessionEvent[]。
+ * @param {{fromSeq?: number, dropIncompleteFinalTurn?: boolean}} [opts]
+ * @returns {{events: object[], firstTurn: number|null, droppedIncompleteTurn: boolean}}
+ */
+export function tailClaudeEvents(events, { fromSeq = 0, dropIncompleteFinalTurn = true } = {}) {
+  const list = (Array.isArray(events) ? events : [])
+    .filter((e) => e && typeof e.seq === 'number' && e.seq >= fromSeq)
+  let lastTurnStart = -1
+  let lastTurnEnd = -1
+  for (let i = 0; i < list.length; i++) {
+    const ev = list[i]
+    if (ev.type === 'turn/start') lastTurnStart = i
+    else if (ev.type === 'turn/end') lastTurnEnd = i
+  }
+  let end = list.length
+  let droppedIncompleteTurn = false
+  if (dropIncompleteFinalTurn && lastTurnStart > lastTurnEnd) {
+    end = lastTurnStart // 半开尾轮从 turn/start 起整轮丢弃
+    droppedIncompleteTurn = true
+  }
+  const kept = list.slice(0, end)
+  let firstTurn = null
+  for (const ev of kept) {
+    if (ev.type === 'turn/start' && ev.data && typeof ev.data.turn === 'number') { firstTurn = ev.data.turn; break }
+  }
+  return { events: kept, firstTurn, droppedIncompleteTurn }
+}
+
+/**
+ * 增量写回序列化：DSH 事件尾部（完整新轮）→ 无头的 Claude Code JSONL 片段。
+ * 省略 mode/permission-mode/ai-title 头（头在既有文件里）；首条记录
+ * parentUuid=prevUuid（接续上一水印的链尾）；记录 sessionId=sessionUuid（与
+ * 既有文件一致）。尾部内配对/补发/孤儿逻辑与全量一致——跨水印边界的延迟
+ * tool/result（调用声明在前段、结果在尾部）查不到声明方 → 孤儿计数。
+ *
+ * @param {{meta?: object, events?: object[], sessionUuid: string, cwd: string,
+ *         prevUuid?: string|null}} input
+ * @param {{uuid?: () => string}} [options]
+ * @returns {{jsonl: string, recordCount: number, toolCalls: number,
+ *          toolResults: number, droppedToolResults: number,
+ *          skippedInjections: number, skippedBlocks: number, lastUuid: string|null}}
+ *          无可导出 surface 事件（空尾部）抛错「无可导出内容」，由调用方处理。
+ */
+export function serializeClaudeJsonlTail({ meta, events, sessionUuid, cwd, prevUuid }, { uuid = randomUUID } = {}) {
+  if (!hasSurfaceEvents(events)) throw new Error('无可导出内容')
+  const out = serializeClaudeRecords(events, {
+    meta, sessionUuid, cwd,
+    prevUuid: prevUuid ?? null,
+    emitHeader: false,
+    emitTitle: false,
+  }, { uuid })
+  const jsonl = out.records.map((r) => JSON.stringify(r)).join('\n') + '\n'
+  return {
+    jsonl,
+    recordCount: out.records.length,
+    toolCalls: out.toolCalls,
+    toolResults: out.toolResults,
+    droppedToolResults: out.droppedToolResults,
+    skippedInjections: out.skippedInjections,
+    skippedBlocks: out.skippedBlocks,
+    lastUuid: out.lastUuid,
+  }
+}
+
+/**
+ * 写回预检（REQ-36）：验证完整 JSONL 文件符合 Claude Code 布局硬规则。
+ * 规则：每行 JSON.parse；首行 mode 记录含 sessionId；恰一个结尾 \n 且无空行；
+ * parentUuid 引用前文已出现 uuid；末行带 uuid（即返回的 lastUuid）。
+ *
+ * @param {string} jsonl 完整文件内容（既有文件 + 尾部）。
+ * @returns {{ok: true, recordCount: number, lastUuid: string|null}
+ *          | {ok: false, errors: Array<{line: number, error: string}>}}
+ */
+export function verifyClaudeJsonl(jsonl) {
+  const errors = []
+  const text = String(jsonl)
+  const lines = text.split('\n')
+  if (!text.endsWith('\n')) {
+    errors.push({ line: 1, error: '文件必须以恰好一个换行结尾' })
+  }
+  const parsed = [] // { line, rec }
+  const seenUuids = new Set()
+  for (let i = 0; i < lines.length; i++) {
+    const line = i + 1
+    // 结尾 \n 产生的最后一个空串是布局的一部分，不是空行
+    if (i === lines.length - 1 && text.endsWith('\n')) continue
+    const t = lines[i].trim()
+    if (!t) {
+      errors.push({ line, error: '空行（每行必须是一个 JSON 记录）' })
+      continue
+    }
+    let rec
+    try {
+      rec = JSON.parse(t)
+    } catch (err) {
+      errors.push({ line, error: 'JSON 解析失败: ' + err.message })
+      continue
+    }
+    parsed.push({ line, rec })
+    if (rec && rec.parentUuid !== undefined && rec.parentUuid !== null && !seenUuids.has(rec.parentUuid)) {
+      errors.push({ line, error: 'parentUuid 悬空（未指向之前已出现的 uuid）: ' + JSON.stringify(rec.parentUuid) })
+    }
+    if (rec && typeof rec.uuid === 'string') {
+      if (seenUuids.has(rec.uuid)) errors.push({ line, error: 'uuid 重复: ' + rec.uuid })
+      seenUuids.add(rec.uuid)
+    }
+  }
+  if (parsed.length === 0) {
+    errors.push({ line: 1, error: '无任何记录' })
+  } else {
+    const first = parsed[0]
+    if (first.rec.type !== 'mode' || typeof first.rec.sessionId !== 'string') {
+      errors.push({ line: first.line, error: '首行必须为 mode 记录且含 sessionId' })
+    }
+    const last = parsed[parsed.length - 1]
+    if (typeof last.rec.uuid !== 'string') {
+      errors.push({ line: last.line, error: '末行必须带 uuid（lastUuid）' })
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors }
+  const last = parsed[parsed.length - 1]
+  return { ok: true, recordCount: parsed.length, lastUuid: typeof last.rec.uuid === 'string' ? last.rec.uuid : null }
 }
