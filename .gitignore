@@ -9,6 +9,9 @@ dev/
 # 本地测试依赖（node_modules junction 到 DSH profile）
 node_modules/
 
+# dsh-file-claim 插件运行时目录（多会话并发协调，本地状态不入库）
+.dsh-file-claim/
+
 # 兜底：根目录若再出现本地会话快照，同样不入库
 .prev-session*.jsonl
 
