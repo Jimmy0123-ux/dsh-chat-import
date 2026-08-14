@@ -121,6 +121,14 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   tools stay available. Also regenerated `package-lock.json` so the REQ-41 peer
   dependencies (`@deepseek-ai/dsh-client-locale`, `react`) are recorded and
   `npm ci` stops failing with EUSAGE.
+- **Tool registration fails loudly on a stale `@deepseek-ai/dsh-tools` copy** —
+  the plugin now declares a named import of `TOOL_RUNTIME_SCHEDULER` (which only
+  exists since `^0.1.0-rc.6`) and checks at registration time that it is the
+  expected symbol. Resolving the old `dsh-tools@0.0.1-rc.1` ABI (which only
+  exports `TOOL_REGISTRY_SCHEDULER`) now fails the module load / plugin
+  activation immediately with a clear message, instead of silently registering
+  tools against the old ABI and crashing the host agent-loop later
+  (`Cannot read properties of undefined (reading 'prepare')`).
 
 ## [0.3.0] - 2026-08-14
 
