@@ -17,7 +17,7 @@
 **已收录于：** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import)
 **更新日志（英文）：** [CHANGELOG.md](CHANGELOG.md)
 
-`dsh-chat-import` 把外部 Agent 的聊天记录变成 **全保真、可继续（resume）的 DeepSeek Harness 会话**——工具调用、思考过程一应俱全。它**只读**源文件（绝不改写你的原始记录）、不碰 DSH 引擎，每次导入都通过公开的 `sessionPersistence` 服务追加一条全新的、事件平衡的会话日志，并按源 `cwd` 挂接到对应工作区。它也能反向工作：`export_claude` 把 DSH 会话序列化回 Claude Code JSONL（只读——绝不修改你的 DSH 日志），Claude Code 可用 `--resume` 加载续聊。
+`dsh-chat-import` 把外部 Agent 的聊天记录变成 **全保真、可继续（resume）的 DeepSeek Harness 会话**——工具调用、思考过程一应俱全。导入时它**只读**源文件（绝不改写你的原始记录）、不碰 DSH 引擎，每次导入都通过公开的 `sessionPersistence` 服务追加一条全新的、事件平衡的会话日志，并按源 `cwd` 挂接到对应工作区。它也能反向工作：`export_claude` 把 DSH 会话序列化回 Claude Code JSONL（只读——绝不修改你的 DSH 日志），Claude Code 可用 `--resume` 加载续聊；`sync_to_claude` 再把会话新增轮次增量写回 Claude Code 文件——带守卫、绝不静默覆盖。
 
 `7 种来源` · `导入 + 导出` · `可无缝续聊` · `自动归组工作区`
 
@@ -29,6 +29,7 @@
 - **🗂 自动归组工作区** — 会话按源 `cwd` 挂进对应工作区（不再「未分组」）；源有记录时保留 sessionId、标题、模型与创建时间。
 - **🔁 幂等 + 增量续写** — 重复导入未变化的源文件直接跳过（不重新读文件）；增长的源文件只把**新增轮次** append 进同一个 DSH 会话（`seq` 连续续写，已导入内容一个字节不动）；源文件被截断时检测 `sourceShrunk` 并报告、不触碰已导入会话；畸形行计数上报、绝不中断导入。
 - **📤 导出回 Claude Code** — `export_claude` 把任意 DSH 会话（导入的或原生的）序列化为 `<outputDir>/<slug>/<uuid>.jsonl` 的 Claude Code JSONL，可直接 `--resume`：user / assistant / 工具调用与结果、思考块、会话标题都按 Claude 记录布局重建。
+- **🔄 反向同步回 Claude Code** — `sync_to_claude` 把 DSH 会话的**新增完整轮次**增量写回导入源文件（或 `export_claude` 副本），链续到文件最后一条记录；文件缩小 / 外部修改 / 尾链失配 / 并发写者一律上报、绝不覆盖，格式预检失败自动回滚。
 - **📦 批量导入** — 指向一个目录（或整个 opencode 数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。
 
 ## 🚀 快速开始
@@ -121,6 +122,35 @@ export_claude({ sessionId: "…", cwd: "D:\work\proj", outputDir: "D:\backup\cla
 导出器按 DSH 事件日志的 `seq` 顺序重建 Claude 记录序列：`mode` + `permission-mode` 头，随后 `user` / `assistant` / `tool_result` 记录——工具结果挂在声明其 `tool_use` 的 assistant 上（`parentUuid` / `sourceToolAssistantUUID`，并行结果扇出到同一 assistant）、`session/title` 变成 `ai-title`、`reasoning` 变成 `thinking` 块（空 `signature`）、`tool_use` 的 input 从调用参数解析。中断的会话在末尾为未返回结果的调用补发空 `tool_result`；无对应调用的孤儿结果丢弃并计数。返回值带 `mapping` 对象（源会话 id → 新 uuid、文件路径、记录计数），为后续反向同步 registry（REQ-24/36）预留。
 
 **边界：** 导出的 `thinking` 块带空 `signature`——Claude Code 在 resume 时会丢弃这类思考块（文档化的降级）。非人类直连的 user 消息跳过并计数（`skippedInjections`）；非 text 内容块（如图片）跳过并计数（`skippedBlocks`）。写工作区之外的目标路径需要会话沙箱放行。
+
+## 🔄 反向同步 — 增量写回 Claude Code
+
+反向方向的另一半：`sync_to_claude` 把 DSH 会话的**新增完整轮次**追加回 Claude Code JSONL 文件，让文件持续可被 `--resume` 加载。它绝不改写既有历史——只追加已由 `turn/end` 闭合的完整轮（`turn/start` → … → `turn/end`）；仍在进行中的半开轮次跳过（`incompleteFinalTurn`）。
+
+```
+sync_to_claude({ sessionId: "import-019f5f27-…" })                     // 写回导入源文件
+sync_to_claude({ sessionId: "…", target: "copy", dryRun: true })       // 对 export_claude 副本做预览
+sync_to_claude({ sessionId: "…", target: "copy", force: true })        // 越过外部修改重锚定
+```
+
+- `sessionId`（必填）— 要写回的 DSH 会话；必须是本插件导入的会话（日志以 `session/imported` 标记开头；多会话源如 ChatGPT / opencode 与原生会话拒绝写回）。
+- `target`（可选）— `"source"`（默认）追加到该会话的导入源文件；`"copy"` 追加到最近一次 `export_claude` 导出的副本（必须先导出，registry 才有 exports 映射）。追加记录携带目标文件的 `sessionId`，`parentUuid` 链续到文件最后一条记录。
+- `force`（可选）— 跳过下方三闸守卫并**重锚定**桥到文件当前状态（水印 = 文件现在代表的事件数、链尾 = 当前文件尾 uuid），接受外部编辑过的文件；被覆盖的守卫仍会上报。
+- `dryRun`（可选）— 完整跑一遍流程（含格式预检）但不写盘、不更新 registry。
+
+**守卫——绝不静默覆盖**（违规一律返回 `status: "skipped"`）：
+
+| 同步时的文件 / 日志状态 | 行为 |
+| --- | --- |
+| 目标文件缺失 | `skipped` + `reason: source-missing` |
+| 文件比水印缩小 | `skipped` + `sourceShrunk` |
+| 文件 size / version 被外部修改 | `skipped` + `conflictDetected: source-modified-externally` |
+| 文件尾 uuid ≠ 水印的链尾 | `skipped` + `conflictDetected: tail-mismatch` |
+| 并发写者抢先赢了 CAS 写入 | `skipped` + `conflictDetected: write-version-mismatch` |
+| DSH 日志比水印短 | `skipped` + `storedShrunk` |
+| 追加内容未过格式预检 | 回滚为写前内容 + `precheckFailed`（水印不推进） |
+
+首次同步尚无水印：它以目标文件的实际事件数（转换实测）+ 链尾 uuid 为**基线**，登记 writeback，之后才写。写回成功后更新 registry 记录——`turns` 重转（后续重导保持幂等、不重复 append）、`events` 取已存日志长度、刷新 size/version 指纹，并记录 `writeback: { sessionUuid, filePath, lastWrittenSeq, lastWrittenTurn, prevUuid, lastSize, lastVersion, writtenAt }`。尾部序列化复用 `export.mjs` 核心（无 mode / permission-mode / ai-title 头，首条记录链到 `prevUuid`）——调用声明在水印之前、结果落在尾部的 `tool/result` 按孤儿丢弃计数，写回绝不破坏文件布局。用真实 `claude --resume` 加载写回文件是此方向的发布门槛。
 
 ## 🧩 数据模型
 
@@ -249,15 +279,16 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 | Reasonix | `import_reasonix` | ✅ 单测 + mock 集成（`npm test`）；55 个真实会话 dry-run |
 | opencode | `import_opencode` | ✅ 单测 + mock 集成（`npm test`） |
 | DSH → Claude Code | `export_claude` | ✅ 单测 + mock 集成（`npm test`） |
+| DSH → Claude Code（增量） | `sync_to_claude` | ✅ 单测 + mock 集成（`npm test`） |
 
-- **实测（Tested）**：`dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6`——2026-08 于 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（136 个用例）覆盖七种源格式的转换纯函数、`export.mjs` 序列化纯函数与 mock 集成路径（含 `export_claude`）。
+- **实测（Tested）**：`dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6`——2026-08 于 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（168 个用例）覆盖七种源格式的转换纯函数、`export.mjs` 序列化纯函数（全量 + 增量尾部 + 格式预检）与 mock 集成路径（含 `export_claude` 与 `sync_to_claude`）。
 - **预期兼容（Expected）**：`dsh-tools ^0.1.0-rc.6`——`dsh 0.1.x` 线，与宿主安装使用同一区间。
 - **区间外（Out of band）**：`<0.1.0-rc.6` 与 `>=0.2.0` 未测试——`dsh` 主版本升级后先跑 headless 冒烟，再更新本矩阵。
-- **导出门槛（Export gate）**：`export_claude` 输出由单测 + mock 集成覆盖；用真实 Claude Code `--resume` 加载导出文件是反向方向的发布门槛（导出格式可能被 Claude Code 校验拒绝——依赖前务必实测）。
+- **导出 / 写回门槛（Export / sync gate）**：`export_claude` / `sync_to_claude` 输出由单测 + mock 集成覆盖；用真实 Claude Code `--resume` 加载导出或写回文件是反向方向的发布门槛（写出的格式可能被 Claude Code 校验拒绝——依赖前务必实测）。
 
 ## 🔒 安全与边界
 
-- 源 transcript 只读、绝不原地改写；DSH 历史事件 append-only（deep-frozen）——只新增、绝不修改既有事件。`export_claude` 只读会话日志、绝不修改。
+- 导入绝不改写源 transcript（只读）；DSH 历史事件 append-only（deep-frozen）——只新增、绝不修改既有事件。`export_claude` 只读会话日志、绝不修改；`sync_to_claude` 只通过守卫 CAS 写入把完整轮追加到目标文件（缩小 / 外部修改 / 尾链失配 / 并发写者一律上报、绝不覆盖；格式预检失败自动回滚）。
 - 插件不修改 DSH 引擎、apiproxy 或官方 UI 包；不发布任何服务，无需 isolate realm。
 - 读取工作区之外的 transcript 需要会话沙箱允许访问该路径；导出写入 `<outputDir>/<slug>/<uuid>.jsonl`，目标在工作区之外同样需要会话沙箱放行。
 - 已知边界：不导入 `permission` / `summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃 `message.content` 之外的附加字段；Claude subagent / workflow 片段 transcript 跳过（只有主 `<sessionId>.jsonl` 成为会话），无对应 `tool_use` 的孤儿 `tool_result` 丢弃并计数（`droppedToolResults`）；Codex `reasoning` 加密跳过；Codex `custom_tool_call` 的 JS 形态参数自动转标准 JSON——无法转换的原样保留并计数（`droppedMalformedArgs`）；ChatGPT 导出只重建主线程（分支取最后 child）、工具消息降级为最近一步的文本块（导出无结构化 tool call，不再产生孤儿 `tool/result`）；Cursor transcript 无 `tool_result`（每个调用补发合成空 `tool/result`）、`[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方无稳定 schema）；Reasonix 读取 JSONL checkpoint（V2 WAL 排除）；opencode `patch` part 无 diff（只发 `[patch: <N> files]` 占位）、工具输出可能原样保留 ANSI 转义。
@@ -270,7 +301,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 npm test
 ```
 
-`test/convert.test.mjs` 覆盖七种源格式的纯转换逻辑（回合平衡、工具关联、标题、畸形行、注入过滤、去重、mapping 分支、REDACTED 过滤、内联工具结果、v1/v2 工具调用形状、opencode part 映射与模型回退）；`test/export.test.mjs` 覆盖 `export.mjs` 序列化纯函数（记录映射、工具配对、并行扇出、跨 step 结果、末尾补发空结果、孤儿丢弃、注入跳过、slugify、确定性 uuid、时间戳）；`test/index.test.mjs` 用 mock 的 `fs` / `sessionPersistence` / `tools` / `workspaceRegistry`（`import_opencode` 另用真实 SQLite 临时库）走完整 `apply → execute` 路径，并校验返回值符合输出 schema。
+`test/convert.test.mjs` 覆盖七种源格式的纯转换逻辑（回合平衡、工具关联、标题、畸形行、注入过滤、去重、mapping 分支、REDACTED 过滤、内联工具结果、v1/v2 工具调用形状、opencode part 映射与模型回退）；`test/export.test.mjs` 覆盖 `export.mjs` 序列化纯函数（记录映射、工具配对、并行扇出、跨 step 结果、末尾补发空结果、孤儿丢弃、注入跳过、slugify、确定性 uuid、时间戳）与 REQ-36 增量尾部（`tailClaudeEvents`、`serializeClaudeJsonlTail`、`verifyClaudeJsonl`）；`test/index.test.mjs` 用 mock 的 `fs` / `sessionPersistence` / `tools` / `workspaceRegistry`（`import_opencode` 另用真实 SQLite 临时库）走完整 `apply → execute` 路径，校验返回值符合输出 schema，并覆盖 `sync_to_claude` 的写回守卫、CAS 竞态、回滚与重导幂等路径。
 
 ## 📦 安装与卸载
 

@@ -63,7 +63,33 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   counted (`skippedInjections`), non-text blocks skipped and counted
   (`skippedBlocks`). The tool return carries a `mapping` shape
   (sourceSessionId → new UUID, file path, record counts) reserved for the
-  reverse-sync registry (REQ-24/36).
+  reverse-sync registry (REQ-24/36); for imported sessions the mapping is now
+  persisted into the registry (`record.exports`), which anchors the REQ-36
+  `target: "copy"` write-back.
+- **Reverse sync — incremental write-back `sync_to_claude`** (REQ-36) — the
+  first step of the bidirectional sync bridge: appends a DSH session's **new
+  complete turns** back to a Claude Code JSONL file (the import source with
+  `target: "source"`, or the last `export_claude` copy with `target: "copy"`)
+  so the file keeps being resumable. The pure core lives in the new
+  `lib/backfill.mjs` (zero DSH deps, ctx-injected `fs` /
+  `sessionPersistence`): the serializer is a shared-core variant
+  (`serializeClaudeJsonlTail` — no mode / permission-mode / ai-title header,
+  first record chained to the previous watermark's `prevUuid`,
+  cross-watermark delayed tool results counted as orphans) fed by
+  `tailClaudeEvents` (only turns closed by `turn/end`; half-open in-progress
+  turns are dropped and reported as `incompleteFinalTurn`). The first sync
+  baselines the watermark from the target file itself; afterwards three pure
+  guards (`evaluateWritebackGuards`) plus a stored-log check refuse to
+  overwrite: `sourceShrunk`, `source-modified-externally`, `tail-mismatch`,
+  `write-version-mismatch` (CAS `replaceIfVersion`), `storedShrunk`,
+  `source-missing` — `force: true` skips the guards and re-anchors the bridge
+  to the file's current state. A `verifyClaudeJsonl` format pre-check rolls a
+  bad write back and never advances the watermark. The registry record gains
+  `writeback` (`{ sessionUuid, filePath, lastWrittenSeq, lastWrittenTurn,
+  prevUuid, lastSize, lastVersion, writtenAt }`) with `turns` re-converted so
+  a later re-import stays idempotent (no duplicate append). Multi-session
+  sources and native sessions are rejected; `dryRun` computes everything
+  without writing.
 
 ### Changed
 
