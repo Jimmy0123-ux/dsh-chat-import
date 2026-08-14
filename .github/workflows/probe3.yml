@@ -1,0 +1,13 @@
+name: probe3
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "probe3 smoke ok $DSH_HOME"
+        env:
+          DSH_HOME: ${{ runner.temp }}/dsh-home
