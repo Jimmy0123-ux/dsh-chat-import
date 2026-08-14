@@ -35,6 +35,16 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Fixed
 
+- **Import-panel trigger no longer covered by other footer entries (REQ-41)** —
+  `sidebar.footer.action` is a 256px flex row; the official Cordis plugin badge
+  is a `flex: none; width: 256px` entry that occupies the whole row, squeezing
+  any sibling entry out of the container where the sidebar's `overflow: hidden`
+  clips it and the main content column covers it. The **导入会话** trigger is
+  now rendered as a fixed-position floating pill above the sidebar footer
+  (z-index above page content), so it stays visible and clickable regardless of
+  other footer occupants (icon-only in rail mode). The panel also closes on
+  `Escape` — its full-screen overlay previously had no keyboard escape and
+  blocked the whole page while open.
 - **`webServer` demoted from hard `inject` to an optional service** — REQ-41 had
   added `webServer` to the plugin's `inject` list, which made the whole plugin
   (all 12 import tools included) fail to activate in any dsh profile without a
