@@ -56,7 +56,11 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   light/dark theme). Dimensions and typography are matched pixel-for-pixel with
   the Settings entry (full-width 264×34, 22px line height, `6px 2px 6px 10px`
   padding, 8px gap, and the same CSS variables for label color / hover
-  background).
+  background). Placement is now **conditional on the Cordis badge**: the button
+  only floats above the footer while the official badge occupies the footer
+  row; when the badge is hidden or absent it drops into the footer row itself
+  (right above 设置), detected via `[data-cordis-badge]` visibility watched by a
+  `MutationObserver`.
 - **`index.mjs` split by responsibility into `lib/` host modules** — the plugin
   entry shrank from ~2500 lines to a 54-line composition that only assembles the
   pieces; every moved line is byte-identical (pure refactor, zero
