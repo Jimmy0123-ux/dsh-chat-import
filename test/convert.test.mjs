@@ -1421,6 +1421,49 @@ test('trimTurns: 单条巨工具结果（> 预算一半）被丢弃而非超限'
   assert.ok(trimmed.estimatedTokens <= 2000)
 })
 
+test('trimTurns: 整段 ≤ 锚点轮数 + 极小预算 → 锚点收缩丢轮计入 trimmed（REQ-49）', () => {
+  // 3 轮 ≤ 锚点 3 条 user 文本（rest 为空），预算小到「锚点 + 摘要预留」仍超预算 →
+  // 锚点从尾部收缩到 1 轮；被收缩的 2 轮必须计入 dropped*，不得静默消失。
+  const turns = textTurns(3, 100) // 每轮 ~202 tokens，3 轮 ~606 > 400 预算
+  const { turns: out, trimmed } = trimTurns(turns, 400)
+  assert.equal(trimmed.droppedTurns, 2)
+  assert.equal(trimmed.droppedMessages, 4) // 2 轮 × (1 prompt + 1 step)
+  assert.equal(trimmed.droppedToolCalls, 0)
+  assert.equal(trimmed.droppedToolResults, 0)
+  assert.equal(out.length, 1) // 收缩守卫：至少留 1 轮可续聊
+  assert.equal(out[0].prompt, turns[0].prompt)
+  assert.ok(trimmed.summaryInserted)
+  assert.ok(trimmed.estimatedTokens <= 400)
+})
+
+test('applyBudgetTrim: 整段 ≤ 锚点轮数 + 极小预算 → trimmed 非 null（REQ-49）', () => {
+  const turns = textTurns(3, 100)
+  const r = applyBudgetTrim(turns, 400)
+  assert.ok(r.trimmed) // engaged 不再全零 → 报告如实反映丢轮
+  assert.equal(r.trimmed.droppedTurns, 2)
+  assert.equal(r.turns.length, 1)
+  assert.equal(r.turns[0].prompt, turns[0].prompt)
+})
+
+test('trimTurns: 锚点收缩丢轮的工具调用/结果计入 droppedToolCalls/Results（REQ-49）', () => {
+  const turns = [
+    { prompt: 'q0', steps: [{ content: [{ type: 'text', text: 'a0' }], toolCalls: [], toolResults: [] }] },
+    // 放大 toolResult 使预算可放宽到 300：避免预算过小触发 L3 摘要丢弃，计数只反映 L2 锚点收缩
+    { prompt: 'q1', steps: [{ content: [{ type: 'text', text: 'a1' }], toolCalls: [{ id: 'c1', name: 'read', arguments: '{}' }], toolResults: [{ toolCallId: 'c1', content: [{ type: 'text', text: 'r1' + '字'.repeat(300) }] }] }] },
+    { prompt: 'q2', steps: [{ content: [{ type: 'text', text: 'a2' }], toolCalls: [{ id: 'c2', name: 'read', arguments: '{}' }, { id: 'c3', name: 'grep', arguments: '{}' }], toolResults: [{ toolCallId: 'c2', content: [{ type: 'text', text: 'r2' + '字'.repeat(300) }] }, { toolCallId: 'c3', content: [{ type: 'text', text: 'r3' + '字'.repeat(300) }] }] }] },
+  ]
+  // 总估算 ≈ 2+303+604 = 909 > 300 → 进 L2；锚点 3 轮 + 512 恒超 → 收缩到 1 轮，丢 t1/t2
+  const { turns: out, trimmed } = trimTurns(turns, 300)
+  assert.equal(trimmed.droppedTurns, 2)
+  assert.equal(trimmed.droppedToolCalls, 3) // 1 + 2
+  assert.equal(trimmed.droppedToolResults, 3) // 1 + 2
+  assert.equal(trimmed.droppedMessages, 7) // (1+1+1) + (1+1+2)
+  assert.equal(trimmed.droppedOversized, 0) // 计数只来自 L2，无 L3 干扰
+  assert.equal(out.length, 1)
+  assert.equal(out[0].prompt, 'q0')
+  assert.ok(trimmed.summaryInserted)
+})
+
 test('applyBudgetTrim: 无预算 / 非法预算 → 原样返回且无 trimmed 上报', () => {
   const turns = textTurns(5, 10)
   for (const budget of [undefined, null, 0, -1, 'abc', NaN]) {

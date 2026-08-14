@@ -255,12 +255,13 @@ test('convertOpenclawJson: 孤儿 toolResult（显式 id 无对应调用）丢�
 })
 
 test('convertOpenclawJson: budget 透传 → 超预算会话裁剪（trimmed 上报）', () => {
-  // 5 轮（> 锚点 3 轮）保证 L2 的 rest 非空，middle 丢弃轮次被正确计数
+  // 5 轮（> 锚点 3 轮）：budget=1 病态小 → 锚点从 3 收缩到 1（丢 2 轮）+ middle 丢 2 轮，
+  // droppedTurns 如实计 4（REQ-49：锚点收缩丢轮不得静默），保留 1 轮可续聊
   const mk = (n) => '{"type":"message","message":{"role":"user","content":"第' + n + '问"},"timestamp":"2026-03-06T10:0' + n + ':00Z"}\n{"type":"message","message":{"role":"assistant","content":"答' + n + '"},"timestamp":"2026-03-06T10:0' + n + ':30Z"}'
   const raw = mk(1) + '\n' + mk(2) + '\n' + mk(3) + '\n' + mk(4) + '\n' + mk(5)
   const out = convertOpenclawJson(raw, { budget: 1 })
   assert.ok(out.trimmed)
-  assert.equal(out.trimmed.droppedTurns, 2)
+  assert.equal(out.trimmed.droppedTurns, 4)
   assert.equal(out.turns.length, 1)
 })
 
