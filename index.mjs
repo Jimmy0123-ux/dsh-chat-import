@@ -29,6 +29,7 @@ import { syncClaudeSession } from './lib/backfill.mjs'
 import { resolveRegistryDir, loadImports, rememberImport, unwrapRecord, listPersistedIds, argsFingerprint, isSessionIdChange, decideSingle, decideMulti } from './lib/imports.mjs'
 import { readOpencodeDb, importOpencodeFile, importOpencodeDirectory } from './lib/opencode.mjs'
 import { readZcodeDb, importZcodeFile, importZcodeDirectory } from './lib/zcode.mjs'
+import { discoverSessions, FORMATS } from './lib/discovery.mjs'
 
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
@@ -903,6 +904,124 @@ async function exportClaudeSession(ctx, args, { uuid = randomUUID, registryDir }
   }
 }
 
+// ── REQ-25/REQ-40 会话发现（scan_discover 只读工具）────────────────────────
+// 发现核心在 lib/discovery.mjs（纯函数，host 注入）。这里把 ctx.fs 与 SQLite 读取器
+// 适配成 host：stat/readHead/readText/readDir + readSessions（复用 readOpencodeDb /
+// readZcodeDb / readHermesDb，不重写 SQL）。readHead 优先走 streamText 有界读头
+//（大 transcript 不整读）；无 streamText（如测试 mock）回退 readText 截断。
+
+// SQLite 会话摘要（发现用）：每会话 id/title/directory/createdAt/lastActiveAt/
+// messageCount。读不到（缺失/锁定/非 SQLite）返回 null，发现层按该格式无会话处理。
+function dbSessionSummaries(kind, dbPath) {
+  try {
+    if (kind === 'opencode') {
+      return readOpencodeDb(dbPath).map((s) => dbSummary(s, 'createdAt'))
+    }
+    if (kind === 'zcode') {
+      return readZcodeDb(dbPath).map((s) => dbSummary(s, 'createdAt'))
+    }
+    if (kind === 'hermes') {
+      const rows = readHermesDb(dbPath)
+      return rows === null ? null : rows.map((s) => ({
+        id: s.id, title: s.title, directory: s.cwd,
+        createdAt: s.createdAt, lastActiveAt: lastMsgTime(s.messages, 'ts'),
+        messageCount: s.messages.length,
+      }))
+    }
+  } catch {
+    // 读不到 / 锁定 / 非 SQLite：按无该格式会话处理（发现是预览，不抛）
+  }
+  return null
+}
+
+function dbSummary(s, timeKey) {
+  return {
+    id: s.id, title: s.title, directory: s.directory,
+    createdAt: s.createdAt, lastActiveAt: lastMsgTime(s.messages, timeKey),
+    messageCount: s.messages.length,
+  }
+}
+
+// 最后一条消息时间（最近活跃近似）；无消息/无时间 → undefined。
+function lastMsgTime(messages, key) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const v = messages[i] && messages[i][key]
+    if (typeof v === 'number') return v
+  }
+  return undefined
+}
+
+function makeDiscoveryHost(ctx) {
+  const fs = ctx.fs
+  const resolve = (p) => fs.resolve(p)
+  return {
+    async stat(path) {
+      try {
+        const info = await fs.stat(await resolve(path))
+        return info ? { type: info.type, size: info.size, mtimeMs: info.mtimeMs } : null
+      } catch {
+        // 缺失 / 无权限：按不存在处理，发现层跳过该路径
+        return null
+      }
+    },
+    async readHead(path, maxBytes) {
+      try {
+        const target = await resolve(path)
+        if (typeof fs.streamText === 'function') {
+          // 有界读头：取到 maxBytes 即停（for-await break 自动 close 迭代器）
+          const iter = await fs.streamText(target)
+          let out = ''
+          for await (const chunk of iter) {
+            out += chunk
+            if (out.length >= maxBytes) break
+          }
+          return out.slice(0, maxBytes)
+        }
+        const text = await fs.readText(target)
+        return text.slice(0, maxBytes)
+      } catch {
+        return null
+      }
+    },
+    async readText(path) {
+      try {
+        return await fs.readText(await resolve(path))
+      } catch {
+        // 缺失/非文本：null，发现层跳过该文件
+        return null
+      }
+    },
+    async readDir(path) {
+      try {
+        const entries = await fs.listDir(await resolve(path))
+        return entries.map((e) => ({
+          name: e.name,
+          type: e.type,
+          path: (e.target && (e.target.displayPath || e.target.targetKey)) || join(path, e.name),
+        }))
+      } catch {
+        return null
+      }
+    },
+    async readSessions(kind, dbPath) {
+      return dbSessionSummaries(kind, dbPath)
+    },
+  }
+}
+
+// scan_discover 执行：registry 只读 loadImports（importStatus 标注），发现层零副作用
+//（不写库、不 create/append、不 touch 任何会话）。30s TTL 缓存由 discovery 模块持有。
+async function runScanDiscover(ctx, args, registryDir) {
+  const registry = await loadImports(registryDir)
+  return discoverSessions({
+    path: args.path,
+    format: args.format,
+    query: args.query,
+    host: makeDiscoveryHost(ctx),
+    imports: registry.imports,
+  })
+}
+
 function apply(ctx) {
   // REQ-24 imports registry 目录：$DSH_HOME/dsh-chat-import（$DSH_HOME 缺省 ~/.dsh）
   const registryDir = resolveRegistryDir()
@@ -1371,6 +1490,84 @@ function apply(ctx) {
     },
     async execute(args) {
       return syncClaudeSession(ctx, args, { registryDir })
+    },
+  }))
+  // REQ-25/REQ-40 会话发现：第 11 个工具，只读扫描（发现核心在 lib/discovery.mjs，
+  // host 适配见 makeDiscoveryHost；30s TTL 缓存进程内共享）。零副作用：不写库、
+  // 不 create/append，registry 只读 loadImports 供 importStatus 标注。
+  ctx.tools.register(defineTool({
+    name: 'scan_discover',
+    description:
+      '只读扫描本机 11 种外部聊天记录格式的已知数据根（Claude Code / Codex / Cursor / ' +
+      'Gemini CLI / Reasonix / opencode / zcode / Grok Build / OpenClaw / Hermes / ' +
+      'ChatGPT 导出），返回结构化会话索引（format / sessionId / title / project / ' +
+      'createdAt / lastActiveAt / messageCount / sourcePath / importStatus），供批导入前预览。' +
+      'path 可选：给定时在该根下按格式探测（目录或单文件）；缺省扫全部格式的默认数据根。' +
+      'format 可选：只扫指定格式（chatgpt 无自动根，需 path 显式指向 conversations.json）。' +
+      'query 可选：按标题 / 项目 / 路径子串过滤（忽略大小写）。' +
+      '进程内 30s TTL 缓存：同 key 30 秒内重复扫描直接命中，不重读源文件。' +
+      '只读工具：不写库、不 create/append、不修改任何会话或 registry。返回 { sessions, total }。',
+    parameters: {
+      path: {
+        type: 'string',
+        description: '可选：扫描根（目录或单文件，如 ~/.claude/projects、某个 .jsonl 或 conversations.json）。缺省扫全部格式的默认数据根。',
+      },
+      format: {
+        type: 'string',
+        enum: FORMATS,
+        description: '可选：只扫指定格式；缺省按路径探测全部格式。',
+      },
+      query: {
+        type: 'string',
+        description: '可选：按标题 / 项目 / 路径子串过滤（忽略大小写）。',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          total: { type: 'integer', required: true },
+          sessions: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                format: { type: 'string', enum: FORMATS, required: true },
+                sessionId: { type: 'string', required: true },
+                title: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                project: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                createdAt: { oneOf: [{ type: 'integer' }, { type: 'null' }] },
+                lastActiveAt: { oneOf: [{ type: 'integer' }, { type: 'null' }] },
+                messageCount: { oneOf: [{ type: 'integer' }, { type: 'null' }] },
+                sourcePath: { type: 'string', required: true },
+                importStatus: { type: 'string', enum: ['imported', 'partial', 'not-imported'], required: true },
+              },
+            },
+          },
+        },
+      },
+      render: (args, value) => {
+        const byFormat = {}
+        for (const s of value.sessions) byFormat[s.format] = (byFormat[s.format] || 0) + 1
+        const formatBits = Object.entries(byFormat).map(([f, n]) => f + ' ' + n)
+        const imported = value.sessions.filter((s) => s.importStatus === 'imported').length
+        const partial = value.sessions.filter((s) => s.importStatus === 'partial').length
+        const pending = value.sessions.filter((s) => s.importStatus === 'not-imported').length
+        const statusBits = ['已导入 ' + imported]
+        if (partial) statusBits.push('部分 ' + partial)
+        statusBits.push('未导入 ' + pending)
+        return [{
+          type: 'text',
+          text: '扫描完成：共发现 ' + value.total + ' 个会话（' + formatBits.join('、') + '；'
+            + statusBits.join('、') + '）' + (args.query ? '（query=' + args.query + '）' : ''),
+        }]
+      },
+    },
+    async execute(args) {
+      return runScanDiscover(ctx, args, registryDir)
     },
   }))
 }

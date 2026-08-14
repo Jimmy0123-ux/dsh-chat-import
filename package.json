@@ -17,6 +17,7 @@
     "export.mjs",
     "lib/imports.mjs",
     "lib/backfill.mjs",
+    "lib/discovery.mjs",
     "lib/convert",
     "lib/hermes.mjs",
     "lib/opencode.mjs",

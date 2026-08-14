@@ -11,13 +11,16 @@ import { apply, readOpencodeDb, exportClaudeSession } from '../index.mjs'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { resolveRegistryDir, loadImports, rememberImport } from '../lib/imports.mjs'
 import { syncClaudeSession, evaluateWritebackGuards, readFileTailUuid } from '../lib/backfill.mjs'
+import { clearScanCache } from '../lib/discovery.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
 
 // REQ-24 registry 隔离：每个用例独立 DSH_HOME（registry 落盘在 $DSH_HOME/dsh-chat-import）
+// REQ-25 扫描缓存隔离：scan_discover 的 30s TTL 缓存进程内共享，每用例清空防串扰
 beforeEach(() => {
   process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-home-'))
+  clearScanCache()
 })
 
 // fs 版本指纹：内容派生，内容变则 version 变（mock stat 的 version 字段）。
@@ -222,15 +225,15 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册十三个工具（11 导入 + export_claude + sync_to_claude）', () => {
+test('apply 注册十四个工具（11 导入 + scan_discover + export_claude + sync_to_claude）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 13)
+  assert.equal(registered.length, 14)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_openclaw', 'import_opencode', 'import_reasonix', 'import_zcode', 'sync_to_claude'])
+  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_openclaw', 'import_opencode', 'import_reasonix', 'import_zcode', 'scan_discover', 'sync_to_claude'])
   for (const def of registered) {
-    if (def.name === 'export_claude' || def.name === 'sync_to_claude') {
-      // 导出 / 写回工具：单对象输出 schema（非 oneOf）
+    if (def.name === 'export_claude' || def.name === 'sync_to_claude' || def.name === 'scan_discover') {
+      // 导出 / 写回 / 发现工具：单对象输出 schema（非 oneOf）
       assert.equal(def.output.schema.type, 'object')
       assert.ok(!Array.isArray(def.output.schema.oneOf))
     } else {
@@ -239,6 +242,62 @@ test('apply 注册十三个工具（11 导入 + export_claude + sync_to_claude�
       assert.equal(def.output.schema.oneOf.length, 2)
     }
   }
+})
+
+test('scan_discover：目录探测 claude、注入过滤、schema 稳定、零副作用、缓存命中不重读', async () => {
+  const root = 'D:\\demo\\claude\\projects'
+  const tree = {
+    [root]: 'dir',
+    [root + '\\proj-a']: 'dir',
+    [root + '\\proj-a\\sess-aaa.jsonl']: [
+      '{"sessionId":"sess-aaa","type":"user","cwd":"D:\\\\demo\\\\claude-proj","message":{"role":"user","content":"帮我重构这个模块"}}',
+      '{"sessionId":"sess-aaa","type":"assistant","message":{"role":"assistant","content":"好"}}',
+    ].join('\n'),
+    [root + '\\proj-a\\sess-aaa']: 'dir', // 主 transcript 的伴生目录（非 .jsonl，不扫）
+    [root + '\\proj-a\\sess-aaa\\subagents']: 'dir',
+    [root + '\\proj-a\\sess-aaa\\subagents\\agent-123.jsonl']: '{"sessionId":"sess-aaa"}',
+    [root + '\\proj-a\\sess-bbb.jsonl']: [
+      '{"sessionId":"sess-bbb","type":"user","message":{"role":"user","content":"<system-reminder>系统注入，不是提问</system-reminder>"}}',
+      '{"sessionId":"sess-bbb","type":"user","message":{"role":"user","content":"真实问题"}}',
+    ].join('\n'),
+  }
+  const { ctx, persistence, writes, reads } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'scan_discover')
+
+  const first = await def.execute({ path: root })
+  assert.equal(first.total, 2)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, first), [])
+
+  const aaa = first.sessions.find((s) => s.sessionId === 'sess-aaa')
+  assert.ok(aaa)
+  assert.equal(aaa.format, 'claude')
+  assert.equal(aaa.title, '帮我重构这个模块')
+  assert.equal(aaa.project, 'claude-proj') // 记录内 cwd basename（REQ-40 项目名提取）
+  assert.equal(aaa.importStatus, 'not-imported') // registry 为空
+  assert.equal(aaa.messageCount, null) // claude 只读文件头，不计数
+  assert.equal(aaa.sourcePath, root + '\\proj-a\\sess-aaa.jsonl')
+
+  const bbb = first.sessions.find((s) => s.sessionId === 'sess-bbb')
+  assert.equal(bbb.title, '真实问题') // 注入首行被过滤（REQ-40 标题提取）
+  assert.equal(bbb.project, 'proj-a') // 无 cwd 记录 → 布局 slug 回退
+
+  // 零副作用：不写库、不 create/append、不写任何文件
+  assert.equal(persistence.sessions.size, 0)
+  assert.equal(writes.length, 0)
+
+  // 30s TTL 缓存：同 key 第二次扫描命中，不重读源文件
+  const readsAfterFirst = reads.count
+  assert.ok(readsAfterFirst > 0)
+  const second = await def.execute({ path: root })
+  assert.equal(second.total, 2)
+  assert.equal(reads.count, readsAfterFirst)
+
+  // query 过滤（标题/项目/路径子串，忽略大小写）
+  const q = await def.execute({ path: root, query: '重构' })
+  assert.equal(q.total, 1)
+  assert.equal(q.sessions[0].sessionId, 'sess-aaa')
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, q), [])
 })
 
 test('单文件导入：落盘、归组、返回值符合 schema', async () => {
