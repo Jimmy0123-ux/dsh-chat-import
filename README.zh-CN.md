@@ -8,7 +8,7 @@
 
 # DSH Chat Import
 
-> **一个插件，12 种来源** —— 全保真导入 DeepSeek Harness，无缝续聊，并可导出 / 同步回 Claude Code。
+> **一个插件，13 种来源** —— 全保真导入 DeepSeek Harness，无缝续聊，并可导出 / 同步回 Claude Code。
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-chat-import"><img src="https://img.shields.io/npm/v/dsh-chat-import" alt="npm version"></a>
@@ -24,7 +24,7 @@
   <b>已收录于：</b> <a href="https://github.com/0xsline/awesome-deepseek-harness">Awesome DeepSeek Harness</a> · <a href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin">Awesome DSH Plugin</a> · <a href="https://github.com/Dominic789654/awesome-deepseek-harness">Awesome DSH Plugins</a> · <a href="https://www.npmjs.com/package/dsh-chat-import">npm</a>
   &nbsp;&nbsp;·&nbsp;&nbsp; <b>更新日志（英文）：</b> <a href="CHANGELOG.md">CHANGELOG.md</a>
 </p>
-`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw、Pi Coding Agent 与 Hermes** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区。
+`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw、Pi Coding Agent、Hermes 与 Kimi CLI** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区。
 
 <img src="./assets/image-20260814205401839.png" alt="可以从多个来源导入会话" style="zoom: 67%;" />
 
@@ -34,7 +34,7 @@
 
 **📥 导入**
 
-- **12 种来源，一个插件** — 每种来源一条命令，从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录。
+- **13 种来源，一个插件** — 每种来源一条命令，从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录。
 - **🔍 全保真** — 工具调用与结果、思考块、标题、模型与时间戳，源有记录就原样保留。
 - **📦 批量导入** — 指向一个目录（或整个数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。
 
@@ -69,8 +69,9 @@
 | **OpenClaw** | `~/.openclaw/agents/<agent>/sessions/*.jsonl` | `import_openclaw` |
 | **Pi Coding Agent** | `~/.pi/agent/sessions/--<cwd>--/<timestamp>_<uuid>.jsonl` | `import_pi` |
 | **Hermes** | `~/.hermes/`（Windows `%LOCALAPPDATA%\hermes`） | `import_hermes` |
+| **Kimi CLI** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` | `import_kimi` |
 
-每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、时间戳、工具调用与结果、思考过程。数据较少的源导入其已有的内容；源格式无法保留的部分，会在导入报告里显式标注。
+每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、时间戳、工具调用与结果、思考过程。数据较少的源导入其已有的内容；源格式无法保留的部分，会在导入报告里显式标注（如 Kimi 镜像进父 wire 的 `SubagentEvent` 子代理对话会跳过——父 `Agent` 工具调用与结果保留，子代理自己的 `subagents/<agentId>/wire.jsonl` 可直接导入）。
 
 ## 🚀 快速开始
 
@@ -81,7 +82,7 @@ dsh plugin --profile web add dsh-chat-import                    # npm 包
 dsh plugin --profile web add -w link:/path/to/dsh-chat-import   # 本地源码（符号链接）
 ```
 
-**2. 导入** — 在任意 DSH 会话里导入单个文件或整个目录（11 个导入工具调用方式一致——见上方来源表）：
+**2. 导入** — 在任意 DSH 会话里导入单个文件或整个目录（13 个导入工具调用方式一致——见上方来源表）：
 
 ```
 import_claude({ path: "~/.claude/projects" })
@@ -118,7 +119,7 @@ import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl"
 
 ### scan_discover — 只读会话发现
 
-`scan_discover` 扫描全部 12 种格式的已知数据根，返回结构化会话索引（标题、项目、路径、导入状态），供批导入前预览。零副作用：
+`scan_discover` 扫描全部 13 种格式的已知数据根，返回结构化会话索引（标题、项目、路径、导入状态），供批导入前预览。零副作用：
 
 ```
 scan_discover()
@@ -171,7 +172,7 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 
 ## ⚙️ 兼容性
 
-面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 340 个用例。
+面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 367 个用例。
 
 ## 📦 安装与卸载
 

@@ -6,6 +6,7 @@ import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, statSync } from 'n
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { apply, readOpencodeDb, exportClaudeSession } from '../index.mjs'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
@@ -251,12 +252,12 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册十七个工具（12 导入 + scan_discover + export_claude + sync_to_claude + REQ-33 识别/撤回）', () => {
+test('apply 注册十八个工具（13 导入 + scan_discover + export_claude + sync_to_claude + REQ-33 识别/撤回）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 17)
+  assert.equal(registered.length, 18)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'retract_import', 'scan_discover', 'sync_to_claude'])
+  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'retract_import', 'scan_discover', 'sync_to_claude'])
   for (const def of registered) {
     if (['export_claude', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import'].includes(def.name)) {
       // 导出 / 写回 / 发现 / 识别 / 撤回工具：单对象输出 schema（非 oneOf）
@@ -1483,6 +1484,209 @@ test('import_hermes 单 .jsonl：db 之外的单会话源，mode single', async 
   assert.equal(value.status, 'imported')
   assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
   assert.equal(persistence.sessions.size, 1)
+})
+
+// ---- import_kimi 集成（会话目录：wire.jsonl + state.json + kimi.json 映射） ----
+
+// 合成 Kimi wire.jsonl：首行 metadata + 记录（timestamp 秒级递增）。
+function kimiWire(recs) {
+  const lines = ['{"type":"metadata","protocol_version":"1"}']
+  recs.forEach((r, i) => lines.push(JSON.stringify({ timestamp: 1776162400 + i, message: r })))
+  return lines.join('\n')
+}
+function kimiEv(type, payload = {}) { return { type, payload } }
+// kimi.json workdir 目录名 = md5(path)（kaos 本地时无前缀）
+const kimiHash = (p) => createHash('md5').update(p, 'utf8').digest('hex')
+
+test('import_kimi 单会话目录：wire.jsonl + state.json + kimi.json 映射、落盘、归组、schema 校验', async () => {
+  const workDir = 'D:/demo/kimi-proj'
+  const hashDir = kimiHash(workDir)
+  const sess = 'D:\\demo\\kimi\\sessions\\' + hashDir + '\\sess-001'
+  const tree = {
+    'D:\\demo\\kimi\\kimi.json': JSON.stringify({ work_dirs: [{ path: workDir, kaos: 'local', last_session_id: 'sess-001' }] }),
+    'D:\\demo\\kimi\\sessions': 'dir',
+    ['D:\\demo\\kimi\\sessions\\' + hashDir]: 'dir',
+    [sess]: 'dir',
+    [sess + '\\wire.jsonl']: kimiWire([
+      kimiEv('TurnBegin', { user_input: '帮我看看构建失败' }),
+      kimiEv('StepBegin', { n: 1 }),
+      kimiEv('TextPart', { text: '是缺少依赖。' }),
+      kimiEv('TurnEnd'),
+    ]),
+    [sess + '\\state.json']: JSON.stringify({ version: 1, custom_title: 'Kimi 会话标题' }),
+  }
+  const { ctx, persistence, attached } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_kimi')
+  const value = await def.execute({ path: sess })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-sess-001')
+  assert.equal(value.turns, 1)
+  assert.equal(value.messages, 2)
+  assert.equal(value.toolCalls, 0)
+  assert.equal(value.alreadyImported, false)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get('import-sess-001')
+  assert.ok(saved)
+  assert.equal(saved.meta.cwd, workDir) // kimi.json md5 映射
+  assert.equal(saved.meta.sourceId, 'sess-001')
+  // 显式标题（state.json custom_title）钉 session/title 事件
+  assert.equal(saved.events.at(-1).type, 'session/title')
+  assert.equal(saved.events.at(-1).data.title, 'Kimi 会话标题')
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+  // 幂等键 = 会话目录路径
+  assertImportedMarker(saved.events, { tool: 'kimi', sourceId: 'sess-001', sourcePath: sess })
+  assert.equal(attached.length, 1)
+  assert.equal(attached[0].id, 'import-sess-001')
+})
+
+test('import_kimi 目录批量：递归扫 wire.jsonl、逐会话独立落盘、schema 校验', async () => {
+  const hashDir = kimiHash('D:/demo/kimi-proj')
+  const mkSession = (id) => ({
+    ['D:\\demo\\kimi\\sessions\\' + hashDir + '\\' + id]: 'dir',
+    ['D:\\demo\\kimi\\sessions\\' + hashDir + '\\' + id + '\\wire.jsonl']: kimiWire([
+      kimiEv('TurnBegin', { user_input: '问题 ' + id }),
+      kimiEv('StepBegin', { n: 1 }),
+      kimiEv('TextPart', { text: '回答' }),
+      kimiEv('TurnEnd'),
+    ]),
+    ['D:\\demo\\kimi\\sessions\\' + hashDir + '\\' + id + '\\state.json']: '{}',
+  })
+  const tree = {
+    'D:\\demo\\kimi\\kimi.json': JSON.stringify({ work_dirs: [{ path: 'D:/demo/kimi-proj', kaos: 'local' }] }),
+    'D:\\demo\\kimi\\sessions': 'dir',
+    ['D:\\demo\\kimi\\sessions\\' + hashDir]: 'dir',
+    ...mkSession('sess-001'),
+    ...mkSession('sess-002'),
+    ['D:\\demo\\kimi\\sessions\\' + hashDir + '\\notes.txt']: 'not a session',
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_kimi')
+  const value = await def.execute({ path: 'D:\\demo\\kimi\\sessions' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.equal(value.failed, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  const ids = [...persistence.sessions.keys()].sort()
+  assert.deepEqual(ids, ['import-sess-001', 'import-sess-002'])
+  // kimi.json 映射的 cwd 挂进两会话
+  for (const id of ids) assert.equal(persistence.sessions.get(id).meta.cwd, 'D:/demo/kimi-proj')
+})
+
+test('import_kimi 增量续写：wire.jsonl 增长 → appended 同一会话（REQ-24）', async () => {
+  const hashDir = kimiHash('D:/demo/kimi-proj')
+  const sess = 'D:\\demo\\kimi\\sessions\\' + hashDir + '\\sess-incr'
+  const base = [
+    kimiEv('TurnBegin', { user_input: '问题一' }),
+    kimiEv('StepBegin', { n: 1 }),
+    kimiEv('TextPart', { text: '回答一' }),
+    kimiEv('TurnEnd'),
+  ]
+  const tree = {
+    'D:\\demo\\kimi\\sessions': 'dir',
+    ['D:\\demo\\kimi\\sessions\\' + hashDir]: 'dir',
+    [sess]: 'dir',
+    [sess + '\\wire.jsonl']: kimiWire(base),
+    [sess + '\\state.json']: '{}',
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_kimi')
+  const first = await def.execute({ path: sess })
+  assert.equal(first.status, 'imported')
+  const before = persistence.sessions.get('import-sess-incr').events.length
+
+  tree[sess + '\\wire.jsonl'] = kimiWire([...base,
+    kimiEv('TurnBegin', { user_input: '问题二' }),
+    kimiEv('StepBegin', { n: 1 }),
+    kimiEv('TextPart', { text: '回答二' }),
+    kimiEv('TurnEnd'),
+  ])
+  const second = await def.execute({ path: sess })
+  assert.equal(second.mode, 'single')
+  assert.equal(second.status, 'appended')
+  assert.equal(second.appendedTurns, 1)
+  assert.ok(second.appendedEvents > 0)
+  assert.equal(persistence.sessions.size, 1) // 同一会话续写
+  const saved = persistence.sessions.get('import-sess-incr')
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+  assert.equal(saved.events.length, before + second.appendedEvents)
+  assert.equal(saved.events.filter((e) => e.type === 'turn/start').length, 2)
+  assert.equal(saved.events.filter((e) => e.type === 'session/title').length, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, second), [])
+})
+
+test('import_kimi 单 wire.jsonl 文件：mode single、kimiId 从父目录派生', async () => {
+  const hashDir = kimiHash('D:/demo/kimi-proj')
+  const wirePath = 'D:\\demo\\kimi\\sessions\\' + hashDir + '\\sess-f\\wire.jsonl'
+  const tree = {
+    [wirePath]: kimiWire([
+      kimiEv('TurnBegin', { user_input: 'hi' }),
+      kimiEv('StepBegin', { n: 1 }),
+      kimiEv('TextPart', { text: 'hello' }),
+      kimiEv('TurnEnd'),
+    ]),
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_kimi')
+  const value = await def.execute({ path: wirePath })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-sess-f') // 父目录名作源 id
+  assert.equal(value.status, 'imported')
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  assert.equal(persistence.sessions.size, 1)
+})
+
+test('import_kimi 非会话目录：批量跳过（无用户回合）', async () => {
+  const tree = {
+    'D:\\demo\\kimi\\sessions': 'dir',
+    'D:\\demo\\kimi\\sessions\\empty-dir': 'dir',
+    'D:\\demo\\kimi\\sessions\\notes.txt': 'not a session',
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_kimi')
+  const value = await def.execute({ path: 'D:\\demo\\kimi\\sessions' })
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 0)
+  assert.equal(value.imported, 0)
+  assert.equal(persistence.sessions.size, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('import_kimi dry-run 预览：preview 零副作用、0 skipped、清单字段', async () => {
+  const hashDir = kimiHash('D:/demo/kimi-proj')
+  const sess = 'D:\\demo\\kimi\\sessions\\' + hashDir + '\\sess-prev'
+  const tree = {
+    'D:\\demo\\kimi\\sessions': 'dir',
+    ['D:\\demo\\kimi\\sessions\\' + hashDir]: 'dir',
+    [sess]: 'dir',
+    [sess + '\\wire.jsonl']: kimiWire([
+      kimiEv('TurnBegin', { user_input: '问题' }),
+      kimiEv('StepBegin', { n: 1 }),
+      kimiEv('TextPart', { text: '回答' }),
+      kimiEv('TurnEnd'),
+    ]),
+    [sess + '\\state.json']: '{}',
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_kimi')
+  const value = await def.execute({ path: sess, preview: true })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.preview, true)
+  assert.equal(value.turns, 1)
+  assert.equal(value.messages, 2)
+  assert.equal(value.toolCalls, 0)
+  assert.equal(value.skipped, 0)
+  assert.equal(persistence.sessions.size, 0) // 零副作用：不落盘
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
 })
 
 // ---- REQ-24 增量续写（重导 append 新轮次 + 源路径幂等键） ----
@@ -2908,16 +3112,16 @@ test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-im
   assert.equal(imp.kind, 'exact')
   assert.equal(typeof sessions.handler, 'function')
   assert.equal(typeof imp.handler, 'function')
-  // 只加路由，不加工具：12 导入 + scan/export/sync/list/retract = 17，注册数不变
-  assert.equal(registered.length, 17)
+  // 只加路由，不加工具：13 导入 + scan/export/sync/list/retract = 18，注册数不变
+  assert.equal(registered.length, 18)
 })
 
-test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、17 工具照常注册、无路由', () => {
+test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、18 工具照常注册、无路由', () => {
   const { ctx, webRoutes, registered } = makeCtx({}, { noWebServer: true })
   apply(ctx)
   // 缺 webServer 只是不注册面板路由，导入工具不受影响（CI headless 冒烟场景）
   assert.equal(webRoutes.length, 0)
-  assert.equal(registered.length, 17)
+  assert.equal(registered.length, 18)
 })
 
 test('REQ-41 /api-import/sessions handler：合成夹具经 discoverSessions 返回会话、未知来源 400', async () => {

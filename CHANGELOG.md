@@ -13,6 +13,21 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Added
 
+- **Kimi CLI source (REQ-14, 13th import source)** — new `import_kimi` tool
+  imports Moonshot AI's open-source terminal agent sessions from
+  `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` (single session
+  directory or a whole `sessions/` tree), mapping the wire event stream —
+  `TurnBegin` / `SteerInput` user inputs, `TextPart` / `ThinkPart` content
+  (streamed chunks merged), `ToolCall` / `ToolResult` tool calls & results
+  (paired with `sourceEventSeqs`), status/control events filtered, and
+  `SubagentEvent` sub-agent mirrors skipped & counted — onto the shared turns
+  IR. Titles come from `state.json` `custom_title` (authoritative) with the
+  first user text as fallback; `cwd` resolves via `~/.kimi/kimi.json`
+  (workdir → md5 directory name); idempotent skip / incremental append /
+  context-budget trim are identical to the other 12 sources. `scan_discover`,
+  the sidebar panel filter and `format: 'kimi'` cover the new source too.
+  `npm test` — 367 cases.
+
 - **Import panel follows the DSH web language (zh / en)** — every panel string
   (trigger title/label, panel title, source filter, search, select-all,
   pagination, import-status labels, per-item buttons and result summaries) moved

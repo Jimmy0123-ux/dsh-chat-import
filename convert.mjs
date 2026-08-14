@@ -72,3 +72,7 @@ export {
 export {
   convertHermesJson,
 } from './lib/convert/hermes.mjs'
+
+export {
+  convertKimiWire,
+} from './lib/convert/kimi.mjs'

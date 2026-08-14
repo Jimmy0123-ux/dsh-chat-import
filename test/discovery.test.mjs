@@ -5,6 +5,7 @@
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import {
   discoverSessions, createScanCache, clearScanCache, FORMATS, TITLE_MAX_LEN,
   isInjectedTitle, normalizeTitle, layoutProject, resolveImportStatus,
@@ -281,6 +282,40 @@ test('hermes：state.db 恒批量（复用读取器）+ db 不可用回退 JSONL
   assert.equal(r2.sessions[0].title, '什么是 Rust？')
 })
 
+test('kimi：wire.jsonl 会话目录发现、custom_title 标题、kimi.json md5 映射 cwd、无 wire 目录自拒', async () => {
+  const root = join(HOME, '.kimi', 'sessions')
+  const workDir = join('D:', 'demo', 'kimi-proj')
+  const hashDir = createHash('md5').update(workDir, 'utf8').digest('hex')
+  const sessDir = join(root, hashDir, 'sess-001')
+  const files = new Map([
+    [root, { type: 'dir' }],
+    [join(HOME, '.kimi'), { type: 'dir' }],
+    [join(root, hashDir), { type: 'dir' }],
+    [join(HOME, '.kimi', 'kimi.json'), { type: 'file', text: j({ work_dirs: [{ path: workDir, kaos: 'local' }] }) }],
+    [sessDir, { type: 'dir' }],
+    [join(sessDir, 'wire.jsonl'), { type: 'file', mtimeMs: 1786000002000, text: [
+      j({ type: 'metadata', protocol_version: '1' }),
+      j({ timestamp: 1786000000.5, message: { type: 'TurnBegin', payload: { user_input: '帮我重构这个模块' } } }),
+      j({ timestamp: 1786000001.5, message: { type: 'TextPart', payload: { text: '好的' } } }),
+    ].join('\n') }],
+    [join(sessDir, 'state.json'), { type: 'file', text: j({ custom_title: 'Kimi 会话标题' }) }],
+    // 无 wire.jsonl 的目录不是会话
+    [join(root, hashDir, 'not-a-session'), { type: 'dir' }],
+  ])
+  const host = mockHost(files)
+
+  const { sessions, total } = await discoverSessions({ path: root, format: 'kimi', host, imports: {} })
+  assert.equal(total, 1)
+  const s = sessions[0]
+  assert.equal(s.format, 'kimi')
+  assert.equal(s.sessionId, 'sess-001')
+  assert.equal(s.title, 'Kimi 会话标题') // custom_title 优先于 wire 首问
+  assert.equal(s.project, 'kimi-proj') // kimi.json md5 映射 cwd 的 basename
+  assert.equal(s.createdAt, 1786000000000) // 首条记录 timestamp（秒 → 毫秒）
+  assert.equal(s.lastActiveAt, 1786000002000) // wire.jsonl mtime
+  assert.equal(s.messageCount, null)
+})
+
 // ── 30s TTL 缓存（REQ-25/REQ-40：命中不重读，可观测计数断言）──────────────
 
 test('30s TTL 缓存：命中不重读、过期重扫（注入时钟）', async () => {
@@ -453,7 +488,7 @@ test('isInjectedTitle / normalizeTitle / layoutProject 纯函数', () => {
   assert.equal(layoutProject('/home/u/.cursor/projects/slug-c/agent-transcripts/abc/abc.jsonl', 'cursor'), 'slug-c')
 })
 
-test('FORMATS 与工具 schema enum 一致（12 种）', () => {
-  assert.equal(FORMATS.length, 12)
-  assert.deepEqual([...FORMATS].sort(), ['chatgpt', 'claude', 'codex', 'cursor', 'gemini', 'grokbuild', 'hermes', 'openclaw', 'opencode', 'pi', 'reasonix', 'zcode'])
+test('FORMATS 与工具 schema enum 一致（13 种）', () => {
+  assert.equal(FORMATS.length, 13)
+  assert.deepEqual([...FORMATS].sort(), ['chatgpt', 'claude', 'codex', 'cursor', 'gemini', 'grokbuild', 'hermes', 'kimi', 'openclaw', 'opencode', 'pi', 'reasonix', 'zcode'])
 })
