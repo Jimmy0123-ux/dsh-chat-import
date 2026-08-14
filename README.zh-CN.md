@@ -31,6 +31,7 @@
 - **📤 导出回 Claude Code** — `export_claude` 把任意 DSH 会话（导入的或原生的）序列化为 `<outputDir>/<slug>/<uuid>.jsonl` 的 Claude Code JSONL，可直接 `--resume`：user / assistant / 工具调用与结果、思考块、会话标题都按 Claude 记录布局重建。
 - **🔄 反向同步回 Claude Code** — `sync_to_claude` 把 DSH 会话的**新增完整轮次**增量写回导入源文件（或 `export_claude` 副本），链续到文件最后一条记录；文件缩小 / 外部修改 / 尾链失配 / 并发写者一律上报、绝不覆盖，格式预检失败自动回滚。
 - **📦 批量导入** — 指向一个目录（或整个 opencode 数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。
+- **🧮 上下文预算保护** — 导入会话没有 provider 配置，dsh 不会自动压缩它们（routedTarget 解析失败），全量历史灌入后 resume 直接 400。超长会话按上下文预算裁剪（预算解析优先级：`budget` 参数 > 环境变量 `DSH_IMPORT_CONTEXT_BUDGET` > `agentDefaultModel` + `llm` 动态模型窗口 > 静态默认 550k）：单条内容上限（文本 ≤16K 字符、工具结果 ≤40K 字符，保留头 75% + 尾）、消息级预算截断（最早 3 条 user 文本 + 压缩摘要 + 尾部消息）、以及单条消息仍超预算一半时直接丢弃的兜底。裁剪结果显式上报（`trimmed`：预算、token 估算、裁剪计数）。
 
 ## 🚀 快速开始
 
@@ -83,7 +84,8 @@ import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
 - `path` 可以是**单个文件或目录**（目录递归扫描，每个文件成为独立会话）。
 - 可选 `sessionId` 覆盖目标 DSH 会话 id（默认 `import-<源sessionId>`；Cursor 取文件名的 composer id，Reasonix 取文件名 stem）。重导时变更它会以新 id 另存一份完整副本（旧会话原样保留）。
 - 可选 `force: true`：即使已导入也以新 id（`import-<sessionId>-<n>`，`n` 为下一个空闲后缀）另存一份**完整副本**——旧会话绝不修改、绝不归档。
-- 返回 `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported, status }`，`status` 为 `imported` | `already-imported` | `appended` | `skipped`；另含可选 `appendedTurns` / `appendedEvents`（增长续写）、`sourceShrunk`（源截断）、`changedInPlace`（既有轮次内变化，append-only 无法改写）、`argsChanged`（导入参数变化）、`backfilled`（旧版本导入回填 registry 基线）、`forceImported: { previous, current }`（force / sessionId 变更副本）与 `droppedBoundaryResults`。
+- 返回 `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported, status }`，`status` 为 `imported` | `already-imported` | `appended` | `skipped`；另含可选 `appendedTurns` / `appendedEvents`（增长续写）、`sourceShrunk`（源截断）、`changedInPlace`（既有轮次内变化，append-only 无法改写）、`argsChanged`（导入参数变化）、`budgetChanged`（上下文预算变化）、`backfilled`（旧版本导入回填 registry 基线）、`forceImported: { previous, current }`（force / sessionId 变更副本）与 `droppedBoundaryResults`。
+- 可选 `budget`（整数 token）设置本次导入的上下文预算（解析优先级：本参数 > 环境变量 `DSH_IMPORT_CONTEXT_BUDGET` > 动态模型窗口 > 静态默认 550k）。当三层保护实际生效时，返回值带 `trimmed: { budget, source, originalTokens, estimatedTokens, croppedBlocks, droppedTurns, droppedMessages, droppedToolCalls, droppedToolResults, droppedOversized, summaryInserted }`——详见数据模型的「上下文预算保护」。
 
 `import_chatgpt` 不同：一个 `conversations.json` 包含**全部**会话，所以即使单文件也返回批量形态 `{ mode: 'batch', total, imported, alreadyImported, appended, skipped, failed, results: [...] }`（每个 `results` 项是一个会话，status 为 `imported` | `already-imported` | `appended` | `skipped` | `failed`）。增量逻辑逐会话生效：增长的会话被 append，从导出里消失的会话报进 `missingFromSource`（其会话原样保留），`force: true` 为每个会话建完整副本。ChatGPT 导出无 `cwd`，导入的会话不归组工作区。
 
@@ -102,8 +104,9 @@ import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
 | `force: true` | 以 `import-<sessionId>-<n>` 另存完整副本；旧会话绝不修改 |
 | 显式 `sessionId` 变更 | 以新 id 另存完整副本（force 副本语义）；旧会话保留 |
 | 导入参数变化（如 opencode `fullHistory`） | 跳过 + `argsChanged` |
+| 上下文预算变化（参数 / 环境变量 / 动态解析） | 跳过 + `budgetChanged`（语义同 `argsChanged`；记录保留旧预算，直到 `force: true` 按新预算重导） |
 
-registry 记录形如 `{ kind, dshId, turns, events, sizeBytes, version, args, importedAt }`（多会话源带逐会话/逐对话子表）；缺失或损坏容错（按空 registry 处理，下次导入重建）。registry 写入全部原子化（temp + fsync + rename）并在进程内串行化，直接用 `node:fs/promises`——绝不用 `ctx.fs`（沙箱会拒 `~/.dsh` 写入）。
+registry 记录形如 `{ kind, dshId, turns, events, sizeBytes, version, args, budget, importedAt }`（多会话源带逐会话/逐对话子表）；缺失或损坏容错（按空 registry 处理，下次导入重建）。registry 写入全部原子化（temp + fsync + rename）并在进程内串行化，直接用 `node:fs/promises`——绝不用 `ctx.fs`（沙箱会拒 `~/.dsh` 写入）。
 
 ## 📤 导出 — DSH → Claude Code JSONL
 
@@ -165,6 +168,12 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 **导入标记（`session/imported`）：** 每个导入会话的事件日志都以 `seq: 0` 的标记事件开头（在首个 `turn/start` 之前）。它带 `ignorable: true`，读侧全链路放行（`KNOWN_SESSION_EVENT_TYPES || ignorable`），不会被当作未知事件。`data` 记录来源信息——`{ tool, sourceId, sourcePath, importedAt }`：`tool` 是源标识（`claude-code` / `codex` / `chatgpt` / `cursor` / `gemini` / `reasonix` / `opencode`），`sourceId` 是源会话 id，`sourcePath` 是导入所依据的 transcript / 数据库绝对路径（即 imports registry 的幂等键），`importedAt` 是导入时刻。仅当 transcript 产出至少一轮对话时才写标记——无可导入内容不落空会话、也不加标记。
 
 **call/result 配对不变量：** 每个 `tool/call` 必有对应 `tool/result`（`sourceEventSeqs` 指回其 call），且每个结果挂在**声明该调用所在的 step**——保证投影出的消息顺序合法（每条 `role: 'tool'` 消息紧跟在它应答的 `tool_calls` assistant 消息之后，中间绝不插入另一条 assistant）。当 transcript 对某个调用从未记录结果（会话中断、Cursor transcript 本身无结果）时，导入器在**该调用自己的 step** 补发一个空 `tool/result`（`content: []`），保证会话仍可续聊——模型 API 会拒绝「assistant 带 `tool_calls` 但缺对应 tool 消息」的历史。空内容不是虚构文本；wire 适配器会把空内容归一为 `"(no output)"`。
+
+**上下文预算保护（REQ-37）：** turns 交合成前，导入器先估算 seed token（`estimateTokens`：CJK 1 token/字、ASCII 1 token/4 字符，约为字节估算的 2.0 倍），再按解析出的预算施加三层保护：
+  1. **单条内容上限** — 任何单条 text / reasoning 块超过 16K 字符、任何工具结果超过 40K 字符都会被裁剪（保留头 75% + 尾 25%，中间以裁剪标记衔接）。该上限对**每次导入**都生效，是第一道防线。
+  2. **消息级预算截断** — 整个会话仍超预算时，只保留最早 3 条 user 文本（开头锚点）、一条压缩摘要（前置到首个保留尾部轮 assistant 步骤的 `reasoning` 块，opencode compaction 同款模式）以及剩余预算能容纳的尽量多尾部轮；中间轮次丢弃。
+  3. **单条兜底** — 裁剪后仍超预算一半的单条消息直接丢弃（丢弃工具结果时调用保留，由空结果兜底补发 `"(no output)"`）；首条 user 文本永不丢弃，保证至少一轮可续聊。
+落盘会话的 seed 估算绝不超预算。预算解析优先级：`budget` 参数 > 环境变量 `DSH_IMPORT_CONTEXT_BUDGET` > 动态模型窗口（`agentDefaultModel.currentSelection()` + `llm.resolveModelInfo()` → `contextWindow − defaultMaxTokens − max(25% 窗口, 40k)`；服务不可用静默回退）> 静态默认 550k，并落进 imports registry。保护实际生效时返回值带 `trimmed`（见使用章节；`source` 为 `param` | `env` | `dynamic` | `default`），重导时预算变化上报 `budgetChanged`。
 
 ### Claude Code JSONL
 
@@ -266,7 +275,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 
 ## ⚙️ 兼容性
 
-- 只消费 host 公开插件 API（`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`）与 `@deepseek-ai/dsh-tools`（声明为 `peerDependencies` 范围 `^0.1.0-rc.6`，当前解析到 `0.1.0-rc.6`，即插件实测版本）。
+- 只消费 host 公开插件 API（`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`，另有可选 `agentDefaultModel` / `llm` 用于动态上下文预算解析——服务缺失或抛错静默回退静态默认）与 `@deepseek-ai/dsh-tools`（声明为 `peerDependencies` 范围 `^0.1.0-rc.6`，当前解析到 `0.1.0-rc.6`，即插件实测版本）。
 - 需要 **Node.js >= 22.13**——`node:sqlite`（`DatabaseSync`，`import_opencode` 使用）免 `--experimental-sqlite` flag 的首个版本（见 `package.json` 的 `engines`）。
 
 | 源格式 | 导入工具 | 实测 |
@@ -281,7 +290,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 | DSH → Claude Code | `export_claude` | ✅ 单测 + mock 集成（`npm test`） |
 | DSH → Claude Code（增量） | `sync_to_claude` | ✅ 单测 + mock 集成（`npm test`） |
 
-- **实测（Tested）**：`dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6`——2026-08 于 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（168 个用例）覆盖七种源格式的转换纯函数、`export.mjs` 序列化纯函数（全量 + 增量尾部 + 格式预检）与 mock 集成路径（含 `export_claude` 与 `sync_to_claude`）。
+- **实测（Tested）**：`dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6`——2026-08 于 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（183 个用例）覆盖七种源格式的转换纯函数（含 REQ-37 的 `estimateTokens` / `cropContentBlocks` / `trimTurns` 纯函数）、`export.mjs` 序列化纯函数（全量 + 增量尾部 + 格式预检）与 mock 集成路径（含 `export_claude`、`sync_to_claude` 与预算自适应导入——参数 / 环境变量 / 动态 / 默认解析、`trimmed` 上报、`budgetChanged`）。
 - **预期兼容（Expected）**：`dsh-tools ^0.1.0-rc.6`——`dsh 0.1.x` 线，与宿主安装使用同一区间。
 - **区间外（Out of band）**：`<0.1.0-rc.6` 与 `>=0.2.0` 未测试——`dsh` 主版本升级后先跑 headless 冒烟，再更新本矩阵。
 - **导出 / 写回门槛（Export / sync gate）**：`export_claude` / `sync_to_claude` 输出由单测 + mock 集成覆盖；用真实 Claude Code `--resume` 加载导出或写回文件是反向方向的发布门槛（写出的格式可能被 Claude Code 校验拒绝——依赖前务必实测）。
@@ -292,7 +301,8 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 - 插件不修改 DSH 引擎、apiproxy 或官方 UI 包；不发布任何服务，无需 isolate realm。
 - 读取工作区之外的 transcript 需要会话沙箱允许访问该路径；导出写入 `<outputDir>/<slug>/<uuid>.jsonl`，目标在工作区之外同样需要会话沙箱放行。
 - 已知边界：不导入 `permission` / `summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃 `message.content` 之外的附加字段；Claude subagent / workflow 片段 transcript 跳过（只有主 `<sessionId>.jsonl` 成为会话），无对应 `tool_use` 的孤儿 `tool_result` 丢弃并计数（`droppedToolResults`）；Codex `reasoning` 加密跳过；Codex `custom_tool_call` 的 JS 形态参数自动转标准 JSON——无法转换的原样保留并计数（`droppedMalformedArgs`）；ChatGPT 导出只重建主线程（分支取最后 child）、工具消息降级为最近一步的文本块（导出无结构化 tool call，不再产生孤儿 `tool/result`）；Cursor transcript 无 `tool_result`（每个调用补发合成空 `tool/result`）、`[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方无稳定 schema）；Reasonix 读取 JSONL checkpoint（V2 WAL 排除）；opencode `patch` part 无 diff（只发 `[patch: <N> files]` 占位）、工具输出可能原样保留 ANSI 转义。
-- **本次修复后需重新导入：** 已导入的会话是不可变日志——插件绝不改写既有历史。增长按增量续写 append；旧版本导入、缺少 call/result 配对的会话无法就地修复（删除旧会话后重新导入即可获得配对不变量）。源文件截断（`sourceShrunk`）或在已导入轮次内变化（`changedInPlace`）时跳过并报告——`force: true` 可另存完整副本。
+- **本次修复后需重新导入：** 已导入的会话是不可变日志——插件绝不改写既有历史。增长按增量续写 append；旧版本导入、缺少 call/result 配对的会话无法就地修复（删除旧会话后重新导入即可获得配对不变量）。源文件截断（`sourceShrunk`）或在已导入轮次内变化（`changedInPlace`）时跳过并报告——`force: true` 可另存完整副本。上下文预算变化重导时上报 `budgetChanged` 并跳过（同 `argsChanged`）：已存会话是按旧预算裁剪的，切换预算需要 `force: true`（或换 `sessionId`）重建。
+- **上下文预算保护：** 数据模型所述三层——单条内容上限（16K / 40K 字符，每次导入生效）、消息级预算截断（锚点 3 条 user 文本 + 摘要 + 尾部）、超预算一半的单条消息丢弃——全部在 `convert.mjs` 合成前纯函数执行并上报 `trimmed`。丢弃轮次计数（`droppedTurns` / `droppedMessages` / `droppedToolCalls` / `droppedToolResults` / `droppedOversized`）并插入压缩摘要（`reasoning`）保证会话仍连贯；源文件在磁盘上一字不动。
 - **导出边界：** 导出的 `thinking` 块带空 `signature`（Claude Code 在 resume 时丢弃这类思考块——文档化的降级）；非人类直连的注入与非 text 内容块（如图片）跳过并计数（`skippedInjections` / `skippedBlocks`）；DSH 日志里没有对应 `tool/call` 的孤儿 `tool_result` 丢弃并计数（`droppedToolResults`）；中断会话末尾补发空 `tool_result`。
 
 ## 🧪 测试
@@ -301,7 +311,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 npm test
 ```
 
-`test/convert.test.mjs` 覆盖七种源格式的纯转换逻辑（回合平衡、工具关联、标题、畸形行、注入过滤、去重、mapping 分支、REDACTED 过滤、内联工具结果、v1/v2 工具调用形状、opencode part 映射与模型回退）；`test/export.test.mjs` 覆盖 `export.mjs` 序列化纯函数（记录映射、工具配对、并行扇出、跨 step 结果、末尾补发空结果、孤儿丢弃、注入跳过、slugify、确定性 uuid、时间戳）与 REQ-36 增量尾部（`tailClaudeEvents`、`serializeClaudeJsonlTail`、`verifyClaudeJsonl`）；`test/index.test.mjs` 用 mock 的 `fs` / `sessionPersistence` / `tools` / `workspaceRegistry`（`import_opencode` 另用真实 SQLite 临时库）走完整 `apply → execute` 路径，校验返回值符合输出 schema，并覆盖 `sync_to_claude` 的写回守卫、CAS 竞态、回滚与重导幂等路径。
+`test/convert.test.mjs` 覆盖七种源格式的纯转换逻辑（回合平衡、工具关联、标题、畸形行、注入过滤、去重、mapping 分支、REDACTED 过滤、内联工具结果、v1/v2 工具调用形状、opencode part 映射与模型回退）以及 REQ-37 预算保护纯函数（`estimateTokens` / `cropContentBlocks` / `trimTurns` 与各源在预算下的裁剪集成）；`test/export.test.mjs` 覆盖 `export.mjs` 序列化纯函数（记录映射、工具配对、并行扇出、跨 step 结果、末尾补发空结果、孤儿丢弃、注入跳过、slugify、确定性 uuid、时间戳）与 REQ-36 增量尾部（`tailClaudeEvents`、`serializeClaudeJsonlTail`、`verifyClaudeJsonl`）；`test/index.test.mjs` 用 mock 的 `fs` / `sessionPersistence` / `tools` / `workspaceRegistry`（`import_opencode` 另用真实 SQLite 临时库）走完整 `apply → execute` 路径，校验返回值符合输出 schema，并覆盖 `sync_to_claude` 的写回守卫、CAS 竞态、回滚与重导幂等路径，以及 REQ-37 预算解析（参数 / 环境变量 / 动态模型窗口 / 默认 550k）、`trimmed` 上报与 `budgetChanged` 跳过。
 
 ## 📦 安装与卸载
 

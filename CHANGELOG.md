@@ -90,6 +90,33 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   a later re-import stays idempotent (no duplicate append). Multi-session
   sources and native sessions are rejected; `dryRun` computes everything
   without writing.
+- **Oversized-session protection** (REQ-37) — three-layer guard for very long
+  imports (without it an over-limit session fails with a 400 on resume when the
+  model has no provider config and auto-compaction cannot engage): L1 crops
+  individual content blocks (text / reasoning ≤ 16K chars, tool results ≤ 40K
+  chars, keeping the head 75% + tail with a crop marker); L2 truncates turns to
+  the resolved context budget (keeps the earliest 3 user texts as an anchor,
+  prepends a compression summary as a `reasoning` block, keeps the tail
+  greedily within the remaining budget); L3 drops any single message still over
+  half the budget after cropping — the first turn's prompt is never dropped,
+  oversized steps go with their tool calls, oversized tool results are replaced
+  by empty ones — so a resumable conversation always survives. Sessions within
+  budget are left intact except for L1 single-block cropping. The pure core
+  lives in `convert.mjs` (`estimateTokens` — CJK 1 token/char, ASCII 1
+  token/4 chars — plus `cropContentBlocks`, `trimTurns`, `applyBudgetTrim`) and
+  is wired into all seven sources before `synthesizeSession`; trimming reports
+  `trimmed: null` when nothing was actually cut.
+- **Adaptive import budget + explicit trim reporting** (REQ-37) —
+  `resolveImportBudget` in `index.mjs` resolves the per-import context budget as
+  tool parameter `budget` > env `DSH_IMPORT_CONTEXT_BUDGET` > dynamic model
+  window (`agentDefaultModel.currentSelection()` + `llm.resolveModelInfo`
+  minus the output cap and `max(25%, 40K)`) > static 550K default, silently
+  falling back when any link is unavailable. Import reports gain a `trimmed`
+  counter (budget, source, original / estimated tokens, cropped blocks, dropped
+  turns / messages / tool calls / tool results, oversized drops, summary
+  marker), and the imports registry records the budget so a budget change skips
+  with `budgetChanged` (same semantics as `argsChanged`; `force: true`
+  rebuilds).
 
 ### Changed
 
