@@ -140,6 +140,7 @@ function makeCtx(persistence, tree) {
       return undefined
     },
     tools: { register(def) { registered.push(def); return () => {} } },
+    on() { return () => {} }, // REQ-53：apply 监听 agent/session-start（本测试不模拟事件）
   }
   ctx.tools.registered = (name) => registered.find((d) => d.name === name)
   return { ctx, registered, fsCalls }

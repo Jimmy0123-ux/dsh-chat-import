@@ -395,6 +395,32 @@ test('importStatus：multi 源子表命中 imported、部分导入 partial', asy
   assert.equal(sessions.find((s) => s.sessionId === 'ses-c').importStatus, 'partial')
 })
 
+test('discoverSessions：archivedIds 传入 → 归档目标 importStatus=archived', async () => {
+  const root = join(HOME, '.claude', 'projects')
+  const slug = join(root, 'proj-a')
+  const s1 = join(slug, 'sess-001.jsonl')
+  const s2 = join(slug, 'sess-002.jsonl')
+  const files = new Map([
+    [root, { type: 'dir' }], [slug, { type: 'dir' }],
+    [s1, { type: 'file', mtimeMs: 1, text: [j({ sessionId: 'sess-001', type: 'user', cwd: 'D:\\p', message: { role: 'user', content: '问题A' } })].join('\n') }],
+    [s2, { type: 'file', mtimeMs: 2, text: [j({ sessionId: 'sess-002', type: 'user', message: { role: 'user', content: '问题B' } })].join('\n') }],
+  ])
+  const host = mockHost(files)
+  const imports = {
+    [s1]: { kind: 'single', dshId: 'import-sess-001' },
+    [s2]: { kind: 'single', dshId: 'import-sess-002' },
+  }
+
+  // 缺省不标注（旧行为）
+  const plain = await discoverSessions({ path: root, format: 'claude', host, imports, cache: createScanCache() })
+  assert.equal(plain.sessions.find((s) => s.sessionId === 'sess-001').importStatus, 'imported')
+
+  // 传入归档集：sess-001 的会话已归档 → archived；sess-002 未归档 → imported
+  const found = await discoverSessions({ path: root, format: 'claude', host, imports, cache: createScanCache(), archivedIds: ['import-sess-001'] })
+  assert.equal(found.sessions.find((s) => s.sessionId === 'sess-001').importStatus, 'archived')
+  assert.equal(found.sessions.find((s) => s.sessionId === 'sess-002').importStatus, 'imported')
+})
+
 test('resolveImportStatus：single / legacy string / 无记录', () => {
   const imports = {
     '/a.jsonl': { kind: 'single', dshId: 'x' },
@@ -403,6 +429,30 @@ test('resolveImportStatus：single / legacy string / 无记录', () => {
   assert.equal(resolveImportStatus(imports, '/a.jsonl', 's'), 'imported')
   assert.equal(resolveImportStatus(imports, '/b.jsonl', 's'), 'imported')
   assert.equal(resolveImportStatus(imports, '/missing.jsonl', 's'), 'not-imported')
+  assert.equal(resolveImportStatus(imports, '/a.jsonl', 's'), 'imported')
+})
+
+test('resolveImportStatus：归档目标 → archived（single / legacy / multi 子表）', () => {
+  const imports = {
+    '/a.jsonl': { kind: 'single', dshId: 'import-x' },
+    '/b.jsonl': 'import-legacy',
+    '/c.jsonl': { kind: 'multi', sessions: { 'ses-1': { dshId: 'import-s1' }, 'ses-2': { dshId: 'import-s2' } } },
+    '/d.jsonl': { kind: 'multi', sessions: {} },
+  }
+  const archived = new Set(['import-x', 'import-legacy', 'import-s1'])
+  // single 记录 dshId 已归档
+  assert.equal(resolveImportStatus(imports, '/a.jsonl', 's', archived), 'archived')
+  // 旧版纯字符串记录（记录即 dshId）已归档
+  assert.equal(resolveImportStatus(imports, '/b.jsonl', 's', archived), 'archived')
+  // multi 子表：命中的子会话已归档 → archived；未归档 → imported
+  assert.equal(resolveImportStatus(imports, '/c.jsonl', 'ses-1', archived), 'archived')
+  assert.equal(resolveImportStatus(imports, '/c.jsonl', 'ses-2', archived), 'imported')
+  // 子表非空但本会话不在（其它会话均已归档）→ partial（仍可重导，语义不变）
+  assert.equal(resolveImportStatus(imports, '/c.jsonl', 'ses-3', archived), 'partial')
+  // 未归档 → imported 不变；无记录 → not-imported 不变
+  assert.equal(resolveImportStatus(imports, '/a.jsonl', 's', new Set(['other'])), 'imported')
+  assert.equal(resolveImportStatus(imports, '/missing.jsonl', 's', archived), 'not-imported')
+  // archivedIds 缺省 → 不标注（旧行为）
   assert.equal(resolveImportStatus(imports, '/a.jsonl', 's'), 'imported')
 })
 

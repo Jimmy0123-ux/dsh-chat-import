@@ -37,6 +37,26 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   to the built-in zh dictionary (previous behavior). The bilingual README
   tagline is corrected to 12 sources.
 
+### Fixed
+
+- **Archived imported sessions can be re-imported (REQ-55)** — previously the
+  import status was derived purely from the imports registry, so after
+  archiving an imported DSH session (hidden from the sidebar; the session and
+  its id remain in persistence) the panel and `scan_discover` still reported
+  it as `imported` and a re-import was skipped as already-imported. Both layers
+  now consult the workspace registry's global archive set
+  (`workspaceRegistry.archivedSessionIds`):
+  - discovery reports such sessions as a new **`archived`** status (已归档 /
+    Archived badge) and the panel shows the **导入** button instead of the
+    sync-only row, so the source is re-importable;
+  - re-importing an archived target creates a fresh copy under a suffixed id
+    (`import-<sessionId>-<n>`, same minting as `force`), leaving the archived
+    session untouched, for single-file sources (all 13) and per-session inside
+    multi-session sources (chatgpt / opencode / zcode / hermes db); the
+    registry record points at the new copy. `scan_discover`'s `importStatus`
+    enum and summary include `archived`.
+  `npm test` — 385 cases.
+
 ## [0.3.1] - 2026-08-14
 
 ### Added

@@ -202,7 +202,11 @@ function makeCtx(tree, opts = {}) {
   const workspaceRegistry = {
     async resolveByPath(p) { return workspaces.get(p) ?? null },
     async create(p) { const ws = { path: p, attachSession: async (id) => attached.push({ ws: p, id }) }; workspaces.set(p, ws); return ws },
+    // REQ-55 归档感知：全局归档集（opts.archived 种子）；archive 辅助供测试把会话归档
+    get archivedSessionIds() { return archivedIds },
+    async archiveSession(id) { archivedIds.push(id) },
   }
+  const archivedIds = Array.isArray(opts.archived) ? [...opts.archived] : []
 
   // webServer 是可选且晚挂载的服务（REQ-41 路由经 ctx.inject(['webServer']) 延迟
   // 注册）：opts.noWebServer 模拟 headless / 无 Web 的 profile——inject 回调永不
@@ -233,6 +237,7 @@ function makeCtx(tree, opts = {}) {
     tools: {
       register(def) { registered.push(def); return () => {} },
     },
+    on() { return () => {} }, // REQ-53：apply 监听 agent/session-start（本测试不模拟事件）
   }
   // 测试辅助：按名字取出注册的工具定义
   ctx.tools.registered = (toolName) => registered.find((d) => d.name === toolName)
@@ -369,6 +374,39 @@ test('幂等：重复导入同一文件返回 alreadyImported 且不重复落盘
   assert.equal(first.alreadyImported, false)
   assert.equal(second.alreadyImported, true)
   assert.equal(persistence.sessions.size, 1)
+})
+
+test('REQ-55 归档重导：目标会话归档后重导建后缀新副本，归档会话保留、记录指向新副本', async () => {
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
+  apply(ctx)
+  const def = registeredDef(ctx)
+
+  const first = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(first.sessionId, 'import-sess-simple-001')
+
+  // 归档目标会话（DSH UI 的归档 = workspaceRegistry 全局归档集；会话仍在持久化里）
+  const wr = ctx.get('workspaceRegistry')
+  await wr.archiveSession('import-sess-simple-001')
+
+  // 重导：不再视为已导入——建后缀新副本（import-<id>-1），旧归档会话原样保留
+  const second = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(second.status, 'imported')
+  assert.equal(second.alreadyImported, false)
+  assert.equal(second.sessionId, 'import-sess-simple-001-1')
+  assert.equal(persistence.sessions.size, 2)
+  assert.ok(persistence.sessions.has('import-sess-simple-001'))
+  assert.ok(persistence.sessions.has('import-sess-simple-001-1'))
+
+  // registry 记录指向新副本（原归档会话不再被记录追踪）
+  const registry = (await loadImports(resolveRegistryDir())).imports
+  assert.equal(registry['D:\\demo\\proj\\sess-simple-001.jsonl'].dshId, 'import-sess-simple-001-1')
+
+  // 新副本再导入 → 幂等 already-imported（不重复建副本）
+  const third = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(third.alreadyImported, true)
+  assert.equal(third.sessionId, 'import-sess-simple-001-1')
+  assert.equal(persistence.sessions.size, 2)
 })
 
 test('单文件导入工具历史：tool/result 带 sourceEventSeqs', async () => {
@@ -628,6 +666,31 @@ test('import_chatgpt 幂等：重复导入同一文件只落盘一次', async ()
   assert.equal(second.imported, 0)
   assert.equal(second.alreadyImported, 2)
   assert.equal(persistence.sessions.size, 2)
+})
+
+test('REQ-55 multi 源归档重导：部分会话归档 → 重导只对归档会话建后缀新副本，其余幂等', async () => {
+  const file = 'D:\\demo\\chatgpt\\conversations.json'
+  const { ctx, persistence } = makeCtx({ [file]: load('chatgpt-export.json') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_chatgpt')
+  const first = await def.execute({ path: file })
+  assert.equal(first.imported, 2)
+
+  // 归档其中一个会话（conv-001）→ 短路径 allPersisted 失效，走全量重导
+  const wr = ctx.get('workspaceRegistry')
+  await wr.archiveSession('import-conv-001')
+  const second = await def.execute({ path: file })
+  assert.equal(second.imported, 1) // 仅 conv-001 重导（后缀新副本）
+  assert.equal(second.alreadyImported, 1) // conv-002 幂等跳过
+  assert.equal(persistence.sessions.size, 3)
+  assert.equal(second.results.find((r) => r.status === 'imported').sessionId, 'import-conv-001-1')
+  assert.ok(persistence.sessions.has('import-conv-001')) // 归档会话保留
+  assert.ok(persistence.sessions.has('import-conv-001-1'))
+
+  // 记录子表指向新副本
+  const registry = (await loadImports(resolveRegistryDir())).imports
+  assert.equal(registry[file].conversations['conv-001'].dshId, 'import-conv-001-1')
+  assert.equal(registry[file].conversations['conv-002'].dshId, 'import-conv-002')
 })
 
 test('import_chatgpt 目录模式：扫描 .json（非 .jsonl）、递归汇总', async () => {
@@ -3235,6 +3298,40 @@ test('REQ-41 /api-import/sessions handler：分页（offset/limit + total）+ �
   const all = await invoke({ source: 'claude-code', path: root })
   assert.equal(all.data.sessions.length, 3)
   assert.equal(all.data.limit, 3)
+})
+
+test('REQ-55 面板发现 + scan_discover：归档目标 importStatus=archived（可重导），未归档导入仍 imported', async () => {
+  const root = 'D:\\demo\\claude\\projects'
+  const file = root + '\\proj-a\\sess-aaa.jsonl'
+  const tree = {
+    [root]: 'dir',
+    [root + '\\proj-a']: 'dir',
+    [file]: '{"sessionId":"sess-aaa","type":"user","cwd":"D:\\\\demo\\\\claude-proj","message":{"role":"user","content":"问题"}}\n{"sessionId":"sess-aaa","type":"assistant","message":{"role":"assistant","content":"好"}}',
+  }
+  const { ctx, webRoutes } = makeCtx(tree)
+  apply(ctx)
+  const imp = registeredDef(ctx)
+  await imp.execute({ path: file })
+  const wr = ctx.get('workspaceRegistry')
+  await wr.archiveSession('import-sess-aaa')
+
+  // 面板数据源：/api-import/sessions 返回 archived（客户端据此显示「已归档」+ 导入按钮）
+  const route = webRoutes.find((r) => r.path === '/api-import/sessions')
+  const invoke = async (body) => {
+    const req = { async *[Symbol.asyncIterator]() { yield JSON.stringify(body) } }
+    const res = { status: null, headers: null, body: null, writeHead(s, h) { this.status = s; this.headers = h }, end(b) { this.body = b } }
+    await route.handler(req, res)
+    return { res, data: JSON.parse(res.body) }
+  }
+  const panel = await invoke({ source: 'claude-code', path: root })
+  assert.equal(panel.data.ok, true)
+  assert.equal(panel.data.sessions[0].importStatus, 'archived')
+
+  // scan_discover 同口径（schema 含 archived）
+  const scan = registeredDef(ctx, 'scan_discover')
+  const found = await scan.execute({ path: root })
+  assert.equal(found.sessions.find((s) => s.sessionId === 'sess-aaa').importStatus, 'archived')
+  assert.deepEqual(validateJsonSchemaValue(scan.output.schema, found), [])
 })
 
 // ---- REQ-41 Stage 2 面板导入路由（POST /api-import/import） ----
