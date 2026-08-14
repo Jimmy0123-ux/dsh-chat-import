@@ -197,6 +197,7 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 ## ⚙️ Compatibility
 
 - Consumes only public host plugin APIs (`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`) and `@deepseek-ai/dsh-tools`, declared as a `peerDependencies` range `^0.1.0-rc.6` (currently resolving to `0.1.0-rc.6`, the version the plugin is tested against).
+- Requires **Node.js >= 22.13** — the first release where `node:sqlite` (`DatabaseSync`, used by `import_opencode`) is available without the `--experimental-sqlite` flag (see `engines` in `package.json`).
 
 | Source format | Import tool | Verified |
 | --- | --- | --- |

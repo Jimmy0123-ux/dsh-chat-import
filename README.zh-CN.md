@@ -197,6 +197,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 ## ⚙️ 兼容性
 
 - 只消费 host 公开插件 API（`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`）与 `@deepseek-ai/dsh-tools`（声明为 `peerDependencies` 范围 `^0.1.0-rc.6`，当前解析到 `0.1.0-rc.6`，即插件实测版本）。
+- 需要 **Node.js >= 22.13**——`node:sqlite`（`DatabaseSync`，`import_opencode` 使用）免 `--experimental-sqlite` flag 的首个版本（见 `package.json` 的 `engines`）。
 
 | 源格式 | 导入工具 | 实测 |
 | --- | --- | --- |
