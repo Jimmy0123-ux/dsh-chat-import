@@ -211,7 +211,7 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 | Reasonix | `import_reasonix` | ✅ unit + mock integration (`npm test`); dry-run on 55 real sessions |
 | opencode | `import_opencode` | ✅ unit + mock integration (`npm test`) |
 
-- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (79 cases) covers the pure conversion logic and mock integration paths for all seven source formats.
+- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (88 cases) covers the pure conversion logic and mock integration paths for all seven source formats.
 - **Expected**: `dsh-tools ^0.1.0-rc.6` — the `dsh 0.1.x` line, the same range the host install uses.
 - **Out of band**: `<0.1.0-rc.6` and `>=0.2.0` are untested — after a `dsh` major upgrade, run a headless smoke test first, then update this matrix.
 
