@@ -237,9 +237,9 @@ test('apply 注册十四个工具（11 导入 + scan_discover + export_claude + 
       assert.equal(def.output.schema.type, 'object')
       assert.ok(!Array.isArray(def.output.schema.oneOf))
     } else {
-      // 导入工具：输出 schema 是 oneOf（单文件 / 批量）
+      // 导入工具：输出 schema 是 oneOf（单文件 / 批量 + REQ-17 dry-run 预览两个变体）
       assert.ok(Array.isArray(def.output.schema.oneOf))
-      assert.equal(def.output.schema.oneOf.length, 2)
+      assert.equal(def.output.schema.oneOf.length, 4)
     }
   }
 })
@@ -2599,4 +2599,190 @@ test('REQ-37 目录批量导入：逐文件 trimmed 进 results（schema 校验�
   } finally {
     delete process.env.DSH_IMPORT_CONTEXT_BUDGET
   }
+})
+
+// ---- REQ-17 导入 dry-run 预览（preview / dryRun 别名） ----
+
+test('REQ-17 单文件 preview：返回预览清单（标题/cwd/时间/规模）、零副作用、schema 校验', async () => {
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence, attached, reads } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl', preview: true })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.preview, true)
+  // 无写入态字段（与正式导入同骨架，只去掉 sessionId/status/alreadyImported 等）
+  assert.equal(value.sessionId, undefined)
+  assert.equal(value.status, undefined)
+  assert.equal(value.alreadyImported, undefined)
+  // 清单字段：标题 / cwd / 时间 / 规模
+  assert.equal(value.title, '你好，帮我看看这个项目')
+  assert.equal(value.cwd, 'D:\\demo\\proj')
+  assert.equal(typeof value.createdAt, 'number')
+  assert.equal(value.turns, 1)
+  assert.equal(value.messages, 2)
+  assert.equal(value.toolCalls, 0)
+  assert.equal(value.skipped, 0)
+  assert.ok(reads.count > 0) // 确实读了源文件（转换发生）
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  // 零副作用：不落盘、不归组、不写 imports registry
+  assert.equal(persistence.sessions.size, 0)
+  assert.equal(attached.length, 0)
+  const reg = await loadImports(resolveRegistryDir())
+  assert.deepEqual(reg.imports, {})
+})
+
+test('REQ-17 dryRun 别名：与 preview 同语义（单文件）', async () => {
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence, attached } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl', dryRun: true })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.preview, true)
+  assert.equal(value.turns, 1)
+  assert.equal(persistence.sessions.size, 0)
+  assert.equal(attached.length, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('REQ-17 目录 preview：批量形态（total/results 同骨架）、逐文件条目、零副作用', async () => {
+  const tree = {
+    'D:\\demo\\proj': 'dir',
+    'D:\\demo\\proj\\sess-simple-001.jsonl': load('sess-simple-001.jsonl'),
+    'D:\\demo\\proj\\sess-multi-001.jsonl': load('sess-multi-001.jsonl'),
+    'D:\\demo\\proj\\agent-abc123.jsonl': load('sess-simple-001.jsonl'), // 辅助 transcript → 跳过
+    'D:\\demo\\proj\\sess-bad-001.jsonl': load('sess-bad-001.jsonl'),
+  }
+  const { ctx, persistence, attached } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const value = await def.execute({ path: 'D:\\demo\\proj', preview: true })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.preview, true)
+  assert.equal(value.total, 4)
+  // 无写入态计数（imported/alreadyImported/appended/skipped/failed 是落盘决策产物）
+  assert.equal(value.imported, undefined)
+  assert.equal(value.skipped, undefined)
+
+  const simple = value.results.find((r) => r.path.endsWith('sess-simple-001.jsonl'))
+  assert.ok(simple)
+  assert.equal(simple.title, '你好，帮我看看这个项目')
+  assert.equal(simple.cwd, 'D:\\demo\\proj')
+  assert.equal(simple.turns, 1)
+  assert.equal(simple.messages, 2)
+  const multi = value.results.find((r) => r.path.endsWith('sess-multi-001.jsonl'))
+  assert.equal(multi.turns, 1)
+  assert.equal(multi.messages, 4) // user + 2 assistant + 1 tool/result
+  assert.equal(multi.toolCalls, 1)
+  // 辅助 transcript：跳过明细（skipReason）
+  const aux = value.results.find((r) => r.path.endsWith('agent-abc123.jsonl'))
+  assert.equal(aux.turns, 0)
+  assert.equal(aux.skipped, 1)
+  assert.ok(aux.skipReason.includes('auxiliary'))
+  // 畸形行计数进预览（规模含跳过明细）
+  const bad = value.results.find((r) => r.path.endsWith('sess-bad-001.jsonl'))
+  assert.equal(bad.turns, 1)
+  assert.equal(bad.skipped, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  // 零副作用
+  assert.equal(persistence.sessions.size, 0)
+  assert.equal(attached.length, 0)
+  const reg = await loadImports(resolveRegistryDir())
+  assert.deepEqual(reg.imports, {})
+})
+
+test('REQ-17 辅助 transcript 单文件 preview：跳过明细（skipReason）', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\proj\\agent-abc123.jsonl': load('sess-simple-001.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const value = await def.execute({ path: 'D:\\demo\\proj\\agent-abc123.jsonl', preview: true })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.preview, true)
+  assert.equal(value.turns, 0)
+  assert.equal(value.messages, 0)
+  assert.equal(value.skipped, 1)
+  assert.ok(value.skipReason.includes('auxiliary'))
+  assert.equal(persistence.sessions.size, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('REQ-17 import_chatgpt preview：单 conversations.json 逐会话预览（恒批量）', async () => {
+  const { ctx, persistence, attached } = makeCtx({ 'D:\\demo\\chatgpt\\conversations.json': load('chatgpt-export.json') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_chatgpt')
+  const value = await def.execute({ path: 'D:\\demo\\chatgpt\\conversations.json', preview: true })
+
+  assert.equal(value.mode, 'batch') // 单文件也恒批量
+  assert.equal(value.preview, true)
+  assert.equal(value.total, 3) // 2 个可导入会话 + 1 个 system-only 跳过
+  const conv1 = value.results.find((r) => r.title === 'Python debugging help')
+  assert.ok(conv1)
+  assert.equal(conv1.turns, 2)
+  assert.equal(typeof conv1.createdAt, 'number')
+  const skip = value.results.find((r) => r.skipReason)
+  assert.ok(skip)
+  assert.ok(skip.skipReason.includes('no importable conversations'))
+  assert.equal(persistence.sessions.size, 0)
+  assert.equal(attached.length, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('REQ-17 import_opencode preview：SQLite 库逐会话预览（恒批量、零副作用）', async () => {
+  const dbPath = makeOpencodeDb(opencodeTestSessions())
+  const { ctx, persistence, attached } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  const value = await def.execute({ path: dbPath, preview: true })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.preview, true)
+  assert.equal(value.total, 2)
+  const a = value.results.find((r) => r.title === 'Fix build')
+  assert.ok(a)
+  assert.equal(a.cwd, 'E:/demo/opencode')
+  assert.equal(a.createdAt, 1786000000000)
+  assert.equal(a.turns, 1)
+  assert.equal(a.toolCalls, 1)
+  assert.equal(persistence.sessions.size, 0)
+  assert.equal(attached.length, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('REQ-17 已导入文件 preview：不 consult registry 短路径，仍报真实转换统计', async () => {
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
+  apply(ctx)
+  const def = registeredDef(ctx)
+  await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' }) // 正式导入（建 registry 记录）
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl', preview: true })
+  assert.equal(value.preview, true)
+  // 预览不做幂等短路径：即使已导入仍返回真实转换统计（而非 0 轮 already-imported）
+  assert.equal(value.turns, 1)
+  assert.equal(value.messages, 2)
+  assert.equal(value.sessionId, undefined)
+  assert.equal(persistence.sessions.size, 1) // 预览不新增落盘
+})
+
+test('REQ-17 预览 → 正式导入：去掉 preview 后字段口径一致、预览不产生 registry 记录', async () => {
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const preview = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl', preview: true })
+  const real = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+
+  // 同源口径：规模字段与正式导入一致
+  assert.equal(preview.turns, real.turns)
+  assert.equal(preview.messages, real.messages)
+  assert.equal(preview.toolCalls, real.toolCalls)
+  assert.equal(preview.skipped, real.skipped)
+  // 预览不写 registry → 正式导入是首次导入（非 already-imported）
+  assert.equal(real.alreadyImported, false)
+  assert.equal(real.sessionId, 'import-sess-simple-001')
+  assert.equal(persistence.sessions.size, 1)
 })

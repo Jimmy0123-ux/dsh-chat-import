@@ -12,6 +12,8 @@
 // JSONL（export.mjs 纯函数），写到 <outputDir>/<slug>/<uuid>.jsonl；
 // 注册 `sync_to_claude`（REQ-36）：把 DSH 会话新增轮次增量写回 Claude Code
 // JSONL（lib/backfill.mjs 纯逻辑 + ctx 注入），守卫冲突绝不静默覆盖。
+// REQ-17：import_* 支持 preview / dryRun 参数——只读转换 + 统计返回将导入清单
+//（标题 / cwd / 时间 / 规模 / 跳过明细），零副作用（不落盘、不写 registry）。
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -28,7 +30,7 @@ import { slugifyClaudeCwd, serializeClaudeJsonl } from './export.mjs'
 import { syncClaudeSession } from './lib/backfill.mjs'
 import { resolveRegistryDir, loadImports, rememberImport, unwrapRecord, listPersistedIds, argsFingerprint, isSessionIdChange, decideSingle, decideMulti } from './lib/imports.mjs'
 import { readOpencodeDb, importOpencodeFile, importOpencodeDirectory } from './lib/opencode.mjs'
-import { readZcodeDb, importZcodeFile, importZcodeDirectory } from './lib/zcode.mjs'
+import { readZcodeDb, readZcodeTranscript, zcodeDefaultDbPath, importZcodeFile, importZcodeDirectory } from './lib/zcode.mjs'
 import { discoverSessions, FORMATS } from './lib/discovery.mjs'
 
 const name = 'import-claude'
@@ -575,13 +577,217 @@ async function importHermesFile(ctx, target, args, { registryDir } = {}) {
   return importTranscript(ctx, target, args, convertHermesJson, { registryDir })
 }
 
+// ── REQ-17 导入 dry-run 预览（preview / dryRun 别名）────────────────────────
+// preview=true 时照常 resolve / readText / convert（拿到 meta/turns/title/messages/
+// toolCalls/skipped 等统计），但绝不 create/append、绝不写 imports registry、绝不
+// attachToWorkspace（零副作用）；也不触发增量续写 / 幂等 registry 读写——预览分支
+// 完全绕开 loadImports / listPersistedIds / decideSingle / decideMulti / runDecision，
+// 只做只读转换 + 统计。返回结构与正式导入同源（同 mode/total/results 骨架），只加
+// preview:true 标记、去掉写入态字段（sessionId/status/alreadyImported 等）。
+function isPreview(args) {
+  return !!(args && (args.preview === true || args.dryRun === true))
+}
+
+// 把转换输出压成预览条目：标题 / cwd / 时间 / 规模 / 跳过明细。与正式结果同口径
+//（turns/messages/toolCalls/skipped 同 decideItem base 的来源），无值字段不占键。
+// 跳过语义对齐 importTranscript：无可导入内容时该文件计 1 次跳过（正式 skipped 结果
+// 即 hardcode skipped:1，不看转换层的畸形行计数）。
+function previewEntry(out) {
+  const noContent = !out.meta || (Array.isArray(out.turns) && out.turns.length === 0 && Array.isArray(out.events) && out.events.length === 0)
+  const entry = {
+    turns: Array.isArray(out.turns) ? out.turns.length : 0,
+    messages: out.messages || 0,
+    toolCalls: out.toolCalls || 0,
+    skipped: noContent ? 1 : (out.skipped || 0),
+  }
+  if (out.title) entry.title = out.title
+  if (out.meta && typeof out.meta.cwd === 'string' && out.meta.cwd) entry.cwd = out.meta.cwd
+  if (out.meta && typeof out.meta.createdAt === 'number') entry.createdAt = out.meta.createdAt
+  if (out.skipReason) entry.skipReason = out.skipReason
+  return entry
+}
+
+// 标准单文件预览：readText + convert（与 importTranscript 同源），零副作用。
+async function previewTranscript(ctx, target, args, convert) {
+  const sourcePath = target.displayPath || ctx.fs.processPath(target)
+  const out = markTrimmedSource(convert(await ctx.fs.readText(target), { ...args, sourcePath }), args)
+  return previewEntry(out)
+}
+
+// 标准目录预览：逐文件 readText + convert（与 importDirectory 同源），零副作用。
+async function previewDirectory(ctx, dirTarget, args, { convert, deriveArgs, collect } = {}) {
+  const files = []
+  const collector = collect || collectJsonlFiles
+  await collector(ctx, dirTarget, files, args.recursive !== false)
+  const results = []
+  for (const target of files) {
+    const path = target.displayPath || ctx.fs.processPath(target)
+    try {
+      const derived = deriveArgs ? await deriveArgs(target) : {}
+      const out = markTrimmedSource(convert(await ctx.fs.readText(target), { ...args, ...derived, sourcePath: path }), args)
+      results.push({ path, ...previewEntry(out) })
+    } catch (err) {
+      results.push({ path, status: 'failed', error: String((err && err.message) || err) })
+    }
+  }
+  return { total: files.length, results }
+}
+
+// ChatGPT 单文件预览：一个 conversations.json 逐会话预览（与 importChatgptFile 同源）。
+async function previewChatgptFile(ctx, target, args) {
+  const path = target.displayPath || ctx.fs.processPath(target)
+  const { conversations, skipped } = convertChatgptJson(await ctx.fs.readText(target), { sourcePath: path, budget: args.budget })
+  const results = conversations.map((conv) => ({ path, ...previewEntry(conv) }))
+  if (skipped > 0) {
+    // 整文件跳过（无合法会话）或个别会话无可导入内容：跳过明细聚合一条
+    results.push({ path, skipped, skipReason: 'no importable conversations (' + skipped + ' skipped)' })
+  }
+  return { total: conversations.length + skipped, results }
+}
+
+async function previewChatgptDirectory(ctx, dirTarget, args) {
+  const files = []
+  await collectJsonFiles(ctx, dirTarget, files, args.recursive !== false)
+  const results = []
+  for (const target of files) {
+    try {
+      results.push(...(await previewChatgptFile(ctx, target, args)).results)
+    } catch (err) {
+      const path = target.displayPath || ctx.fs.processPath(target)
+      results.push({ path, status: 'failed', error: String((err && err.message) || err) })
+    }
+  }
+  return { total: results.length, results }
+}
+
+// grokbuild 单会话目录预览：读 summary.json + chat_history.jsonl 转换（与
+// importGrokbuildSession 同源），零副作用。
+async function previewGrokbuildSession(ctx, target, args) {
+  const sourcePath = target.displayPath || ctx.fs.processPath(target)
+  const summaryTarget = await ctx.fs.resolve(join(sourcePath, 'summary.json'))
+  const chatTarget = await ctx.fs.resolve(join(sourcePath, 'chat_history.jsonl'))
+  const out = markTrimmedSource(convertGrokbuildJson(await ctx.fs.readText(summaryTarget), await readGrokHistory(ctx, chatTarget), { ...args, sourcePath }), args)
+  return previewEntry(out)
+}
+
+async function previewGrokbuildDirectory(ctx, dirTarget, args) {
+  const sessions = []
+  await collectGrokbuildSessions(ctx, dirTarget, sessions, args.recursive !== false)
+  const results = []
+  for (const target of sessions) {
+    const path = target.displayPath || ctx.fs.processPath(target)
+    try {
+      results.push({ path, ...(await previewGrokbuildSession(ctx, target, args)) })
+    } catch (err) {
+      results.push({ path, status: 'failed', error: String((err && err.message) || err) })
+    }
+  }
+  return { total: sessions.length, results }
+}
+
+// hermes DB 预览：state.db 每会话转换（与 importHermesDbFile 同源），零副作用。
+async function previewHermesDbFile(ctx, target, args, { sessions } = {}) {
+  const path = target.displayPath || ctx.fs.processPath(target)
+  const dbSessions = sessions ?? readHermesDb(path)
+  if (dbSessions === null) throw new Error('hermes db 不可用（非 SQLite / 无 sessions 表）: ' + path)
+  const results = []
+  for (const s of dbSessions) {
+    const out = markTrimmedSource(convertHermesJson(JSON.stringify(s), { ...args, sourcePath: path }), args)
+    if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
+      results.push({ path, skipped: 1, skipReason: 'no user turns (session ' + s.id + ')' })
+      continue
+    }
+    results.push({ path, ...previewEntry(out) })
+  }
+  return { total: dbSessions.length, results }
+}
+
+async function previewHermesFile(ctx, target, args) {
+  const path = target.displayPath || ctx.fs.processPath(target)
+  if (/\.db$/i.test(String(path))) return previewHermesDbFile(ctx, target, args)
+  return previewTranscript(ctx, target, args, convertHermesJson)
+}
+
+async function previewHermesDirectory(ctx, dirTarget, args) {
+  const dirPath = dirTarget.displayPath || ctx.fs.processPath(dirTarget)
+  const dbPath = join(dirPath, 'state.db')
+  const dbTarget = await ctx.fs.resolve(dbPath)
+  const dbSessions = readHermesDb(dbPath)
+  if (dbSessions !== null) return previewHermesDbFile(ctx, dbTarget, args, { sessions: dbSessions })
+  return previewDirectory(ctx, dirTarget, args, { convert: convertHermesJson, deriveArgs: (target) => hermesFileArgs(ctx, target), collect: collectJsonlFiles })
+}
+
+// opencode 预览：lib/opencode.mjs 的 importOpencodeFile 编排（registry / decideMulti /
+// 落盘）不属于预览分支，这里用同源只读件重演「读库 → 逐会话转换 → 统计」：
+// readOpencodeDb 只读 SQLite、convertOpencodeJson 纯函数，两者都零副作用。
+async function previewOpencodeFile(ctx, target, args) {
+  const path = target.displayPath || ctx.fs.processPath(target)
+  const sessions = readOpencodeDb(path, { fullHistory: args.fullHistory === true })
+  const wanted = Array.isArray(args.sessionIds) && args.sessionIds.length > 0 ? new Set(args.sessionIds) : null
+  const results = []
+  for (const s of sessions) {
+    if (wanted && !wanted.has(s.id)) continue
+    const out = markTrimmedSource(convertOpencodeJson(JSON.stringify(s), { ...args, sourcePath: path }), args)
+    if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
+      results.push({ path, skipped: 1, skipReason: 'no user turns (session ' + s.id + ')' })
+      continue
+    }
+    results.push({ path, ...previewEntry(out) })
+  }
+  return { total: sessions.length, results }
+}
+
+async function previewOpencodeDirectory(ctx, dirTarget, args) {
+  const dirPath = dirTarget.displayPath || ctx.fs.processPath(dirTarget)
+  const dbTarget = await ctx.fs.resolve(join(dirPath, 'opencode.db'))
+  return previewOpencodeFile(ctx, dbTarget, args)
+}
+
+// zcode 预览：db.sqlite / transcript.jsonl 回退 / zcode://<id> 伪路径，同源只读重演
+//（lib/zcode.mjs 编排不可改，预览绕开 registry / decideMulti / 落盘）。
+async function previewZcodeFile(ctx, target, args) {
+  const rawPath = typeof args.path === 'string' ? args.path : ''
+  const isPseudo = rawPath.startsWith('zcode://')
+  const path = isPseudo ? rawPath : (target.displayPath || ctx.fs.processPath(target))
+  const zcodeId = typeof args.zcodeId === 'string' && args.zcodeId
+    ? args.zcodeId
+    : isPseudo ? rawPath.slice('zcode://'.length) : undefined
+  const sessions = isPseudo ? readZcodeDb(zcodeDefaultDbPath())
+    : (/\.jsonl$/i.test(String(path)) ? readZcodeTranscript(path) : readZcodeDb(path))
+  const wanted = zcodeId ? new Set([zcodeId])
+    : (Array.isArray(args.sessionIds) && args.sessionIds.length > 0 ? new Set(args.sessionIds) : null)
+  const results = []
+  if (zcodeId && !sessions.some((s) => s.id === zcodeId)) {
+    results.push({ path, skipped: 1, skipReason: 'zcode 会话不存在: ' + zcodeId })
+  }
+  for (const s of sessions) {
+    if (wanted && !wanted.has(s.id)) continue
+    const out = markTrimmedSource(convertZcodeJson(JSON.stringify(s), { ...args, sourcePath: path }), args)
+    if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
+      results.push({ path, skipped: 1, skipReason: 'no user turns (session ' + s.id + ')' })
+      continue
+    }
+    results.push({ path, ...previewEntry(out) })
+  }
+  return { total: sessions.length, results }
+}
+
+async function previewZcodeDirectory(ctx, dirTarget, args) {
+  const dirPath = dirTarget.displayPath || ctx.fs.processPath(dirTarget)
+  const dbTarget = await ctx.fs.resolve(join(dirPath, 'db.sqlite'))
+  return previewZcodeFile(ctx, dbTarget, args)
+}
+
 // 两个导入工具共享的 schema / render / execute 骨架，只差名称、描述、转换器与导入函数。
 // registryDir 由 apply 传入（$DSH_HOME/dsh-chat-import）；fingerprintKeys 决定哪些
 // 工具参数计入 imports registry 的 args 指纹（opencode 的 fullHistory 等）。
-function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect, extraParameters, pathDescription, dropParameters, batchUnit = '文件', skippedNote, registryDir, fingerprintKeys = [], dirSingle, fileBatch }) {
+// previewFile / previewDir 提供 REQ-17 dry-run 预览实现（缺省走标准单文件/目录预览）。
+function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect, extraParameters, pathDescription, dropParameters, batchUnit = '文件', skippedNote, registryDir, fingerprintKeys = [], dirSingle, fileBatch, previewFile, previewDir }) {
   const derive = deriveArgs || (async () => ({}))
   const importSingle = importFile || ((c, t, a) => importTranscript(c, t, a, convert, { registryDir, fingerprintKeys }))
   const importBatch = importDir || ((c, d, a) => importDirectory(c, d, a, { convert, sourceLabel, deriveArgs: derive, collect, registryDir, fingerprintKeys }))
+  const previewSingle = previewFile || ((c, t, a) => previewTranscript(c, t, a, convert))
+  const previewBatch = previewDir || ((c, d, a) => previewDirectory(c, d, a, { convert, deriveArgs: derive, collect }))
   // 增量续写语义（REQ-24）：与各工具 description 里的「幂等跳过」表述互补
   const descriptionSuffix = ' 重复导入已导入的源文件会增量续写新增轮次（源文件未变则跳过）；force:true 以新 id 另存完整副本。'
   return defineTool({
@@ -603,6 +809,14 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         type: 'integer',
         description: '可选：上下文预算（token 数），超长会话按三层保护裁剪。优先级：本参数 > 环境变量 DSH_IMPORT_CONTEXT_BUDGET > 动态模型窗口（agentDefaultModel + llm）> 静态默认 550k。',
       },
+      preview: {
+        type: 'boolean',
+        description: '可选：true 时 dry-run 预览——不落盘、不写 imports registry、不归组，仅返回将导入会话清单（标题 / cwd / 时间 / 规模 / 跳过明细），确认后再正式导入（去掉 preview 再调一次即可）。',
+      },
+      dryRun: {
+        type: 'boolean',
+        description: '可选：preview 的兼容别名（语义相同：不落盘、仅返回将导入会话清单）。',
+      },
       ...((dropParameters || []).includes('sessionId') ? {} : {
         sessionId: {
           type: 'string',
@@ -620,6 +834,54 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
     output: {
       schema: {
         oneOf: [
+          // 单文件 dry-run 预览（REQ-17）：无写入态字段（sessionId/status/alreadyImported 等）
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              mode: { type: 'string', enum: ['single'], required: true },
+              preview: { type: 'boolean', const: true, required: true },
+              title: { type: 'string' },
+              cwd: { type: 'string' },
+              createdAt: { type: 'integer' },
+              turns: { type: 'integer', required: true },
+              messages: { type: 'integer', required: true },
+              toolCalls: { type: 'integer', required: true },
+              skipped: { type: 'integer', required: true },
+              skipReason: { type: 'string' },
+            },
+          },
+          // 目录（批量）dry-run 预览（REQ-17）：同 total/results 骨架，无写入态计数
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              mode: { type: 'string', enum: ['batch'], required: true },
+              preview: { type: 'boolean', const: true, required: true },
+              total: { type: 'integer', required: true },
+              results: {
+                type: 'array',
+                required: true,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    path: { type: 'string', required: true },
+                    title: { type: 'string' },
+                    cwd: { type: 'string' },
+                    createdAt: { type: 'integer' },
+                    turns: { type: 'integer' },
+                    messages: { type: 'integer' },
+                    toolCalls: { type: 'integer' },
+                    skipped: { type: 'integer' },
+                    skipReason: { type: 'string' },
+                    status: { type: 'string', enum: ['failed'] },
+                    error: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
           // 单文件模式
           {
             type: 'object',
@@ -792,6 +1054,29 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         ],
       },
       render: (args, value) => {
+        // REQ-17 dry-run 预览：人类可读清单（未落盘提示 + 逐条明细摘要）
+        if (value.preview === true) {
+          if (value.mode === 'batch') {
+            const detail = (value.results || []).slice(0, 5).map((r) => '  - ' + r.path
+              + (r.title ? '：' + r.title : '')
+              + (r.skipReason ? '：' + r.skipReason : '')
+              + (r.status === 'failed' && r.error ? '：' + r.error : ''))
+            return [{
+              type: 'text',
+              text: '预览（dry-run，未落盘）：共 ' + value.total + ' 个' + batchUnit
+                + (detail.length ? '\n' + detail.join('\n') : ''),
+            }]
+          }
+          return [{
+            type: 'text',
+            text: '预览（dry-run，未落盘）：'
+              + (value.title ? '《' + value.title + '》' : '')
+              + (value.turns > 0 ? value.turns + ' 轮对话' : '无可导入内容')
+              + '（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用'
+              + (value.skipped ? '、跳过 ' + value.skipped : '') + '）'
+              + (value.skipReason ? '\n跳过原因：' + value.skipReason : ''),
+          }]
+        }
         // REQ-37 裁剪上报摘要（trimmed 存在时追加一行人类可读说明）
         const trimmedNote = (v) => {
           const t = v && v.trimmed
@@ -882,27 +1167,31 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
       // （裁剪上报标注来源）；预算变化经 registry 比对 → budgetChanged 跳过。
       const budgetInfo = await resolveImportBudget(ctx, args)
       const effective = { ...args, budget: budgetInfo.budget, budgetSource: budgetInfo.source }
+      // REQ-17：preview/dryRun=true 走预览分支（照常 resolve/stat/readText/convert，
+      // 但零副作用——不落盘、不写 registry、不归组；见 preview* 实现）
+      const preview = isPreview(args)
+      const flag = preview ? { preview: true } : {}
       const target = await ctx.fs.resolve(effective.path)
       const info = await ctx.fs.stat(target)
       if (info && info.type === 'directory') {
         // grokbuild：会话目录（含 summary.json）视作单源 → 单会话导入；其余目录批量
         if (dirSingle && await dirSingle(ctx, target)) {
           const fileArgs = { ...effective, ...(await derive(target)) }
-          const single = await importSingle(ctx, target, fileArgs)
-          return { mode: 'single', ...single }
+          const single = preview ? await previewSingle(ctx, target, fileArgs) : await importSingle(ctx, target, fileArgs)
+          return { mode: 'single', ...flag, ...single }
         }
-        const batch = await importBatch(ctx, target, effective)
-        return { mode: 'batch', ...batch }
+        const batch = preview ? await previewBatch(ctx, target, effective) : await importBatch(ctx, target, effective)
+        return { mode: 'batch', ...flag, ...batch }
       }
       // 单文件：合并按文件派生的转换参数（可 async；Cursor 的 composer id、Reasonix 的 meta）
       const fileArgs = { ...effective, ...(await derive(target)) }
       // hermes：.db 单文件恒返回批量形态（SQLite 一库多会话）
       if (alwaysBatch || (fileBatch && await fileBatch(ctx, target))) {
-        const batch = await importSingle(ctx, target, fileArgs)
-        return { mode: 'batch', ...batch }
+        const batch = preview ? await previewSingle(ctx, target, fileArgs) : await importSingle(ctx, target, fileArgs)
+        return { mode: 'batch', ...flag, ...batch }
       }
-      const single = await importSingle(ctx, target, fileArgs)
-      return { mode: 'single', ...single }
+      const single = preview ? await previewSingle(ctx, target, fileArgs) : await importSingle(ctx, target, fileArgs)
+      return { mode: 'single', ...flag, ...single }
     },
   })
 }
@@ -1129,6 +1418,8 @@ function apply(ctx) {
     convert: convertChatgptJson,
     importFile: (c, t, a) => importChatgptFile(c, t, a, { registryDir }),
     importDir: (c, d, a) => importChatgptDirectory(c, d, a, { registryDir }),
+    previewFile: (c, t, a) => previewChatgptFile(c, t, a),
+    previewDir: (c, d, a) => previewChatgptDirectory(c, d, a),
     alwaysBatch: true,
     registryDir,
     description:
@@ -1208,6 +1499,8 @@ function apply(ctx) {
     // 一库多会话：单 .db 文件也恒返回批量形态；目录模式自动定位 opencode.db（无递归）
     importFile: (c, t, a) => importOpencodeFile(c, t, a, { registryDir, runDecision, markTrimmedSource }),
     importDir: (c, d, a) => importOpencodeDirectory(c, d, a, { registryDir, runDecision, markTrimmedSource }),
+    previewFile: (c, t, a) => previewOpencodeFile(c, t, a),
+    previewDir: (c, d, a) => previewOpencodeDirectory(c, d, a),
     alwaysBatch: true,
     registryDir,
     // opencode 无单会话 id 覆盖、无递归（目录里就是 opencode.db）
@@ -1244,6 +1537,8 @@ function apply(ctx) {
     convert: convertZcodeJson,
     importFile: (c, t, a) => importZcodeFile(c, t, a, { registryDir, runDecision, markTrimmedSource }),
     importDir: (c, d, a) => importZcodeDirectory(c, d, a, { registryDir, runDecision, markTrimmedSource }),
+    previewFile: (c, t, a) => previewZcodeFile(c, t, a),
+    previewDir: (c, d, a) => previewZcodeDirectory(c, d, a),
     alwaysBatch: true,
     registryDir,
     // zcode 无单会话 id 覆盖、无递归（目录里就是 db.sqlite）；伪路径的会话 id
@@ -1288,6 +1583,8 @@ function apply(ctx) {
     convert: convertGrokbuildJson,
     importFile: (c, t, a) => importGrokbuildSession(c, t, a, { registryDir }),
     importDir: (c, d, a) => importGrokbuildDirectory(c, d, a, { registryDir }),
+    previewFile: (c, t, a) => previewGrokbuildSession(c, t, a),
+    previewDir: (c, d, a) => previewGrokbuildDirectory(c, d, a),
     // 会话目录（含 summary.json）视作单源走单会话导入；其余目录走批量扫描
     dirSingle: async (ctx, target) => {
       const dirPath = target.displayPath || ctx.fs.processPath(target)
@@ -1350,6 +1647,8 @@ function apply(ctx) {
     convert: convertHermesJson,
     importFile: (c, t, a) => importHermesFile(c, t, a, { registryDir }),
     importDir: (c, d, a) => importHermesDirectory(c, d, a, { registryDir }),
+    previewFile: (c, t, a) => previewHermesFile(c, t, a),
+    previewDir: (c, d, a) => previewHermesDirectory(c, d, a),
     deriveArgs: (target) => hermesFileArgs(ctx, target),
     // .db 单文件恒返回批量形态（SQLite 一库多会话）；.jsonl 走单会话导入
     fileBatch: (ctx, target) => /\.db$/i.test(String(target.displayPath || ctx.fs.processPath(target))),
