@@ -40,9 +40,6 @@ jobs:
   # 且与 test 并行；dsh 安装成本只发生在此 job。
   smoke:
     runs-on: ubuntu-latest
-    env:
-      # 独立 DSH_HOME：profile 状态与 runner 的 ~/.dsh 完全隔离，随 job 清理
-      DSH_HOME: ${{ runner.temp }}/dsh-home
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -60,11 +57,17 @@ jobs:
       - name: Install checkout deps (peer @deepseek-ai/dsh-tools)
         run: npm ci --no-audit --no-fund
       # CI 测的是 checkout 自身（未发布的版本），用 link 而非 npm 包名；
-      # dsh plugin add 做 bundle 核对，把声明 dsh.bundle.patch 的插件写进 bundles 层
+      # dsh plugin add 做 bundle 核对，把声明 dsh.bundle.patch 的插件写进 bundles 层。
+      # DSH_HOME 用 step 级 env（runner 上下文在 job 级 env 不可用——会导致 workflow
+      # 校验失败、整个 ci.yml 无法加载），且只在需要 dsh 的 step 注入。
       - name: Add checkout as plugin (link) into headless profile
+        env:
+          DSH_HOME: ${{ runner.temp }}/dsh-home
         run: dsh plugin --profile headless add "link:${GITHUB_WORKSPACE}"
       # 插件行必须出现在合成树里——防「插件根本没进树但 boot 正常」的假绿
       - name: Assert plugin row is composed into the tree
+        env:
+          DSH_HOME: ${{ runner.temp }}/dsh-home
         run: dsh --profile headless --dump-config | grep -Fq -- import-claude
       # 真实加载冒烟：完整 boot（含插件激活审计）+ 一次 LLM 回合。
       # DEEPSEEK_API_KEY 用假值、DEEPSEEK_BASE_URL 指向本地 mock（dsh-llm-deepseek
@@ -73,6 +76,7 @@ jobs:
       # 会让 GitHub 的 workflow YAML 校验失败，导致整个 ci.yml 无法加载）。
       - name: Headless real-load smoke (boot + plugin activation + one LLM turn)
         env:
+          DSH_HOME: ${{ runner.temp }}/dsh-home
           DEEPSEEK_API_KEY: smoke-key-not-used
           DEEPSEEK_BASE_URL: http://127.0.0.1:8790
         run: |
