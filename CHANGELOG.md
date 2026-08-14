@@ -9,11 +9,12 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-08-14
 
-Second minor release — **merged to `main` since `v0.1.1`, not yet published**
-(`package.json` is still `0.1.1`). Two new import sources (Reasonix, opencode),
-three import-correctness fixes, and documentation / CI housekeeping.
+Second minor release — shipped 2026-08-14 with two new import sources
+(Reasonix, opencode), engineering guardrails (clean lockfile and CI checks,
+package metadata) and P0 fixes that keep imported sessions resumable. Tagged
+`v0.2.0` (`ae01548`).
 
 ### Added
 
@@ -25,11 +26,29 @@ three import-correctness fixes, and documentation / CI housekeeping.
   conversation compaction by default, supports `sessionIds` and `fullHistory`
   ([02a87a2](https://github.com/Nwflower/dsh-chat-import/commit/02a87a2)).
 - **`package-lock.json` for reproducible CI installs**, with the npm cache
-  re-enabled in CI ([651f202](https://github.com/Nwflower/dsh-chat-import/commit/651f202), [67f7c2b](https://github.com/Nwflower/dsh-chat-import/commit/67f7c2b)).
+  re-enabled in CI ([651f202](https://github.com/Nwflower/dsh-chat-import/commit/651f202), [67f7c2b](https://github.com/Nwflower/dsh-chat-import/commit/67f7c2b));
+  later regenerated clean, with CI moved to `npm ci` and a lockfile-drift check
+  added ([0389307](https://github.com/Nwflower/dsh-chat-import/commit/0389307)).
 - **Awesome-list badges** on the bilingual READMEs ([1f1e7ce](https://github.com/Nwflower/dsh-chat-import/commit/1f1e7ce), [e1d3faa](https://github.com/Nwflower/dsh-chat-import/commit/e1d3faa)).
+- **CHANGELOG itself** — 0.1.0 / 0.1.1 / 0.2.0 sections following Keep a
+  Changelog, shipped in the npm package ([f9a1918](https://github.com/Nwflower/dsh-chat-import/commit/f9a1918)).
+- **Bilingual README structure sync check in CI** — heading hierarchy and
+  anchor keys compared between `README.md` and `README.zh-CN.md`
+  ([a12480d](https://github.com/Nwflower/dsh-chat-import/commit/a12480d)).
+- **Headless real-load smoke job in CI** — boots the plugin with a mock LLM to
+  verify it activates outside the live harness ([0e8bdd7](https://github.com/Nwflower/dsh-chat-import/commit/0e8bdd7)).
 
 ### Fixed
 
+- **Imported sessions stay resumable when a `tool/call` has no matching
+  result** (P0) — model APIs reject an assistant message whose `tool_calls`
+  never get a corresponding tool message, so a synthetic empty `tool/result` is
+  appended to keep continuation working ([1d9a8e5](https://github.com/Nwflower/dsh-chat-import/commit/1d9a8e5)).
+- **Imported message order follows the wire rules** (P0) — `tool/result` is
+  attached to the step owning its `tool/call`, and Codex imports gain the
+  missing tool-call block, so the projected order no longer violates the
+  assistant-`tool_calls`-then-tool-message contract and sessions stay resumable
+  ([d13f790](https://github.com/Nwflower/dsh-chat-import/commit/d13f790)).
 - **Claude directory imports only recognize the main transcript** — subagent /
   workflow fragments are skipped so they can never shadow or collide with the
   main conversation ([77de7cd](https://github.com/Nwflower/dsh-chat-import/commit/77de7cd)).
@@ -47,6 +66,10 @@ three import-correctness fixes, and documentation / CI housekeeping.
   overview table; test count corrected 68 → 79 ([585cece](https://github.com/Nwflower/dsh-chat-import/commit/585cece)).
 - Reasonix import documented in the bilingual READMEs ([0aded42](https://github.com/Nwflower/dsh-chat-import/commit/0aded42)).
 - Multi-session protocol documents the pending-merge area ([c691324](https://github.com/Nwflower/dsh-chat-import/commit/c691324)).
+- Peer dependency policy relaxed to `^0.1.0-rc.6` so the plugin installs
+  alongside newer DSH releases ([117e7a1](https://github.com/Nwflower/dsh-chat-import/commit/117e7a1)).
+- `package.json` metadata completed and `engines` pinned to `>=22.13`, with the
+  lockfile's engines entry synced to match ([7162957](https://github.com/Nwflower/dsh-chat-import/commit/7162957), [41ad12a](https://github.com/Nwflower/dsh-chat-import/commit/41ad12a)).
 
 ## [0.1.1] - 2026-08-14
 
