@@ -53,7 +53,10 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   language as the sidebar's **设置** button: transparent background, 12px
   radius, 16px icon + 14px label, subtle hover; the text glyph was replaced by
   an inline render of `assets/import.svg` (currentColor, so it follows the
-  light/dark theme).
+  light/dark theme). Dimensions and typography are matched pixel-for-pixel with
+  the Settings entry (full-width 264×34, 22px line height, `6px 2px 6px 10px`
+  padding, 8px gap, and the same CSS variables for label color / hover
+  background).
 - **`index.mjs` split by responsibility into `lib/` host modules** — the plugin
   entry shrank from ~2500 lines to a 54-line composition that only assembles the
   pieces; every moved line is byte-identical (pure refactor, zero
