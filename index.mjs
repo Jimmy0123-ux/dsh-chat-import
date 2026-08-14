@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson } from './convert.mjs'
+import { resolveRegistryDir, loadImports, rememberImport, unwrapRecord, listPersistedIds, argsFingerprint, isSessionIdChange, decideSingle, decideMulti } from './lib/imports.mjs'
 
 const name = 'import-claude'
 const inject = ['sessionPersistence', 'fs', 'tools']
@@ -31,26 +32,72 @@ async function attachToWorkspace(ctx, meta) {
   }
 }
 
-// 解析单个 transcript：读取 → 转换 → 幂等落盘 → 归组。返回单文件统计。
-// sourcePath 取 fs 服务归一化后的路径（REQ-32 标记事件的数据来源，亦为 REQ-24 幂等键）。
-async function importTranscript(ctx, target, args, convert) {
-  const raw = await ctx.fs.readText(target)
+// 执行 decideSingle / decideMulti 返回的决策并落盘；剥离 __ 载荷后返回公开结果。
+// create 时才归组（append 续写不重复 attachToWorkspace）；persisted 就地更新供批量
+// 内 id 避让；__record（新导入记录）经 rememberImport 写回 registry。
+async function runDecision(ctx, decision, registryDir, sourcePath, persisted) {
+  if (decision.__action === 'create') {
+    const { __meta, __events } = decision
+    await ctx.sessionPersistence.create(__meta)
+    await ctx.sessionPersistence.append(__meta.id, __events)
+    await attachToWorkspace(ctx, __meta)
+    persisted.add(__meta.id)
+  } else if (decision.__action === 'append') {
+    await ctx.sessionPersistence.append(decision.__targetId, decision.__tailEvents)
+  } else if (decision.__action === 'multi') {
+    for (const c of decision.__creates) {
+      await ctx.sessionPersistence.create(c.meta)
+      await ctx.sessionPersistence.append(c.meta.id, c.events)
+      await attachToWorkspace(ctx, c.meta)
+      persisted.add(c.meta.id)
+    }
+    for (const a of decision.__appends) {
+      await ctx.sessionPersistence.append(a.targetId, a.events)
+    }
+  }
+  if (decision.__record) await rememberImport(registryDir, sourcePath, decision.__record)
+  const pub = {}
+  for (const [k, v] of Object.entries(decision)) {
+    if (!k.startsWith('__')) pub[k] = v
+  }
+  return pub
+}
+
+// 解析单个 transcript（REQ-24 状态机入口）：stat → registry 短路径判定 → 读取转换 →
+// decideSingle 决策落盘 → 归组。幂等键 = sourcePath（fs 服务归一化路径）。persisted
+// 可传入共享快照（批量模式），缺省按需取一次。
+async function importTranscript(ctx, target, args, convert, { registryDir, persisted, fingerprintKeys = [] } = {}) {
+  const persistedSet = persisted ?? await listPersistedIds(ctx)
   const sourcePath = target.displayPath || ctx.fs.processPath(target)
+  const stat = await ctx.fs.stat(target)
+  const registry = await loadImports(registryDir)
+  let known = unwrapRecord(registry.imports[sourcePath])
+  if (known && known.kind !== 'single') known = null
+  // 记录指向的会话已不存在（被删 / DSH_HOME 迁移）→ 视作无记录重导
+  if (known && (!known.dshId || !persistedSet.has(known.dshId))) known = null
+  const fingerprint = argsFingerprint(args, fingerprintKeys)
+
+  // S3 短路径（不 readText）：force / 显式 sessionId 变更需读文件建副本，不在此跳过
+  if (known && args.force !== true && !isSessionIdChange(args, known.dshId)) {
+    if (typeof known.args === 'string' && fingerprint !== known.args) {
+      return { sessionId: known.dshId, turns: known.turns, messages: 0, toolCalls: 0, skipped: 0, alreadyImported: true, status: 'already-imported', argsChanged: true }
+    }
+    if (stat && stat.version === known.version && stat.size === known.sizeBytes) {
+      // 未变：短路径跳过（不 readText），重复导入同一会话幂等
+      return { sessionId: known.dshId, turns: known.turns, messages: 0, toolCalls: 0, skipped: 0, alreadyImported: true, status: 'already-imported' }
+    }
+  }
+
+  const raw = await ctx.fs.readText(target)
   const out = convert(raw, { ...args, sourcePath })
   // 无可导入内容（空文件 / 非目标格式 / 辅助 transcript）：计入 skipped，不落盘空会话
   if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
-    const res = { sessionId: 'none', turns: 0, messages: 0, toolCalls: 0, skipped: 1, alreadyImported: false }
+    const res = { sessionId: 'none', turns: 0, messages: 0, toolCalls: 0, skipped: 1, alreadyImported: false, status: 'skipped' }
     if (out.skipReason) res.skipReason = out.skipReason
     return res
   }
-  const { meta, events, turns, messages, toolCalls, skipped } = out
-  const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
-  if (!exists) {
-    await ctx.sessionPersistence.create(meta)
-    await ctx.sessionPersistence.append(meta.id, events)
-    await attachToWorkspace(ctx, meta)
-  }
-  return { sessionId: meta.id, turns: turns.length, messages, toolCalls, skipped, alreadyImported: exists }
+  const decision = await decideSingle(ctx, { known, converted: out, stat, args, fingerprint, persisted: persistedSet, sourcePath })
+  return runDecision(ctx, decision, registryDir, sourcePath, persistedSet)
 }
 
 // 递归收集目录下的 .jsonl 文件（按名称稳定排序）。
@@ -83,108 +130,114 @@ async function collectJsonFiles(ctx, dirTarget, out, recursive) {
   }
 }
 
-// 幂等落盘单个会话（meta + events）并归组；返回是否新增。
-async function persistSession(ctx, meta, events) {
-  const exists = (await ctx.sessionPersistence.list()).some((h) => h.id === meta.id)
-  if (!exists) {
-    await ctx.sessionPersistence.create(meta)
-    await ctx.sessionPersistence.append(meta.id, events)
-    await attachToWorkspace(ctx, meta)
-    return true
+// 把单文件结果归一为批量 results 条目（skipReason → reason；可选字段原样带过）。
+function batchItem(path, single) {
+  const item = {
+    path,
+    status: single.status,
+    sessionId: single.sessionId,
+    turns: single.turns,
+    messages: single.messages,
+    toolCalls: single.toolCalls,
+    skipped: single.skipped,
   }
-  return false
+  for (const k of ['skipReason', 'error', 'appendedTurns', 'appendedEvents', 'appendedSkipped', 'sourceShrunk', 'changedInPlace', 'argsChanged', 'backfilled', 'droppedBoundaryResults', 'forceImported']) {
+    if (single[k] !== undefined) item[k === 'skipReason' ? 'reason' : k] = single[k]
+  }
+  return item
 }
 
-// 批量导入：把目录下匹配 pattern 的文件都作为独立会话导入。
+// 批量导入：把目录下匹配 pattern 的文件都作为独立会话导入（每个文件走
+// importTranscript 状态机，共享 persisted 快照与 registry 目录）。
 // deriveArgs(target) 允许按文件派生转换参数（可 async；Cursor 取文件名 composer id，
 // Reasonix 读同目录 meta.json 拿 workspace/summary）；collect 默认收集 .jsonl。
-async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel, deriveArgs, collect) {
+async function importDirectory(ctx, dirTarget, args, { convert, sourceLabel, deriveArgs, collect, registryDir, fingerprintKeys = [] }) {
   const files = []
   const collector = collect || collectJsonlFiles
-  await collector(ctx, dirTarget, files, recursive !== false)
+  await collector(ctx, dirTarget, files, args.recursive !== false)
   const results = []
   let imported = 0
   let alreadyImported = 0
+  let appended = 0
   let skipped = 0
   let failed = 0
+  const persisted = await listPersistedIds(ctx)
   for (const target of files) {
     const path = target.displayPath || ctx.fs.processPath(target)
     try {
-      const raw = await ctx.fs.readText(target)
       const derived = deriveArgs ? await deriveArgs(target) : {}
-      const { meta, events, turns, messages, toolCalls, skipped: badLines, skipReason } = convert(raw, { ...derived, sourcePath: path })
-      if (turns.length === 0 && events.length === 0) {
-        // 非对应源格式 / 辅助 transcript（无用户回合）：跳过并说明原因，不落盘空会话
-        skipped++
-        results.push({ path, status: 'skipped', reason: skipReason || ('not a ' + sourceLabel + ' transcript (no user turns)') })
-        continue
-      }
-      const added = await persistSession(ctx, meta, events)
-      if (added) imported++
-      else alreadyImported++
-      results.push({
-        path,
-        status: added ? 'imported' : 'already-imported',
-        sessionId: meta.id,
-        turns: turns.length,
-        messages,
-        toolCalls,
-        skipped: badLines,
-      })
+      const single = await importTranscript(ctx, target, { ...derived, force: args.force === true }, convert, { registryDir, persisted, fingerprintKeys })
+      if (single.status === 'imported') imported++
+      else if (single.status === 'appended') appended++
+      else if (single.status === 'already-imported') alreadyImported++
+      else skipped++
+      const item = batchItem(path, single)
+      if (item.status === 'skipped' && !item.reason) item.reason = 'not a ' + sourceLabel + ' transcript (no user turns)'
+      results.push(item)
     } catch (err) {
       failed++
       results.push({ path, status: 'failed', error: String((err && err.message) || err) })
     }
   }
-  return { total: files.length, imported, alreadyImported, skipped, failed, results }
+  return { total: files.length, imported, alreadyImported, appended, skipped, failed, results }
 }
 
-// ChatGPT 导出导入：单个 conversations.json 可能含多个会话，每个会话独立落盘。
-async function importChatgptFile(ctx, target) {
+// ChatGPT 导出导入：单个 conversations.json 可能含多个会话，每个会话独立落盘
+// （REQ-24：逐会话判增 append / 消失 missingFromSource；force=全量新副本）。
+async function importChatgptFile(ctx, target, args, { registryDir, persisted } = {}) {
+  const persistedSet = persisted ?? await listPersistedIds(ctx)
   const path = target.displayPath || ctx.fs.processPath(target)
-  const raw = await ctx.fs.readText(target)
-  const { conversations, skipped: skippedFiles } = convertChatgptJson(raw, { sourcePath: path })
-  const results = []
-  let imported = 0
-  let alreadyImported = 0
-  let skipped = skippedFiles
-  let failed = 0
-  for (const conv of conversations) {
-    try {
-      const added = await persistSession(ctx, conv.meta, conv.events)
-      if (added) imported++
-      else alreadyImported++
-      results.push({
-        path,
-        status: added ? 'imported' : 'already-imported',
-        sessionId: conv.meta.id,
-        turns: conv.turns.length,
-        messages: conv.messages,
-        toolCalls: conv.toolCalls,
-        skipped: 0,
-      })
-    } catch (err) {
-      failed++
-      results.push({ path, status: 'failed', sessionId: conv.meta.id, error: String((err && err.message) || err) })
+  const stat = await ctx.fs.stat(target)
+  const registry = await loadImports(registryDir)
+  let known = unwrapRecord(registry.imports[path])
+  if (known && known.kind !== 'multi') known = null
+  const fingerprint = argsFingerprint(args, [])
+
+  // S3 短路径（不 readText）：version/size 未变 → 逐会话跳过。仅当记录里所有会话
+  // 仍存在时短路径才成立（会话被删 / DSH_HOME 迁移 → 走全量重导）
+  if (known && (!known.conversations || typeof known.conversations !== 'object')) known = null
+  if (known && args.force !== true) {
+    const subs = Object.values(known.conversations)
+    const allPersisted = subs.length > 0 && subs.every((sub) => persistedSet.has(sub.dshId))
+    if (allPersisted && stat && stat.version === known.version && stat.size === known.sizeBytes) {
+      const results = Object.entries(known.conversations).map(([key, sub]) => ({
+        path, status: 'already-imported', sessionId: sub.dshId, turns: sub.turns, messages: 0, toolCalls: 0, skipped: 0,
+      }))
+      return { total: results.length, imported: 0, alreadyImported: results.length, appended: 0, skipped: 0, failed: 0, results }
     }
   }
-  return { total: conversations.length + skippedFiles, imported, alreadyImported, skipped, failed, results }
+
+  const raw = await ctx.fs.readText(target)
+  const { conversations, skipped: skippedFiles } = convertChatgptJson(raw, { sourcePath: path })
+  const items = conversations.map((conv) => ({ key: conv.meta.sourceId || conv.meta.id, converted: conv }))
+  const decision = await decideMulti(ctx, { known, items, stat, args, fingerprint, persisted: persistedSet, sourcePath: path, subTable: 'conversations' })
+  const missing = known ? Object.keys(known.conversations).filter((k) => !items.some((i) => i.key === k)) : []
+  const result = await runDecision(ctx, decision, registryDir, path, persistedSet)
+  return {
+    ...result,
+    total: result.results.length + skippedFiles,
+    skipped: result.skipped + skippedFiles,
+    ...(missing.length ? { missingFromSource: missing } : {}),
+  }
 }
 
 // ChatGPT 目录导入：扫描 .json 文件，每个文件可含多个会话。
-async function importChatgptDirectory(ctx, dirTarget, recursive) {
+async function importChatgptDirectory(ctx, dirTarget, args, { registryDir, persisted } = {}) {
   const files = []
-  await collectJsonFiles(ctx, dirTarget, files, recursive !== false)
+  await collectJsonFiles(ctx, dirTarget, files, args.recursive !== false)
   const results = []
   let imported = 0
   let alreadyImported = 0
+  let appended = 0
   let skipped = 0
   let failed = 0
+  const persistedSet = persisted ?? await listPersistedIds(ctx)
   for (const target of files) {
     try {
-      const r = await importChatgptFile(ctx, target)
+      const r = await importChatgptFile(ctx, target, args, { registryDir, persisted: persistedSet })
       imported += r.imported
       alreadyImported += r.alreadyImported
+      appended += r.appended
       skipped += r.skipped
       failed += r.failed
       results.push(...r.results)
@@ -194,7 +247,7 @@ async function importChatgptDirectory(ctx, dirTarget, recursive) {
       results.push({ path, status: 'failed', error: String((err && err.message) || err) })
     }
   }
-  return { total: results.length, imported, alreadyImported, skipped, failed, results }
+  return { total: results.length, imported, alreadyImported, appended, skipped, failed, results }
 }
 
 // opencode 历史库（SQLite）→ 中间会话 JSON 数组。
@@ -289,62 +342,84 @@ function parseOpencodeSessionModel(raw) {
 }
 
 // opencode 单库导入：DB 内每个会话独立落盘（可 sessionIds 过滤），恒返回批量形态。
+// REQ-24：DB 级 version/size 短路径检测；fullHistory 入 args 指纹（变了 → args-changed）；
+// 逐会话判增 append / compaction 使轮次变少 → sourceShrunk。
 // sourcePath 为 opencode.db 路径（目录模式定位后同样落到 db 文件）。
-async function importOpencodeFile(ctx, target, args = {}) {
+async function importOpencodeFile(ctx, target, args, { registryDir, persisted } = {}) {
+  const persistedSet = persisted ?? await listPersistedIds(ctx)
   const path = target.displayPath || ctx.fs.processPath(target)
-  const sourcePath = path
-  const sessions = readOpencodeDb(path, { fullHistory: args.fullHistory === true })
-  const wanted = Array.isArray(args.sessionIds) && args.sessionIds.length > 0 ? new Set(args.sessionIds) : null
-  const results = []
-  let imported = 0
-  let alreadyImported = 0
-  let skipped = 0
-  let failed = 0
-  for (const s of sessions) {
-    if (wanted && !wanted.has(s.id)) continue
-    try {
-      const out = convertOpencodeJson(JSON.stringify(s), { ...args, sourcePath })
-      if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
-        skipped++
-        results.push({ path, status: 'skipped', reason: 'no user turns (session ' + s.id + ')' })
-        continue
+  const stat = await ctx.fs.stat(target)
+  const registry = await loadImports(registryDir)
+  let known = unwrapRecord(registry.imports[path])
+  if (known && known.kind !== 'multi') known = null
+  const fingerprint = argsFingerprint(args, ['fullHistory'])
+
+  // S3 短路径（不重读 SQLite）。仅当记录里所有会话仍存在时短路径才成立
+  // （会话被删 / DSH_HOME 迁移 → 走全量重导）
+  if (known && (!known.sessions || typeof known.sessions !== 'object')) known = null
+  if (known && args.force !== true) {
+    const subs = Object.values(known.sessions)
+    const allPersisted = subs.length > 0 && subs.every((sub) => persistedSet.has(sub.dshId))
+    if (allPersisted) {
+      const skipResults = () => Object.entries(known.sessions).map(([key, sub]) => ({
+        path, status: 'already-imported', sessionId: sub.dshId, turns: sub.turns, messages: 0, toolCalls: 0, skipped: 0,
+      }))
+      if (typeof known.args === 'string' && fingerprint !== known.args) {
+        const results = skipResults().map((r) => ({ ...r, argsChanged: true }))
+        return { total: results.length, imported: 0, alreadyImported: results.length, appended: 0, skipped: 0, failed: 0, results }
       }
-      const added = await persistSession(ctx, out.meta, out.events)
-      if (added) imported++
-      else alreadyImported++
-      results.push({
-        path,
-        status: added ? 'imported' : 'already-imported',
-        sessionId: out.meta.id,
-        turns: out.turns.length,
-        messages: out.messages,
-        toolCalls: out.toolCalls,
-        skipped: 0,
-      })
-    } catch (err) {
-      failed++
-      results.push({ path, status: 'failed', sessionId: 'import-' + s.id, error: String((err && err.message) || err) })
+      if (stat && stat.version === known.version && stat.size === known.sizeBytes) {
+        const count = Object.keys(known.sessions).length
+        return { total: count, imported: 0, alreadyImported: count, appended: 0, skipped: 0, failed: 0, results: skipResults() }
+      }
     }
   }
-  return { total: sessions.length, imported, alreadyImported, skipped, failed, results }
+
+  const sessions = readOpencodeDb(path, { fullHistory: args.fullHistory === true })
+  const wanted = Array.isArray(args.sessionIds) && args.sessionIds.length > 0 ? new Set(args.sessionIds) : null
+  const items = []
+  const preSkipped = []
+  for (const s of sessions) {
+    if (wanted && !wanted.has(s.id)) continue
+    const out = convertOpencodeJson(JSON.stringify(s), { ...args, sourcePath: path })
+    if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
+      preSkipped.push({ path, status: 'skipped', reason: 'no user turns (session ' + s.id + ')' })
+      continue
+    }
+    items.push({ key: s.id, converted: out })
+  }
+  const decision = await decideMulti(ctx, { known, items, stat, args, fingerprint, persisted: persistedSet, sourcePath: path, subTable: 'sessions' })
+  const missing = known && known.sessions ? Object.keys(known.sessions).filter((k) => !sessions.some((s) => s.id === k)) : []
+  const result = await runDecision(ctx, decision, registryDir, path, persistedSet)
+  return {
+    ...result,
+    total: sessions.length,
+    skipped: result.skipped + preSkipped.length,
+    results: [...preSkipped, ...result.results],
+    ...(missing.length ? { missingFromSource: missing } : {}),
+  }
 }
 
 // opencode 目录导入：目录里定位 opencode.db（无递归），再走单库导入；缺 DB 时抛错。
-async function importOpencodeDirectory(ctx, dirTarget, args = {}) {
+async function importOpencodeDirectory(ctx, dirTarget, args, { registryDir, persisted } = {}) {
   const dirPath = dirTarget.displayPath || ctx.fs.processPath(dirTarget)
   const dbPath = join(dirPath, 'opencode.db')
   const dbTarget = await ctx.fs.resolve(dbPath)
-  return importOpencodeFile(ctx, dbTarget, args)
+  return importOpencodeFile(ctx, dbTarget, args, { registryDir, persisted })
 }
 
 // 两个导入工具共享的 schema / render / execute 骨架，只差名称、描述、转换器与导入函数。
-function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect, extraParameters, pathDescription, dropParameters, batchUnit = '文件', skippedNote }) {
+// registryDir 由 apply 传入（$DSH_HOME/dsh-chat-import）；fingerprintKeys 决定哪些
+// 工具参数计入 imports registry 的 args 指纹（opencode 的 fullHistory 等）。
+function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect, extraParameters, pathDescription, dropParameters, batchUnit = '文件', skippedNote, registryDir, fingerprintKeys = [] }) {
   const derive = deriveArgs || (async () => ({}))
-  const importSingle = importFile || ((c, t, a) => importTranscript(c, t, a, convert))
-  const importBatch = importDir || ((c, d, a) => importDirectory(c, d, a.recursive, convert, sourceLabel, derive, collect))
+  const importSingle = importFile || ((c, t, a) => importTranscript(c, t, a, convert, { registryDir, fingerprintKeys }))
+  const importBatch = importDir || ((c, d, a) => importDirectory(c, d, a, { convert, sourceLabel, deriveArgs: derive, collect, registryDir, fingerprintKeys }))
+  // 增量续写语义（REQ-24）：与各工具 description 里的「幂等跳过」表述互补
+  const descriptionSuffix = ' 重复导入已导入的源文件会增量续写新增轮次（源文件未变则跳过）；force:true 以新 id 另存完整副本。'
   return defineTool({
     name: toolName,
-    description,
+    description: description + descriptionSuffix,
     parameters: {
       path: {
         type: 'string',
@@ -352,6 +427,10 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         description: pathDescription || (alwaysBatch
           ? 'ChatGPT 导出 conversations.json 的文件路径，或包含多个 .json 的目录路径。'
           : sourceLabel + ' transcript (.jsonl) 的文件路径，或包含多个 .jsonl 的目录路径。'),
+      },
+      force: {
+        type: 'boolean',
+        description: '可选：true 时即使已导入也以新 id（import-<src>-<n>）另存一份完整副本，旧会话原样保留。',
       },
       ...((dropParameters || []).includes('sessionId') ? {} : {
         sessionId: {
@@ -383,6 +462,23 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
               skipped: { type: 'integer' },
               skipReason: { type: 'string' },
               alreadyImported: { type: 'boolean', required: true },
+              status: { type: 'string', required: true, enum: ['imported', 'already-imported', 'appended', 'skipped'] },
+              appendedTurns: { type: 'integer' },
+              appendedEvents: { type: 'integer' },
+              appendedSkipped: { type: 'string' },
+              sourceShrunk: { type: 'boolean' },
+              changedInPlace: { type: 'boolean' },
+              argsChanged: { type: 'boolean' },
+              backfilled: { type: 'boolean' },
+              droppedBoundaryResults: { type: 'integer' },
+              forceImported: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  previous: { type: 'string', required: true },
+                  current: { type: 'string', required: true },
+                },
+              },
             },
           },
           // 目录（批量）模式
@@ -394,8 +490,10 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
               total: { type: 'integer', required: true },
               imported: { type: 'integer', required: true },
               alreadyImported: { type: 'integer', required: true },
+              appended: { type: 'integer', required: true },
               skipped: { type: 'integer', required: true },
               failed: { type: 'integer', required: true },
+              missingFromSource: { type: 'array', items: { type: 'string' } },
               results: {
                 type: 'array',
                 required: true,
@@ -407,15 +505,32 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
                     status: {
                       type: 'string',
                       required: true,
-                      enum: ['imported', 'already-imported', 'skipped', 'failed'],
+                      enum: ['imported', 'already-imported', 'appended', 'skipped', 'failed'],
                     },
                     sessionId: { type: 'string' },
                     turns: { type: 'integer' },
                     messages: { type: 'integer' },
                     toolCalls: { type: 'integer' },
                     skipped: { type: 'integer' },
+                    alreadyImported: { type: 'boolean' },
                     reason: { type: 'string' },
                     error: { type: 'string' },
+                    appendedTurns: { type: 'integer' },
+                    appendedEvents: { type: 'integer' },
+                    appendedSkipped: { type: 'string' },
+                    sourceShrunk: { type: 'boolean' },
+                    changedInPlace: { type: 'boolean' },
+                    argsChanged: { type: 'boolean' },
+                    backfilled: { type: 'boolean' },
+                    droppedBoundaryResults: { type: 'integer' },
+                    forceImported: {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        previous: { type: 'string', required: true },
+                        current: { type: 'string', required: true },
+                      },
+                    },
                   },
                 },
               },
@@ -428,6 +543,7 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
           const bits = []
           bits.push('共扫描 ' + value.total + ' 个' + batchUnit)
           if (value.imported) bits.push('新增 ' + value.imported + ' 个会话')
+          if (value.appended) bits.push('续写 ' + value.appended + ' 个会话')
           if (value.alreadyImported) bits.push('已存在 ' + value.alreadyImported + ' 个')
           if (value.skipped) bits.push('跳过 ' + value.skipped + ' 个（' + (skippedNote || '非 ' + sourceLabel + ' transcript') + '）')
           if (value.failed) bits.push('失败 ' + value.failed + ' 个')
@@ -439,17 +555,44 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
             text: '批量导入完成：' + bits.join('，') + (detail.length ? '\n' + detail.join('\n') : ''),
           }]
         }
-        if (value.skipped && value.sessionId === 'none') {
+        if (value.status === 'skipped' && value.sessionId === 'none') {
           return [{
             type: 'text',
             text: '跳过导入：' + (value.skipReason || '非 ' + sourceLabel + ' transcript'),
           }]
         }
+        if (value.status === 'appended') {
+          return [{
+            type: 'text',
+            text: '会话 ' + value.sessionId + ' 已续写 ' + value.appendedTurns + ' 轮、' + value.appendedEvents + ' 条事件（源文件新增轮次）。',
+          }]
+        }
+        if (value.status === 'imported' && value.forceImported) {
+          return [{
+            type: 'text',
+            text: '已强制导入完整副本 → 会话 ' + value.forceImported.current + '（前身 ' + value.forceImported.previous + ' 原样保留）。',
+          }]
+        }
+        if (value.alreadyImported) {
+          const why = value.sourceShrunk
+            ? '源文件轮次减少（sourceShrunk），跳过；需要完整副本请用 force:true'
+            : value.changedInPlace
+              ? '源文件在既有轮次内变化（append-only 无法改写），跳过'
+              : value.argsChanged
+                ? '导入参数已变化（args-changed），跳过；需要按新参数导入请用 force:true'
+                : value.appendedSkipped
+                  ? '源文件已增长但无法确定已存日志长度，跳过增量续写'
+                  : value.backfilled
+                    ? '已回填导入记录（旧版本导入的会话）'
+                    : '源文件未变化'
+          return [{
+            type: 'text',
+            text: '会话 ' + value.sessionId + ' 已存在，跳过导入：' + why + '。',
+          }]
+        }
         return [{
           type: 'text',
-          text: value.alreadyImported
-            ? '会话 ' + value.sessionId + ' 已存在，跳过导入（' + value.turns + ' 轮、' + value.toolCalls + ' 次工具调用）。'
-            : '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId + (value.skipped ? '（跳过 ' + value.skipped + ' 行畸形记录）' : ''),
+          text: '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId + (value.skipped ? '（跳过 ' + value.skipped + ' 行畸形记录）' : ''),
         }]
       },
     },
@@ -474,10 +617,13 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
 }
 
 function apply(ctx) {
+  // REQ-24 imports registry 目录：$DSH_HOME/dsh-chat-import（$DSH_HOME 缺省 ~/.dsh）
+  const registryDir = resolveRegistryDir()
   ctx.tools.register(makeImportTool(ctx, {
     toolName: 'import_claude',
     sourceLabel: 'Claude Code',
     convert: convertClaudeJsonl,
+    registryDir,
     // 文件名 stem 传给转换器做「主 transcript」判定：subagent/workflow 辅助 transcript
     // 记录携带父 sessionId，按它建会话会与主 transcript 撞 id 导致主内容被跳过
     deriveArgs: (target) => {
@@ -495,6 +641,7 @@ function apply(ctx) {
     toolName: 'import_codex',
     sourceLabel: 'Codex/ChatGPT',
     convert: convertCodexJsonl,
+    registryDir,
     description:
       '从 Codex / ChatGPT CLI 的 rollout JSONL 导入历史对话为可继续的 DSH 会话（' +
       '~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl）。' +
@@ -506,9 +653,10 @@ function apply(ctx) {
     toolName: 'import_chatgpt',
     sourceLabel: 'ChatGPT',
     convert: convertChatgptJson,
-    importFile: (c, t, a) => importChatgptFile(c, t, a),
-    importDir: (c, d, a) => importChatgptDirectory(c, d, a.recursive),
+    importFile: (c, t, a) => importChatgptFile(c, t, a, { registryDir }),
+    importDir: (c, d, a) => importChatgptDirectory(c, d, a, { registryDir }),
     alwaysBatch: true,
+    registryDir,
     description:
       '从 ChatGPT 网页导出的 conversations.json 导入历史对话为可继续的 DSH 会话。' +
       '导出 ZIP 解压后得到 conversations.json（JSON 数组，一个文件含全部会话）；' +
@@ -520,6 +668,7 @@ function apply(ctx) {
     toolName: 'import_cursor',
     sourceLabel: 'Cursor',
     convert: convertCursorJsonl,
+    registryDir,
     // Cursor 行内无会话 id：用文件名（composer uuid）作稳定 id，保证幂等
     deriveArgs: (target) => {
       const p = target.displayPath || ctx.fs.processPath(target)
@@ -538,6 +687,7 @@ function apply(ctx) {
     sourceLabel: 'Gemini CLI',
     convert: convertGeminiJson,
     collect: collectJsonFiles, // Gemini 是单会话 .json（非 JSONL）
+    registryDir,
     description:
       '从 Gemini CLI 的会话 JSON 导入历史对话为可继续的 DSH 会话（' +
       '~/.gemini/history/<slot>/chats/session-*.json）。' +
@@ -549,6 +699,7 @@ function apply(ctx) {
     toolName: 'import_reasonix',
     sourceLabel: 'Reasonix',
     convert: convertReasonixJsonl,
+    registryDir,
     // 会话 id 用文件名 stem（幂等）；cwd/createdAt 从同目录 <stem>.meta.json 派生
     deriveArgs: async (target) => {
       const p = target.displayPath || ctx.fs.processPath(target)
@@ -581,9 +732,10 @@ function apply(ctx) {
     sourceLabel: 'opencode',
     convert: convertOpencodeJson,
     // 一库多会话：单 .db 文件也恒返回批量形态；目录模式自动定位 opencode.db（无递归）
-    importFile: (c, t, a) => importOpencodeFile(c, t, a),
-    importDir: (c, d, a) => importOpencodeDirectory(c, d, a),
+    importFile: (c, t, a) => importOpencodeFile(c, t, a, { registryDir }),
+    importDir: (c, d, a) => importOpencodeDirectory(c, d, a, { registryDir }),
     alwaysBatch: true,
+    registryDir,
     // opencode 无单会话 id 覆盖、无递归（目录里就是 opencode.db）
     dropParameters: ['sessionId', 'recursive'],
     pathDescription: 'opencode 历史数据库（opencode.db）的文件路径，或包含 opencode.db 的数据目录路径。',

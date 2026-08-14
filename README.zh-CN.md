@@ -27,7 +27,7 @@
 - **🔍 全保真** — 工具调用历史映射为真实的 `tool/call` + `tool/result`（含错误标记与 `sourceEventSeqs` 关联），思考块映射为 `reasoning`，多步 assistant 消息完整保留。
 - **▶️ 可无缝续聊** — 每次导入都合成一条平衡、可加载的会话（`turn/start` → `step/start` → `user/message` → `assistant/message` → `tool/call`/`tool/result` → `step/end` → `turn/end`）：点开即可继续对话。
 - **🗂 自动归组工作区** — 会话按源 `cwd` 挂进对应工作区（不再「未分组」）；源有记录时保留 sessionId、标题、模型与创建时间。
-- **🔁 幂等** — 重复导入自动跳过已存在的会话；畸形行计数上报、绝不中断导入。
+- **🔁 幂等 + 增量续写** — 重复导入未变化的源文件直接跳过（不重新读文件）；增长的源文件只把**新增轮次** append 进同一个 DSH 会话（`seq` 连续续写，已导入内容一个字节不动）；源文件被截断时检测 `sourceShrunk` 并报告、不触碰已导入会话；畸形行计数上报、绝不中断导入。
 - **📦 批量导入** — 指向一个目录（或整个 opencode 数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。
 
 ## 🚀 快速开始
@@ -79,12 +79,29 @@ import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
 `import_claude` / `import_codex` / `import_cursor` / `import_gemini` / `import_reasonix` 行为一致：
 
 - `path` 可以是**单个文件或目录**（目录递归扫描，每个文件成为独立会话）。
-- 可选 `sessionId` 覆盖目标 DSH 会话 id（默认 `import-<源sessionId>`；Cursor 取文件名的 composer id，Reasonix 取文件名 stem）。
-- 返回 `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported }`。
+- 可选 `sessionId` 覆盖目标 DSH 会话 id（默认 `import-<源sessionId>`；Cursor 取文件名的 composer id，Reasonix 取文件名 stem）。重导时变更它会以新 id 另存一份完整副本（旧会话原样保留）。
+- 可选 `force: true`：即使已导入也以新 id（`import-<sessionId>-<n>`，`n` 为下一个空闲后缀）另存一份**完整副本**——旧会话绝不修改、绝不归档。
+- 返回 `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported, status }`，`status` 为 `imported` | `already-imported` | `appended` | `skipped`；另含可选 `appendedTurns` / `appendedEvents`（增长续写）、`sourceShrunk`（源截断）、`changedInPlace`（既有轮次内变化，append-only 无法改写）、`argsChanged`（导入参数变化）、`backfilled`（旧版本导入回填 registry 基线）、`forceImported: { previous, current }`（force / sessionId 变更副本）与 `droppedBoundaryResults`。
 
-`import_chatgpt` 不同：一个 `conversations.json` 包含**全部**会话，所以即使单文件也返回批量形态 `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`（每个 `results` 项是一个会话）。ChatGPT 导出无 `cwd`，导入的会话不归组工作区。
+`import_chatgpt` 不同：一个 `conversations.json` 包含**全部**会话，所以即使单文件也返回批量形态 `{ mode: 'batch', total, imported, alreadyImported, appended, skipped, failed, results: [...] }`（每个 `results` 项是一个会话，status 为 `imported` | `already-imported` | `appended` | `skipped` | `failed`）。增量逻辑逐会话生效：增长的会话被 append，从导出里消失的会话报进 `missingFromSource`（其会话原样保留），`force: true` 为每个会话建完整副本。ChatGPT 导出无 `cwd`，导入的会话不归组工作区。
 
-`import_opencode` 同样恒返回批量形态——一个 `opencode.db` 包含**全部**会话。`path` 可以是 `.db` 文件或其数据目录；可选 `sessionIds` 只导入指定会话；可选 `fullHistory: true` 导入全量消息历史、忽略 opencode 的对话压缩（默认 `false`——压缩会话按「最后一次摘要 + 保留尾巴」导入）。导入的会话保留 `directory` 作为 `cwd`，归组工作区。
+`import_opencode` 同样恒返回批量形态——一个 `opencode.db` 包含**全部**会话。`path` 可以是 `.db` 文件或其数据目录；可选 `sessionIds` 只导入指定会话；可选 `fullHistory: true` 导入全量消息历史、忽略 opencode 的对话压缩（默认 `false`——压缩会话按「最后一次摘要 + 保留尾巴」导入）。`fullHistory` 计入导入参数指纹：换值重导会报 `argsChanged`（改用 `force: true` 切换）。数据库按 DB 级指纹（version + size）判定：未变的库不重读 SQLite 直接跳过；逐会话增长 append、压缩使轮次变少报 `sourceShrunk`。导入的会话保留 `directory` 作为 `cwd`，归组工作区。
+
+## 🔁 增量续写（重导）
+
+重导**同一源路径**绝不改写已导入历史——幂等 registry 落盘在 `$DSH_HOME/dsh-chat-import/imports.json`（`$DSH_HOME` 缺省 `~/.dsh`），以源文件**绝对路径**为键（不是源 sessionId——不同文件可能共享同一 sessionId，绝不能互相覆盖）：
+
+| 重导时的源文件状态 | 行为 |
+| --- | --- |
+| 未变化（内容指纹 + 大小一致） | 跳过（`already-imported`），不重新读文件 |
+| 增长（新增完整轮次） | 把新轮次 append 进**同一个** DSH 会话：`seq` 从已存日志续写（以实际日志为准，即使上次导入后你在 DSH 里又聊过），`data.turn` 用源编号，不重复写 `session/imported` 标记与标题 |
+| 既有轮次内增长（轮数不变） | 跳过 + `changedInPlace`（append-only 无法改写已导入轮次） |
+| 截断（轮数变少） | 跳过 + `sourceShrunk`；已导入会话原样保留——需要完整新副本用 `force: true` |
+| `force: true` | 以 `import-<sessionId>-<n>` 另存完整副本；旧会话绝不修改 |
+| 显式 `sessionId` 变更 | 以新 id 另存完整副本（force 副本语义）；旧会话保留 |
+| 导入参数变化（如 opencode `fullHistory`） | 跳过 + `argsChanged` |
+
+registry 记录形如 `{ kind, dshId, turns, events, sizeBytes, version, args, importedAt }`（多会话源带逐会话/逐对话子表）；缺失或损坏容错（按空 registry 处理，下次导入重建）。registry 写入全部原子化（temp + fsync + rename）并在进程内串行化，直接用 `node:fs/promises`——绝不用 `ctx.fs`（沙箱会拒 `~/.dsh` 写入）。
 
 ## 🧩 数据模型
 
@@ -213,7 +230,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 | Reasonix | `import_reasonix` | ✅ 单测 + mock 集成（`npm test`）；55 个真实会话 dry-run |
 | opencode | `import_opencode` | ✅ 单测 + mock 集成（`npm test`） |
 
-- **实测（Tested）**：`dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6`——2026-08 于 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（88 个用例）覆盖七种源格式的转换纯函数与 mock 集成路径。
+- **实测（Tested）**：`dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6`——2026-08 于 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（109 个用例）覆盖七种源格式的转换纯函数与 mock 集成路径。
 - **预期兼容（Expected）**：`dsh-tools ^0.1.0-rc.6`——`dsh 0.1.x` 线，与宿主安装使用同一区间。
 - **区间外（Out of band）**：`<0.1.0-rc.6` 与 `>=0.2.0` 未测试——`dsh` 主版本升级后先跑 headless 冒烟，再更新本矩阵。
 
@@ -223,7 +240,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 - 插件不修改 DSH 引擎、apiproxy 或官方 UI 包；不发布任何服务，无需 isolate realm。
 - 读取工作区之外的 transcript 需要会话沙箱允许访问该路径。
 - 已知边界：不导入 `permission` / `summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃 `message.content` 之外的附加字段；Claude subagent / workflow 片段 transcript 跳过（只有主 `<sessionId>.jsonl` 成为会话），无对应 `tool_use` 的孤儿 `tool_result` 丢弃并计数（`droppedToolResults`）；Codex `reasoning` 加密跳过；ChatGPT 导出只重建主线程（分支取最后 child）、工具消息降级为最近一步的文本块（导出无结构化 tool call，不再产生孤儿 `tool/result`）；Cursor transcript 无 `tool_result`（每个调用补发合成空 `tool/result`）、`[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方无稳定 schema）；Reasonix 读取 JSONL checkpoint（V2 WAL 排除）；opencode `patch` part 无 diff（只发 `[patch: <N> files]` 占位）、工具输出可能原样保留 ANSI 转义。
-- **本次修复后需重新导入：** 已导入的会话是不可变日志——插件绝不改写既有历史，因此旧版本导入、缺少 call/result 配对的会话无法就地修复。删除旧会话后重新导入，即可获得配对不变量。
+- **本次修复后需重新导入：** 已导入的会话是不可变日志——插件绝不改写既有历史。增长按增量续写 append；旧版本导入、缺少 call/result 配对的会话无法就地修复（删除旧会话后重新导入即可获得配对不变量）。源文件截断（`sourceShrunk`）或在已导入轮次内变化（`changedInPlace`）时跳过并报告——`force: true` 可另存完整副本。
 
 ## 🧪 测试
 

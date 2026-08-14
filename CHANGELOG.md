@@ -9,6 +9,54 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
+## [0.3.0] - Unreleased
+
+### Added
+
+- **Incremental re-import** (REQ-24) — re-importing the same source path no
+  longer just skips: a grown source file appends only its **new turns** to the
+  same DSH session (contiguous `seq` continued from the authoritative stored
+  log, source turn numbering, no duplicated `session/imported` marker or
+  title), an unchanged file is skipped on a stat-level short path without
+  re-reading it, a truncated file is detected and reported (`sourceShrunk`),
+  in-place growth inside existing turns reports `changedInPlace`, and
+  `force: true` creates a fresh full copy under `import-<sessionId>-<n>` while
+  the old session stays untouched.
+- **Source-path idempotency registry** — new `lib/imports.mjs` persists
+  `$DSH_HOME/dsh-chat-import/imports.json` (source absolute path → import
+  record, `{ kind, dshId, turns, events, sizeBytes, version, args, importedAt }`)
+  with atomic temp+fsync+rename writes via `node:fs/promises` (never `ctx.fs`),
+  in-process serialized writes, and missing/corrupted-file tolerance. Two
+  different source paths sharing one session id now both import (suffix
+  avoidance) instead of one silently shadowing the other; sessions imported
+  before the registry existed are detected via the `session/imported` marker
+  and back-filled (`backfilled`).
+- **`tailSessionEvents`** — pure event-level tail extraction in `convert.mjs`
+  (slice by `turn/start` boundaries, renumber `seq` from `fromSeq`, remap
+  in-tail `sourceEventSeqs`, keep out-of-tail references with a
+  `droppedBoundaryResults` count, strip `session/title` by default).
+- **Multi-session sources go incremental** — ChatGPT (`kind:'multi'` +
+  `conversations` sub-records: per-conversation append / new / removed
+  `missingFromSource`, `force` = full new copies) and opencode (`kind:'multi'` +
+  `sessions` sub-records: DB-level version/size fingerprinting, compaction
+  shrinking turns → `sourceShrunk`, `fullHistory` in the args fingerprint →
+  `argsChanged`).
+- **Shared `force: boolean` parameter** on all seven import tools, and extended
+  return shapes: single-mode `status` (`imported` / `already-imported` /
+  `appended` / `skipped`) plus optional `appendedTurns`, `appendedEvents`,
+  `appendedSkipped`, `sourceShrunk`, `changedInPlace`, `argsChanged`,
+  `backfilled`, `forceImported` and `droppedBoundaryResults`; batch mode gains
+  an `appended` counter, `appended` result status and `missingFromSource`.
+
+### Changed
+
+- Idempotency contract updated (bilingual README): "already imported → skip"
+  becomes "already imported → skip if unchanged, incrementally append new
+  turns if grown" — re-importing a live session now follows the source file.
+- Append discipline: appended events keep `surfaceOp: 'append'`, never re-attach
+  workspaces, and never re-emit the import marker or session title.
+
+
 ## [0.2.0] - 2026-08-14
 
 Second minor release — shipped 2026-08-14 with two new import sources

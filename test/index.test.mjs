@@ -1,19 +1,70 @@
 // index.test.mjs — 插件级集成测试：mock ctx（fs / sessionPersistence / tools / workspaceRegistry），
 // 走真实的 apply → register → execute 路径，并校验返回值符合输出 schema。
-import { test } from 'node:test'
+import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, mkdtempSync } from 'node:fs'
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { apply, readOpencodeDb } from '../index.mjs'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
+import { resolveRegistryDir, loadImports } from '../lib/imports.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
 
-// 内存态会话库：create/append/list，模拟 sessionPersistence。
+// REQ-24 registry 隔离：每个用例独立 DSH_HOME（registry 落盘在 $DSH_HOME/dsh-chat-import）
+beforeEach(() => {
+  process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-home-'))
+})
+
+// fs 版本指纹：内容派生，内容变则 version 变（mock stat 的 version 字段）。
+function contentVersion(text) {
+  let h = 0
+  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
+  return 'v' + h
+}
+
+// 合成 N 回合 Claude transcript（同一 sessionId，供增量续写测试）。
+function claudeTurns(n, sessionId = 'sess-incr-001') {
+  const lines = []
+  for (let i = 1; i <= n; i++) {
+    if (i === 1) {
+      lines.push(JSON.stringify({ sessionId, type: 'user', cwd: 'D:\\demo\\proj', message: { role: 'user', content: '问题' + i } }))
+    } else {
+      lines.push(JSON.stringify({ sessionId, type: 'user', message: { role: 'user', content: '问题' + i } }))
+    }
+    lines.push(JSON.stringify({ sessionId, type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '回答' + i }] } }))
+  }
+  return lines.join('\n')
+}
+
+// 合成 ChatGPT conversations.json 的单个会话对象（mapping 主线程：user/assistant 交替）。
+function chatgptConversation(id, title, turns) {
+  const mapping = {}
+  let prev = null
+  let idx = 1
+  for (const prompt of turns) {
+    for (const role of ['user', 'assistant']) {
+      const nodeId = 'n' + idx
+      const text = role === 'user' ? prompt : 'reply to ' + prompt
+      mapping[nodeId] = {
+        id: nodeId,
+        message: { id: 'm' + idx, author: { role }, content: { content_type: 'text', parts: [text] }, create_time: 1710000000 + idx },
+        parent: prev,
+        children: [],
+      }
+      if (prev) mapping[prev].children.push(nodeId)
+      prev = nodeId
+      idx++
+    }
+  }
+  return { id, title, create_time: 1710000000, mapping }
+}
+
+// 内存态会话库：create/append/list/inspect，模拟 sessionPersistence。
+// append 强制 seq 连续（引擎契约：首事件 seq 必须等于已存 next-seq）。
 function makePersistence() {
   const sessions = new Map() // id -> { meta, events: [] }
   return {
@@ -26,7 +77,18 @@ function makePersistence() {
     async append(id, events) {
       const s = sessions.get(id)
       if (!s) throw new Error('unknown session ' + id)
+      for (let i = 0; i < events.length; i++) {
+        const ev = events[i]
+        if (typeof ev.seq !== 'number' || ev.seq !== s.events.length + i) {
+          throw new Error('append seq 不连续: 期望 ' + (s.events.length + i) + ' 实际 ' + String(ev && ev.seq))
+        }
+      }
       s.events.push(...events)
+    },
+    async inspect(id) {
+      const s = sessions.get(id)
+      if (!s) throw new Error('unknown session ' + id)
+      return { meta: s.meta, events: s.events }
     },
   }
 }
@@ -38,15 +100,27 @@ function makeCtx(tree) {
   const workspaces = new Map()
   const registered = []
   const entriesCache = new Map()
+  const reads = { count: 0 }
 
   const fs = {
     async resolve(path) { return { targetKey: path, displayPath: path } },
     async stat(target) {
       const v = tree[target.targetKey]
-      if (v === undefined) return undefined
-      return { type: v === 'dir' ? 'directory' : 'file', version: 1 }
+      if (v !== undefined) {
+        // 内容派生指纹：size + version（变则 version 变，REQ-24 短路径判定依据）
+        return v === 'dir' ? { type: 'directory' } : { type: 'file', size: v.length, version: contentVersion(v) }
+      }
+      // 树外的真实文件（opencode 临时 SQLite 库）：回退 node:fs
+      try {
+        const s = statSync(target.targetKey)
+        if (s.isDirectory()) return { type: 'directory' }
+        return { type: 'file', size: s.size, version: 'real-' + s.size + '-' + s.mtimeMs + '-' + s.ctimeMs }
+      } catch {
+        return undefined
+      }
     },
     async readText(target) {
+      reads.count++
       const v = tree[target.targetKey]
       if (v === undefined || v === 'dir') throw new Error('FS_NOT_FOUND ' + target.targetKey)
       return v
@@ -85,6 +159,7 @@ function makeCtx(tree) {
     sessionPersistence: persistence,
     get(service) {
       if (service === 'workspaceRegistry') return workspaceRegistry
+      if (service === 'sessionPersistence') return persistence
       return undefined
     },
     tools: {
@@ -93,7 +168,7 @@ function makeCtx(tree) {
   }
   // 测试辅助：按名字取出注册的工具定义
   ctx.tools.registered = (toolName) => registered.find((d) => d.name === toolName)
-  return { ctx, persistence, attached, registered }
+  return { ctx, persistence, attached, registered, reads }
 }
 
 // REQ-32：导入会话日志首事件为 session/imported 标记（seq 0、ignorable），
@@ -735,6 +810,26 @@ function makeOpencodeDb(sessions) {
   return dbPath
 }
 
+// 往已建好的临时 opencode.db 追加一轮（user + assistant 各一条 text part）。
+function addOpencodeTurn(dbPath, sessionId, baseId, userText, asstText, timeBase) {
+  const db = new DatabaseSync(dbPath)
+  db.prepare('INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)').run(baseId + '-u', sessionId, timeBase, JSON.stringify({ role: 'user' }))
+  db.prepare('INSERT INTO part (id, message_id, session_id, time_created, data) VALUES (?, ?, ?, ?, ?)').run(baseId + '-p1', baseId + '-u', sessionId, timeBase, JSON.stringify({ type: 'text', text: userText }))
+  db.prepare('INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)').run(baseId + '-a', sessionId, timeBase + 1, JSON.stringify({ role: 'assistant' }))
+  db.prepare('INSERT INTO part (id, message_id, session_id, time_created, data) VALUES (?, ?, ?, ?, ?)').run(baseId + '-p2', baseId + '-a', sessionId, timeBase + 1, JSON.stringify({ type: 'text', text: asstText }))
+  db.close()
+}
+
+// 从临时 opencode.db 删除指定 message（含其 parts）。
+function deleteOpencodeMessages(dbPath, ids) {
+  const db = new DatabaseSync(dbPath)
+  for (const id of ids) {
+    db.prepare('DELETE FROM part WHERE message_id = ?').run(id)
+    db.prepare('DELETE FROM message WHERE id = ?').run(id)
+  }
+  db.close()
+}
+
 test('import_opencode 单库文件：批量形态、逐会话落盘、schema 校验', async () => {
   const dbPath = makeOpencodeDb(opencodeTestSessions())
   const { ctx, persistence, attached } = makeCtx({}) // stat 不在 tree 里 → 按 DB 文件处理
@@ -873,6 +968,392 @@ test('import_opencode 读不到 DB：失败大声抛错', async () => {
   apply(ctx)
   const def = registeredDef(ctx, 'import_opencode')
   await assert.rejects(() => def.execute({ path: join(tmpdir(), 'no-such-opencode.db') }))
+})
+
+// ---- REQ-24 增量续写（重导 append 新轮次 + 源路径幂等键） ----
+
+test('REQ-24 增长 append：同一会话 seq 连续、只新增轮次、无重复标题/标记', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-incr-001.jsonl': claudeTurns(2) }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const first = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(first.status, 'imported')
+  assert.equal(first.turns, 2)
+  const saved1 = persistence.sessions.get('import-sess-incr-001')
+  const before = saved1.events.length
+  const firstEvents = [...saved1.events] // 快照：mock 的 append 原地修改同一数组
+  assert.equal(saved1.events.filter((e) => e.type === 'turn/start').length, 2)
+
+  // 源文件增长（2 → 3 轮）
+  tree['D:\\demo\\proj\\sess-incr-001.jsonl'] = claudeTurns(3)
+  const second = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(second.status, 'appended')
+  assert.equal(second.appendedTurns, 1)
+  assert.ok(second.appendedEvents > 0)
+  assert.equal(second.alreadyImported, false)
+
+  // 同一会话：seq 全连续、只多出尾部轮次
+  const saved2 = persistence.sessions.get('import-sess-incr-001')
+  assert.ok(saved2)
+  assert.ok(saved2.events.every((e, i) => e.seq === i))
+  assert.equal(saved2.events.length, before + second.appendedEvents)
+  assert.equal(saved2.events.filter((e) => e.type === 'turn/start').length, 3)
+  // 续写轮次：turn 续号用源编号（3），末尾 turn/end 平衡
+  assert.equal(saved2.events.at(-1).type, 'turn/end')
+  assert.equal(saved2.events.at(-1).data.turn, 3)
+  // 不重复写 session/imported 标记与 session/title
+  assert.equal(saved2.events.filter((e) => e.type === 'session/imported').length, 1)
+  assert.equal(saved2.events.filter((e) => e.type === 'session/title').length, 0)
+  // 已导入前缀事件未被改写
+  assert.deepEqual(saved2.events.slice(0, before), firstEvents)
+})
+
+test('REQ-24 未变跳过：version/size 短路径不 readText，已存在不重复落盘', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-incr-001.jsonl': claudeTurns(2) }
+  const { ctx, persistence, reads } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const first = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(reads.count, 1)
+  assert.equal(first.status, 'imported')
+  const second = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  // 未变：短路径跳过（不 readText），返回 already-imported
+  assert.equal(second.status, 'already-imported')
+  assert.equal(second.alreadyImported, true)
+  assert.equal(reads.count, 1)
+  assert.equal(persistence.sessions.size, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, second), [])
+})
+
+test('REQ-24 sourceShrunk：源文件轮次减少 → 跳过报告，不破坏已导入会话', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-incr-001.jsonl': claudeTurns(3) }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  const before = persistence.sessions.get('import-sess-incr-001').events.length
+
+  tree['D:\\demo\\proj\\sess-incr-001.jsonl'] = claudeTurns(2)
+  const second = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(second.status, 'already-imported')
+  assert.equal(second.sourceShrunk, true)
+  // 已导入会话原样（仍是 3 轮）
+  const saved = persistence.sessions.get('import-sess-incr-001')
+  assert.equal(saved.events.length, before)
+  assert.equal(saved.events.filter((e) => e.type === 'turn/start').length, 3)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, second), [])
+})
+
+test('REQ-24 changedInPlace：轮数相等但事件增长 → 跳过（append-only 无法改写）', async () => {
+  const v1 = claudeTurns(1)
+  // 同轮内多一条 assistant 消息（step2）→ 事件数变多、轮数不变
+  const v2 = [
+    '{"sessionId":"sess-incr-001","type":"user","cwd":"D:\\\\demo\\\\proj","message":{"role":"user","content":"问题1"}}',
+    '{"sessionId":"sess-incr-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"回答1"}]}}',
+    '{"sessionId":"sess-incr-001","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"补充回答"}]}}',
+  ].join('\n')
+  const tree = { 'D:\\demo\\proj\\sess-incr-001.jsonl': v1 }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  const before = persistence.sessions.get('import-sess-incr-001').events.length
+
+  tree['D:\\demo\\proj\\sess-incr-001.jsonl'] = v2
+  const second = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(second.status, 'already-imported')
+  assert.equal(second.changedInPlace, true)
+  assert.equal(persistence.sessions.get('import-sess-incr-001').events.length, before)
+})
+
+test('REQ-24 force:true：新 id 完整副本，旧会话原样保留', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-incr-001.jsonl': claudeTurns(2) }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  const oldEvents = persistence.sessions.get('import-sess-incr-001').events
+
+  const forced = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl', force: true })
+  assert.equal(forced.status, 'imported')
+  assert.equal(forced.sessionId, 'import-sess-incr-001-1')
+  assert.deepEqual(forced.forceImported, { previous: 'import-sess-incr-001', current: 'import-sess-incr-001-1' })
+  // 两个会话都在：旧会话原样，新会话是完整副本（含 2 轮）
+  assert.equal(persistence.sessions.size, 2)
+  const copy = persistence.sessions.get('import-sess-incr-001-1')
+  assert.ok(copy)
+  assert.ok(copy.events.every((e, i) => e.seq === i))
+  assert.equal(copy.events.filter((e) => e.type === 'turn/start').length, 2)
+  assert.deepEqual(persistence.sessions.get('import-sess-incr-001').events, oldEvents)
+  // registry 指向新 id；再 force 一次 → 从当前记录链式避让（import-sess-incr-001-1-1）
+  const forced2 = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl', force: true })
+  assert.equal(forced2.sessionId, 'import-sess-incr-001-1-1')
+  assert.equal(persistence.sessions.size, 3)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, forced), [])
+})
+
+test('REQ-24 两路径共享 sessionId：都导入、后缀避让、互不覆盖', async () => {
+  // Claude 主 transcript 命名 = <sessionId>.jsonl；两个不同目录的同名文件共享同一源 sessionId
+  const tree = {
+    'D:\\demo\\proj\\a\\shared-session.jsonl': claudeTurns(1, 'shared-session'),
+    'D:\\demo\\proj\\b\\shared-session.jsonl': [
+      '{"sessionId":"shared-session","type":"user","message":{"role":"user","content":"另一个文件的问题"}}',
+      '{"sessionId":"shared-session","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"另一个文件的回答"}]}}',
+    ].join('\n'),
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const ra = await def.execute({ path: 'D:\\demo\\proj\\a\\shared-session.jsonl' })
+  const rb = await def.execute({ path: 'D:\\demo\\proj\\b\\shared-session.jsonl' })
+  assert.equal(ra.status, 'imported')
+  assert.equal(ra.sessionId, 'import-shared-session')
+  // 第二个文件目标 id 被占用 → 后缀避让，不覆盖第一个文件的内容
+  assert.equal(rb.status, 'imported')
+  assert.equal(rb.sessionId, 'import-shared-session-1')
+  assert.equal(persistence.sessions.size, 2)
+  const a = persistence.sessions.get('import-shared-session')
+  const b = persistence.sessions.get('import-shared-session-1')
+  assert.ok(a.events.some((e) => e.type === 'user/message' && e.data.content[0].text.includes('问题')))
+  assert.ok(b.events.some((e) => e.type === 'user/message' && e.data.content[0].text.includes('另一个文件')))
+  // 两个路径各自有 registry 记录，重导各自幂等（不互相串扰）
+  const rb2 = await def.execute({ path: 'D:\\demo\\proj\\b\\shared-session.jsonl' })
+  assert.equal(rb2.status, 'already-imported')
+  assert.equal(persistence.sessions.size, 2)
+})
+
+test('REQ-24 legacy 回填：registry 丢失但会话在 → already-imported + 回填基线', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-incr-001.jsonl': claudeTurns(2) }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(persistence.sessions.size, 1)
+
+  // 模拟 registry 丢失（旧版本无 registry）：清空 imports.json
+  const regFile = join(resolveRegistryDir(), 'imports.json')
+  mkdirSync(dirname(regFile), { recursive: true })
+  writeFileSync(regFile, '{ "version": 1, "imports": {} }')
+
+  const second = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(second.status, 'already-imported')
+  assert.equal(second.backfilled, true)
+  assert.equal(persistence.sessions.size, 1) // 不重复落盘
+  // 回填后 registry 有该路径的基线记录；再导（未变）走短路径跳过
+  const reg = await loadImports(resolveRegistryDir())
+  const rec = reg.imports['D:\\demo\\proj\\sess-incr-001.jsonl']
+  assert.ok(rec)
+  assert.equal(rec.kind, 'single')
+  assert.equal(rec.dshId, 'import-sess-incr-001')
+  assert.equal(rec.turns, 2)
+  const third = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(third.status, 'already-imported')
+})
+
+test('REQ-24 用户 DSH 续聊后 append：fromSeq 取 inspect 权威游标，seq 接在用户事件后', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-incr-001.jsonl': claudeTurns(2) }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  const saved1 = persistence.sessions.get('import-sess-incr-001')
+  const base = saved1.events.length
+
+  // 用户在 DSH 里继续聊了 2 条消息（会话日志增长，registry 记录过期）
+  const chat = [
+    { type: 'user/message', seq: base, time: Date.now(), surfaceOp: 'append', data: { id: 'live:u1', role: 'user', content: [{ type: 'text', text: 'DSH 里继续问' }], source: { kind: 'user' } } },
+    { type: 'assistant/message', seq: base + 1, time: Date.now(), surfaceOp: 'append', data: { id: 'live:a1', role: 'assistant', content: [{ type: 'text', text: 'DSH 里继续答' }], source: { kind: 'model', provider: 'dsh' } } },
+  ]
+  await persistence.append('import-sess-incr-001', chat)
+
+  tree['D:\\demo\\proj\\sess-incr-001.jsonl'] = claudeTurns(3)
+  const second = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(second.status, 'appended')
+  const saved2 = persistence.sessions.get('import-sess-incr-001')
+  assert.ok(saved2.events.every((e, i) => e.seq === i))
+  // 用户事件原样保留；续写从 base+2 开始
+  assert.equal(saved2.events[base].data.id, 'live:u1')
+  assert.equal(saved2.events[base + 1].data.id, 'live:a1')
+  assert.ok(saved2.events[base + 2].seq >= base + 2)
+  assert.equal(saved2.events.at(-1).type, 'turn/end')
+  assert.equal(saved2.events.at(-1).data.turn, 3)
+  assert.equal(saved2.events.filter((e) => e.type === 'turn/start').length, 3)
+})
+
+test('REQ-24 显式 sessionId 变更：以新 id 建完整副本（force 副本语义），旧会话原样', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-incr-001.jsonl': claudeTurns(2) }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const first = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl', sessionId: 'custom-a' })
+  assert.equal(first.sessionId, 'custom-a')
+
+  const second = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl', sessionId: 'custom-b' })
+  assert.equal(second.status, 'imported')
+  assert.equal(second.sessionId, 'custom-b')
+  assert.deepEqual(second.forceImported, { previous: 'custom-a', current: 'custom-b' })
+  assert.equal(persistence.sessions.size, 2)
+  assert.ok(persistence.sessions.get('custom-a'))
+  assert.ok(persistence.sessions.get('custom-b'))
+  // registry 指向新 id
+  const reg = await loadImports(resolveRegistryDir())
+  assert.equal(reg.imports['D:\\demo\\proj\\sess-incr-001.jsonl'].dshId, 'custom-b')
+})
+
+test('REQ-24 损坏 registry 容错：按空 registry 处理并继续导入', async () => {
+  const regFile = join(resolveRegistryDir(), 'imports.json')
+  mkdirSync(dirname(regFile), { recursive: true })
+  writeFileSync(regFile, 'not json {{{')
+  const tree = { 'D:\\demo\\proj\\sess-incr-001.jsonl': claudeTurns(2) }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
+  assert.equal(value.status, 'imported')
+  assert.equal(persistence.sessions.size, 1)
+  // 导入后 registry 被重建为合法内容
+  const reg = await loadImports(resolveRegistryDir())
+  assert.ok(reg.imports['D:\\demo\\proj\\sess-incr-001.jsonl'])
+})
+
+test('REQ-24 batch 汇总：目录内单文件增长 → appended 计数与结果 status', async () => {
+  const tree = {
+    'D:\\demo\\proj': 'dir',
+    'D:\\demo\\proj\\sess-incr-001.jsonl': claudeTurns(2),
+    'D:\\demo\\proj\\sess-static-001.jsonl': claudeTurns(1, 'sess-static-001'),
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx)
+  const first = await def.execute({ path: 'D:\\demo\\proj' })
+  assert.equal(first.imported, 2)
+  assert.equal(first.appended, 0)
+
+  tree['D:\\demo\\proj\\sess-incr-001.jsonl'] = claudeTurns(3)
+  const second = await def.execute({ path: 'D:\\demo\\proj' })
+  assert.equal(second.mode, 'batch')
+  assert.equal(second.appended, 1)
+  assert.equal(second.alreadyImported, 1) // sess-static 未变短路径跳过
+  assert.equal(second.imported, 0)
+  const appendedResult = second.results.find((r) => r.status === 'appended')
+  assert.ok(appendedResult)
+  assert.equal(appendedResult.sessionId, 'import-sess-incr-001')
+  assert.equal(appendedResult.appendedTurns, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, second), [])
+  assert.equal(persistence.sessions.get('import-sess-incr-001').events.filter((e) => e.type === 'turn/start').length, 3)
+})
+
+test('REQ-24 ChatGPT 多会话：逐会话增长 append / 新增 / 消失 missingFromSource', async () => {
+  const v1 = JSON.stringify([
+    chatgptConversation('conv-001', 'Alpha', ['问题A']),
+    chatgptConversation('conv-002', 'Beta', ['问题B']),
+  ])
+  const v2 = JSON.stringify([
+    chatgptConversation('conv-001', 'Alpha', ['问题A', '问题A2']), // 增长
+    chatgptConversation('conv-003', 'Gamma', ['问题C']), // 新增
+  ]) // conv-002 消失
+  const tree = { 'D:\\demo\\chatgpt\\conversations.json': v1 }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_chatgpt')
+  const first = await def.execute({ path: 'D:\\demo\\chatgpt\\conversations.json' })
+  assert.equal(first.imported, 2)
+  assert.equal(persistence.sessions.size, 2)
+  const conv1Before = persistence.sessions.get('import-conv-001').events.length
+
+  tree['D:\\demo\\chatgpt\\conversations.json'] = v2
+  const second = await def.execute({ path: 'D:\\demo\\chatgpt\\conversations.json' })
+  assert.equal(second.mode, 'batch')
+  assert.equal(second.appended, 1) // conv-001 增长
+  assert.equal(second.imported, 1) // conv-003 新增
+  assert.deepEqual(second.missingFromSource, ['conv-002'])
+  const appended = second.results.find((r) => r.status === 'appended')
+  assert.ok(appended)
+  assert.equal(appended.sessionId, 'import-conv-001')
+  assert.equal(appended.appendedTurns, 1)
+  const conv1 = persistence.sessions.get('import-conv-001')
+  assert.ok(conv1.events.every((e, i) => e.seq === i))
+  assert.equal(conv1.events.length, conv1Before + appended.appendedEvents)
+  assert.equal(conv1.events.filter((e) => e.type === 'turn/start').length, 2)
+  assert.ok(persistence.sessions.get('import-conv-003'))
+  assert.ok(persistence.sessions.get('import-conv-002')) // 消失的会话原样保留
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, second), [])
+})
+
+test('REQ-24 opencode DB 增长 append：同库新增轮次续写同一会话', async () => {
+  const dbPath = makeOpencodeDb(opencodeTestSessions())
+  const { ctx, persistence } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  const first = await def.execute({ path: dbPath })
+  assert.equal(first.imported, 2)
+  const before = persistence.sessions.get('import-ses-a').events.length
+
+  // 库增长：ses-a 追加一轮
+  addOpencodeTurn(dbPath, 'ses-a', 'msg-a3', '继续追问', '追加回答', 1786000000100)
+  const second = await def.execute({ path: dbPath })
+  assert.equal(second.mode, 'batch')
+  assert.equal(second.appended, 1)
+  assert.equal(second.alreadyImported, 1) // ses-b 未变
+  const appended = second.results.find((r) => r.status === 'appended')
+  assert.ok(appended)
+  assert.equal(appended.sessionId, 'import-ses-a')
+  const sesA = persistence.sessions.get('import-ses-a')
+  assert.ok(sesA.events.every((e, i) => e.seq === i))
+  assert.equal(sesA.events.length, before + appended.appendedEvents)
+  assert.equal(sesA.events.filter((e) => e.type === 'turn/start').length, 2)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, second), [])
+})
+
+test('REQ-24 opencode 消息删除（turns 变少）→ sourceShrunk 跳过', async () => {
+  const dbPath = makeOpencodeDb(opencodeTestSessions())
+  addOpencodeTurn(dbPath, 'ses-a', 'msg-a3', '继续追问', '追加回答', 1786000000100)
+  const { ctx, persistence } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  await def.execute({ path: dbPath })
+  const before = persistence.sessions.get('import-ses-a').events.length
+
+  // 删除追加的一轮 → ses-a 轮次变少
+  deleteOpencodeMessages(dbPath, ['msg-a3-u', 'msg-a3-a'])
+  const second = await def.execute({ path: dbPath })
+  const shrunk = second.results.find((r) => r.sessionId === 'import-ses-a')
+  assert.ok(shrunk)
+  assert.equal(shrunk.status, 'already-imported')
+  assert.equal(shrunk.sourceShrunk, true)
+  assert.equal(persistence.sessions.get('import-ses-a').events.length, before)
+})
+
+test('REQ-24 opencode fullHistory 入 args 指纹：参数变化 → args-changed 跳过', async () => {
+  const dbPath = makeOpencodeDb(opencodeTestSessions())
+  const { ctx, persistence } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  await def.execute({ path: dbPath }) // 默认（尊重压缩）
+  const second = await def.execute({ path: dbPath, fullHistory: true })
+  assert.equal(second.mode, 'batch')
+  assert.equal(second.alreadyImported, 2)
+  assert.equal(second.imported, 0)
+  assert.equal(second.appended, 0)
+  assert.ok(second.results.every((r) => r.argsChanged === true))
+  assert.equal(persistence.sessions.size, 2) // 未新增副本
+  // force:true 可换新参数导入（副本）
+  const forced = await def.execute({ path: dbPath, fullHistory: true, force: true })
+  assert.equal(forced.imported, 2)
+  assert.equal(persistence.sessions.size, 4)
+})
+
+test('REQ-24 opencode 未变 DB：短路径跳过（version/size 不变）', async () => {
+  const dbPath = makeOpencodeDb(opencodeTestSessions())
+  const { ctx, persistence } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_opencode')
+  await def.execute({ path: dbPath })
+  const second = await def.execute({ path: dbPath })
+  assert.equal(second.imported, 0)
+  assert.equal(second.alreadyImported, 2)
+  assert.equal(persistence.sessions.size, 2)
 })
 
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）

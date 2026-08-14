@@ -27,7 +27,7 @@
 - **🔍 Full fidelity** — tool history becomes real `tool/call` + `tool/result` pairs (error flags and `sourceEventSeqs` linkage included), thinking blocks become `reasoning`, multi-step assistant messages are preserved.
 - **▶️ Seamlessly resumable** — every import synthesizes a balanced, loadable session (`turn/start` → `step/start` → `user/message` → `assistant/message` → `tool/call`/`tool/result` → `step/end` → `turn/end`): open it and keep chatting.
 - **🗂 Auto workspace grouping** — sessions land in the workspace of their source `cwd` (no more "ungrouped"); session id, title, model and creation time are preserved where the source records them.
-- **🔁 Idempotent** — re-importing skips sessions that already exist; malformed lines are counted and reported, never aborting the import.
+- **🔁 Idempotent + incremental** — re-importing an unchanged source skips it without re-reading the file; a grown source appends only its **new turns** to the same DSH session (`seq` continues, nothing already imported is rewritten); a truncated source is detected (`sourceShrunk`) and reported without touching the imported session; malformed lines are counted and reported, never aborting the import.
 - **📦 Batch import** — point at a directory (or the whole opencode DB) and every file / conversation becomes its own session, with a per-file summary.
 
 ## 🚀 Quick start
@@ -79,12 +79,29 @@ import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
 `import_claude` / `import_codex` / `import_cursor` / `import_gemini` / `import_reasonix` behave alike:
 
 - `path` can be a **single file or a directory** (directories are scanned recursively; each file becomes its own session).
-- Optional `sessionId` overrides the target DSH session id (default `import-<source sessionId>`; Cursor uses the file-name composer id, Reasonix the file-name stem).
-- Returns `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported }`.
+- Optional `sessionId` overrides the target DSH session id (default `import-<source sessionId>`; Cursor uses the file-name composer id, Reasonix the file-name stem). Changing it on a re-import creates a new full copy under the new id (the old session stays untouched).
+- Optional `force: true` creates a **fresh full copy** under a new id (`import-<sessionId>-<n>`, `n` = next free suffix) even when the source was already imported — the old session is never modified or archived.
+- Returns `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported, status }` where `status` is `imported` | `already-imported` | `appended` | `skipped`, plus optional `appendedTurns` / `appendedEvents` (grew), `sourceShrunk` (truncated), `changedInPlace` (grew inside existing turns — append-only cannot rewrite them), `argsChanged` (import parameters changed), `backfilled` (registry record restored for a legacy import), `forceImported: { previous, current }` (force / sessionId-change copy) and `droppedBoundaryResults`.
 
-`import_chatgpt` differs: one `conversations.json` holds **all** conversations, so even a single file returns the batch shape `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }` (each `results` entry is one conversation). ChatGPT exports carry no `cwd`, so imported sessions are not grouped into workspaces.
+`import_chatgpt` differs: one `conversations.json` holds **all** conversations, so even a single file returns the batch shape `{ mode: 'batch', total, imported, alreadyImported, appended, skipped, failed, results: [...] }` (each `results` entry is one conversation, status `imported` | `already-imported` | `appended` | `skipped` | `failed`). Incremental logic applies per conversation: grown conversations are appended, conversations removed from the export are reported in `missingFromSource` (their sessions stay untouched), and `force: true` copies every conversation. ChatGPT exports carry no `cwd`, so imported sessions are not grouped into workspaces.
 
-`import_opencode` also always returns the batch shape — one `opencode.db` holds **all** sessions. `path` may be the `.db` file or its data directory; optional `sessionIds` restricts the import to the listed sessions; optional `fullHistory: true` imports the full message history instead of respecting opencode’s conversation compaction (default `false` — compacted sessions import as their last summary plus the retained tail). Imported sessions keep their `directory` as `cwd` and are grouped into workspaces.
+`import_opencode` also always returns the batch shape — one `opencode.db` holds **all** sessions. `path` may be the `.db` file or its data directory; optional `sessionIds` restricts the import to the listed sessions; optional `fullHistory: true` imports the full message history instead of respecting opencode’s conversation compaction (default `false` — compacted sessions import as their last summary plus the retained tail). `fullHistory` is part of the import-args fingerprint: re-importing with a different value reports `argsChanged` (use `force: true` to switch). The database is fingerprinted at the DB level (version + size): an unchanged DB is skipped without re-reading SQLite; per-session growth appends, compaction that removes turns reports `sourceShrunk`. Imported sessions keep their `directory` as `cwd` and are grouped into workspaces.
+
+## 🔁 Incremental re-import
+
+Re-importing the **same source path** never rewrites imported history — it follows an idempotency registry stored at `$DSH_HOME/dsh-chat-import/imports.json` (`$DSH_HOME` defaults to `~/.dsh`), keyed by the source file’s absolute path (not the source session id, because different files may share one session id and must not overwrite each other):
+
+| Source state on re-import | Behaviour |
+| --- | --- |
+| unchanged (same content fingerprint + size) | skipped (`already-imported`), without re-reading the file |
+| grew by whole turns | new turns appended to the **same** DSH session: `seq` continues from the stored log (authoritative, even if you chatted in DSH after the last import), `data.turn` keeps source numbering, no duplicate `session/imported` marker or title |
+| grew inside existing turns (same turn count) | skipped + `changedInPlace` (append-only cannot rewrite already-imported turns) |
+| truncated (fewer turns) | skipped + `sourceShrunk`; the imported session stays intact — use `force: true` for a complete fresh copy |
+| `force: true` | fresh full copy under `import-<sessionId>-<n>`; the old session is never modified |
+| explicit `sessionId` changed | new full copy under the new id (force-copy semantics); the old session stays |
+| import args changed (e.g. opencode `fullHistory`) | skipped + `argsChanged` |
+
+The registry record stores `{ kind, dshId, turns, events, sizeBytes, version, args, importedAt }` (multi-session sources keep a per-conversation / per-session sub-table); it tolerates a missing or corrupted file (falls back to an empty registry and re-records on the next import). All registry writes are atomic (temp + fsync + rename) and serialized in-process, and use `node:fs/promises` directly — never `ctx.fs`, whose sandbox would refuse writes under `~/.dsh`.
 
 ## 🧩 Data model
 
@@ -213,7 +230,7 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 | Reasonix | `import_reasonix` | ✅ unit + mock integration (`npm test`); dry-run on 55 real sessions |
 | opencode | `import_opencode` | ✅ unit + mock integration (`npm test`) |
 
-- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (88 cases) covers the pure conversion logic and mock integration paths for all seven source formats.
+- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (109 cases) covers the pure conversion logic and mock integration paths for all seven source formats.
 - **Expected**: `dsh-tools ^0.1.0-rc.6` — the `dsh 0.1.x` line, the same range the host install uses.
 - **Out of band**: `<0.1.0-rc.6` and `>=0.2.0` are untested — after a `dsh` major upgrade, run a headless smoke test first, then update this matrix.
 
@@ -223,7 +240,7 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 - The plugin never modifies the DSH engine, apiproxy, or official UI packages; it publishes no services, so no isolate realm is needed.
 - Reading transcripts outside the workspace requires the session sandbox to allow access to that path.
 - Known boundaries: `permission` / `summary` auxiliary records are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts are skipped (only the main `<sessionId>.jsonl` becomes a session) and a `tool_result` with no matching `tool_use` is dropped and counted (`droppedToolResults`); Codex `reasoning` is encrypted and skipped; ChatGPT exports rebuild only the main thread (branch = last child) and tool messages degrade to text blocks on the nearest step (exports carry no structured tool calls, so no orphan `tool/result` is produced); Cursor transcripts have no `tool_result` (every call gets a synthesized empty `tool/result`) and `[REDACTED]` text is filtered; Gemini follows the format observed 2026-04 (no stable official schema); Reasonix reads the JSONL checkpoint (the V2 WAL is excluded); opencode `patch` parts carry no diff (placeholder `[patch: <N> files]` only) and tool output may keep ANSI escapes verbatim.
-- **Re-import after this fix:** already-imported sessions are immutable logs — the plugin never rewrites existing history, so sessions imported by an older version that lack the call/result pairing cannot be repaired in place. Delete the stale session and re-import to pick up the pairing invariant.
+- **Re-import after this fix:** already-imported sessions are immutable logs — the plugin never rewrites existing history. Growth is appended incrementally; sessions imported by an older version that lack the call/result pairing cannot be repaired in place (delete the stale session and re-import to pick up the pairing invariant). A source that shrank (`sourceShrunk`) or changed inside already-imported turns (`changedInPlace`) is skipped and reported — `force: true` gives a complete fresh copy.
 
 ## 🧪 Tests
 
