@@ -93,6 +93,16 @@ function markTrimmedSource(out, args) {
   return out
 }
 
+// REQ-26：把转换层的畸形行明细 / secrets 位置 / permission 计数附加到公开结果。
+// decideItem（lib/imports.mjs）只透传固定字段，这三个字段在此补透；非空才附加
+//（schema 均为可选字段，空值不占键）。
+function attachReq26(out, res) {
+  if (out.skippedLines && out.skippedLines.length > 0) res.skippedLines = out.skippedLines
+  if (out.secrets && out.secrets.length > 0) res.secrets = out.secrets
+  if (out.permissionCount && out.permissionCount > 0) res.permissionCount = out.permissionCount
+  return res
+}
+
 // 把导入的会话挂到其 cwd 对应的工作区（否则会显示为"未分组"）。
 async function attachToWorkspace(ctx, meta) {
   if (!meta.cwd) return false
@@ -193,10 +203,10 @@ async function importTranscript(ctx, target, args, convert, { registryDir, persi
   if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
     const res = { sessionId: 'none', turns: 0, messages: 0, toolCalls: 0, skipped: 1, alreadyImported: false, status: 'skipped' }
     if (out.skipReason) res.skipReason = out.skipReason
-    return res
+    return attachReq26(out, res)
   }
   const decision = await decideSingle(ctx, { known, converted: out, stat, args, fingerprint, persisted: persistedSet, sourcePath, budget: args.budget })
-  return runDecision(ctx, decision, registryDir, sourcePath, persistedSet)
+  return attachReq26(out, await runDecision(ctx, decision, registryDir, sourcePath, persistedSet))
 }
 
 // 递归收集目录下的 .jsonl 文件（按名称稳定排序）。
@@ -240,7 +250,7 @@ function batchItem(path, single) {
     toolCalls: single.toolCalls,
     skipped: single.skipped,
   }
-  for (const k of ['skipReason', 'error', 'appendedTurns', 'appendedEvents', 'appendedSkipped', 'sourceShrunk', 'changedInPlace', 'argsChanged', 'budgetChanged', 'backfilled', 'droppedBoundaryResults', 'forceImported', 'trimmed']) {
+  for (const k of ['skipReason', 'error', 'appendedTurns', 'appendedEvents', 'appendedSkipped', 'sourceShrunk', 'changedInPlace', 'argsChanged', 'budgetChanged', 'backfilled', 'droppedBoundaryResults', 'forceImported', 'trimmed', 'skippedLines', 'secrets', 'permissionCount']) {
     if (single[k] !== undefined) item[k === 'skipReason' ? 'reason' : k] = single[k]
   }
   return item
@@ -437,10 +447,10 @@ async function importGrokbuildSession(ctx, target, args, { registryDir, persiste
   if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
     const res = { sessionId: 'none', turns: 0, messages: 0, toolCalls: 0, skipped: 1, alreadyImported: false, status: 'skipped' }
     if (out.skipReason) res.skipReason = out.skipReason
-    return res
+    return attachReq26(out, res)
   }
   const decision = await decideSingle(ctx, { known, converted: out, stat, args, fingerprint, persisted: persistedSet, sourcePath, budget: args.budget })
-  return runDecision(ctx, decision, registryDir, sourcePath, persistedSet)
+  return attachReq26(out, await runDecision(ctx, decision, registryDir, sourcePath, persistedSet))
 }
 
 // grokbuild 目录批量：递归扫 summary.json 收集会话目录，逐目录走单会话状态机。
@@ -621,6 +631,29 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
               messages: { type: 'integer', required: true },
               toolCalls: { type: 'integer', required: true },
               skipped: { type: 'integer' },
+              skippedLines: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    line: { type: 'integer', required: true },
+                    error: { type: 'string', required: true },
+                  },
+                },
+              },
+              secrets: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    line: { type: 'integer', required: true },
+                    kind: { type: 'string', required: true },
+                  },
+                },
+              },
+              permissionCount: { type: 'integer' },
               skipReason: { type: 'string' },
               alreadyImported: { type: 'boolean', required: true },
               status: { type: 'string', required: true, enum: ['imported', 'already-imported', 'appended', 'skipped'] },
@@ -691,6 +724,29 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
                     messages: { type: 'integer' },
                     toolCalls: { type: 'integer' },
                     skipped: { type: 'integer' },
+                    skippedLines: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                          line: { type: 'integer', required: true },
+                          error: { type: 'string', required: true },
+                        },
+                      },
+                    },
+                    secrets: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                          line: { type: 'integer', required: true },
+                          kind: { type: 'string', required: true },
+                        },
+                      },
+                    },
+                    permissionCount: { type: 'integer' },
                     alreadyImported: { type: 'boolean' },
                     reason: { type: 'string' },
                     error: { type: 'string' },
@@ -747,6 +803,17 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
           if (t.summaryInserted) bits.push('已插入摘要')
           return bits.length > 0 ? '（' + bits.join('，') + '，估算 ' + t.estimatedTokens + '/' + t.budget + ' tokens，来源 ' + t.source + '）' : ''
         }
+        // REQ-26 畸形行明细 + secrets/permission 计数：只含行号与 kind，绝不拼入内容
+        const req26Note = (v) => {
+          const skippedLines = v.skippedLines || []
+          const counts = []
+          if (v.secrets && v.secrets.length > 0) counts.push('secrets 命中 ' + v.secrets.length + ' 处')
+          if (v.permissionCount) counts.push('permission ' + v.permissionCount + ' 条')
+          if (skippedLines.length === 0) return counts.join('、')
+          const lines = skippedLines.slice(0, 20).map((s) => 'L' + s.line).join('/')
+          const more = skippedLines.length > 20 ? ' …' : ''
+          return '畸形行明细：' + lines + more + (counts.length ? '（' + counts.join('、') + '）' : '')
+        }
         if (value.mode === 'batch') {
           const bits = []
           bits.push('共扫描 ' + value.total + ' 个' + batchUnit)
@@ -768,7 +835,8 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         if (value.status === 'skipped' && value.sessionId === 'none') {
           return [{
             type: 'text',
-            text: '跳过导入：' + (value.skipReason || '非 ' + sourceLabel + ' transcript'),
+            text: '跳过导入：' + (value.skipReason || '非 ' + sourceLabel + ' transcript')
+              + (req26Note(value) ? '\n' + req26Note(value) : ''),
           }]
         }
         if (value.status === 'appended') {
@@ -804,7 +872,7 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
         }
         return [{
           type: 'text',
-          text: '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId + (value.skipped ? '（跳过 ' + value.skipped + ' 行畸形记录）' : '') + trimmedNote(value),
+          text: '已导入 ' + value.turns + ' 轮对话（' + value.messages + ' 条消息、' + value.toolCalls + ' 次工具调用）→ 会话 ' + value.sessionId + (value.skipped ? '（跳过 ' + value.skipped + ' 行畸形记录）' : '') + trimmedNote(value) + (req26Note(value) ? '\n' + req26Note(value) : ''),
         }]
       },
     },
