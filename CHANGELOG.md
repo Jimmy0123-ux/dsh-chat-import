@@ -35,6 +35,13 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Changed
 
+- **Sidebar trigger restyled to match the Settings entry, with the plugin logo
+  as its icon** — the floating **导入会话** trigger (fixed overlay so the
+  full-width Cordis badge can never squeeze it out) now uses the same visual
+  language as the sidebar's **设置** button: transparent background, 12px
+  radius, 16px icon + 14px label, subtle hover; the text glyph was replaced by
+  an inline render of `assets/import.svg` (currentColor, so it follows the
+  light/dark theme).
 - **`index.mjs` split by responsibility into `lib/` host modules** — the plugin
   entry shrank from ~2500 lines to a 54-line composition that only assembles the
   pieces; every moved line is byte-identical (pure refactor, zero
