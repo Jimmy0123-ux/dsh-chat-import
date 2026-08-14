@@ -248,6 +248,261 @@ export function tailSessionEvents(converted, { fromTurn, fromSeq, dropSessionEve
   }
 }
 
+// ── REQ-37 超长会话三层保护（纯函数，零 DSH 依赖）─────────────────────────
+// 导入会话在无 provider 配置时不会被 dsh 自动压缩（routedTarget 解析失败），超长
+// 会话全量落盘后恢复对话直接 400。保护分三层，预算（token 数）由 index 层解析
+// （工具参数 > 环境变量 DSH_IMPORT_CONTEXT_BUDGET > 动态模型窗口 > 静态默认 550k）
+// 后经 args.budget 传入：
+//   L1 单条内容裁剪——单条文本 ≤16K 字符、工具结果 ≤40K 字符（保留头 75% + 尾）；
+//   L2 消息预算截断——保留开头锚点（最早 3 条 user 文本）+ 压缩摘要 + 尾部消息；
+//   L3 单条兜底——裁剪后单条消息仍超预算一半 → 直接丢弃（宁缺毋滥）。
+
+// 文本 → token 估算（折算系数约 2.0）：CJK 1 token/字、ASCII 1 token/4 字符。
+// CJK 覆盖主平面/扩展 A/B/兼容、CJK 标点与全角形式；其余字符按 ASCII 折算。
+export function estimateTokens(text) {
+  if (typeof text !== 'string' || text.length === 0) return 0
+  let cjk = 0
+  let ascii = 0
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)
+    if ((cp >= 0x3400 && cp <= 0x4dbf)
+      || (cp >= 0x4e00 && cp <= 0x9fff)
+      || (cp >= 0xf900 && cp <= 0xfaff)
+      || (cp >= 0x3000 && cp <= 0x303f)
+      || (cp >= 0xff00 && cp <= 0xffef)
+      || (cp >= 0x20000 && cp <= 0x2a6df)) {
+      cjk++
+    } else {
+      ascii++
+    }
+  }
+  return cjk + Math.ceil(ascii / 4)
+}
+
+// 第一层裁剪上限：单条文本 / 单条工具结果的最大字符数。
+export const TEXT_BLOCK_CHAR_LIMIT = 16000
+export const TOOL_RESULT_CHAR_LIMIT = 40000
+const CROP_MARKER = '\n…（已裁剪）…\n'
+
+// 单条文本裁剪：超限时保留头 75% + 尾 25%（合计 ≤ 上限），中间以裁剪标记衔接。
+function cropText(text, limit) {
+  if (text.length <= limit) return { text, cropped: false }
+  const room = Math.max(1, limit - CROP_MARKER.length)
+  const head = Math.floor(room * 0.75)
+  const tail = room - head
+  return { text: text.slice(0, head) + CROP_MARKER + text.slice(-tail), cropped: true }
+}
+
+// 裁剪一组 content block：text/reasoning 按 textLimit、tool-result 内部块按
+// toolResultLimit（工具结果通常单块，近似单条结果上限）。返回 { blocks, cropped }。
+export function cropContentBlocks(blocks, { textLimit = TEXT_BLOCK_CHAR_LIMIT, toolResultLimit = TOOL_RESULT_CHAR_LIMIT } = {}) {
+  if (!Array.isArray(blocks)) return { blocks: [], cropped: 0 }
+  let cropped = 0
+  const out = blocks.map((b) => {
+    if (!b || typeof b !== 'object') return b
+    if ((b.type === 'text' || b.type === 'reasoning') && typeof b.text === 'string') {
+      const r = cropText(b.text, textLimit)
+      if (!r.cropped) return b
+      cropped++
+      return { ...b, text: r.text }
+    }
+    if (b.type === 'tool-result' && Array.isArray(b.content)) {
+      const inner = cropContentBlocks(b.content, { textLimit: toolResultLimit, toolResultLimit })
+      if (inner.cropped === 0) return b
+      cropped += inner.cropped
+      return { ...b, content: inner.blocks }
+    }
+    return b
+  })
+  return { blocks: out, cropped }
+}
+
+// content block 数组 → token 估算（text/reasoning 按正文、tool-call 按 arguments、
+// tool-result 递归内部块；与投影到模型的消息内容口径一致）。
+function estimateBlocks(blocks) {
+  let total = 0
+  for (const b of blocks || []) {
+    if (!b || typeof b !== 'object') continue
+    if (b.type === 'text' || b.type === 'reasoning') total += estimateTokens(b.text)
+    else if (b.type === 'tool-call') total += estimateTokens(b.arguments)
+    else if (b.type === 'tool-result' && Array.isArray(b.content)) total += estimateBlocks(b.content)
+  }
+  return total
+}
+
+// turns IR → token 估算：prompt + 每步 content + 工具结果 content。
+function estimateTurns(turns) {
+  let total = 0
+  for (const t of turns || []) {
+    total += estimateTokens(t.prompt)
+    for (const s of t.steps || []) {
+      total += estimateBlocks(s.content)
+      for (const tr of s.toolResults || []) total += estimateBlocks(tr.content)
+    }
+  }
+  return total
+}
+
+// 三层保护总入口。返回 { turns, trimmed }：turns 为裁剪后的新结构（输入不改动），
+// trimmed 为裁剪上报计数（budget / 前后估算 / L1 裁剪块数 / L2 丢弃轮与消息 /
+// L3 超半丢弃 / 摘要标记）。预算内会话只走 L1（单条超限内容裁剪），不截断。
+export function trimTurns(turns, budget, { anchorUserTexts = 3, summaryAllowance = 512 } = {}) {
+  const src = turns || []
+  const originalTokens = estimateTurns(src)
+  const trimmed = {
+    budget,
+    originalTokens,
+    estimatedTokens: 0,
+    croppedBlocks: 0,
+    droppedTurns: 0,
+    droppedMessages: 0,
+    droppedToolCalls: 0,
+    droppedToolResults: 0,
+    droppedOversized: 0,
+    summaryInserted: false,
+  }
+  if (src.length === 0) {
+    trimmed.estimatedTokens = 0
+    return { turns: [], trimmed }
+  }
+
+  // L1：克隆 + 单条内容裁剪（text/reasoning ≤16K 字符、工具结果 ≤40K 字符）
+  let croppedBlocks = 0
+  const l1 = src.map((t) => ({
+    prompt: t.prompt,
+    steps: (t.steps || []).map((s) => {
+      const cc = cropContentBlocks(s.content)
+      let stepCropped = cc.cropped
+      let toolResults = s.toolResults || []
+      if (toolResults.length > 0) {
+        toolResults = toolResults.map((tr) => {
+          const inner = cropContentBlocks(tr.content, { textLimit: TOOL_RESULT_CHAR_LIMIT, toolResultLimit: TOOL_RESULT_CHAR_LIMIT })
+          stepCropped += inner.cropped
+          if (inner.cropped === 0) return tr
+          return { ...tr, content: inner.blocks }
+        })
+      }
+      croppedBlocks += stepCropped
+      return { ...s, content: cc.blocks, toolResults }
+    }),
+  }))
+  trimmed.croppedBlocks = croppedBlocks
+
+  const l1Estimate = estimateTurns(l1)
+  if (l1Estimate <= budget) {
+    trimmed.estimatedTokens = l1Estimate
+    return { turns: l1, trimmed }
+  }
+
+  // L2：消息预算截断——保留开头锚点（最早 3 条 user 文本）+ 压缩摘要 + 尾部消息。
+  // 尾部从末尾往回贪心，在「锚点 + 摘要预留」的剩余预算内尽量多留；锚点本身超
+  // 预算（病态小预算）时从尾部收缩锚点，保证至少留 1 轮可续聊。
+  const anchorCount = Math.min(anchorUserTexts, l1.length)
+  let anchor = l1.slice(0, anchorCount)
+  const rest = l1.slice(anchorCount)
+  let anchorTokens = estimateTurns(anchor)
+  while (anchor.length > 1 && anchorTokens + summaryAllowance > budget) {
+    anchor = anchor.slice(0, -1)
+    anchorTokens = estimateTurns(anchor)
+  }
+  const tail = []
+  let tailTokens = 0
+  for (let i = rest.length - 1; i >= 0; i--) {
+    const add = estimateTurns([rest[i]])
+    if (anchorTokens + summaryAllowance + tailTokens + add > budget) break
+    tail.unshift(rest[i])
+    tailTokens += add
+  }
+  const middle = rest.slice(0, rest.length - tail.length)
+
+  for (const t of middle) {
+    trimmed.droppedTurns++
+    let resultCount = 0
+    for (const s of t.steps) {
+      trimmed.droppedToolCalls += s.toolCalls.length
+      trimmed.droppedToolResults += s.toolResults.length
+      resultCount += s.toolResults.length
+    }
+    trimmed.droppedMessages += 1 + t.steps.length + resultCount
+  }
+
+  // 压缩摘要：作为 reasoning 块前置到首个保留尾部轮的 assistant 步骤（opencode
+  // compaction 同款模式），不新增空 user 轮次；尾部为空时挂到锚点末轮。
+  const kept = [...anchor, ...tail]
+  if (trimmed.droppedTurns > 0 && kept.length > 0) {
+    const attach = tail.length > 0 ? tail[0] : anchor[anchor.length - 1]
+    const summaryText = '…[导入预算裁剪] 原对话约 ' + originalTokens
+      + ' tokens，超出上下文预算 ' + budget + ' tokens。为保持可续聊，已保留开头锚点'
+      + '与最近对话，裁剪中间 ' + trimmed.droppedTurns + ' 轮（' + trimmed.droppedMessages
+      + ' 条消息、' + trimmed.droppedToolCalls + ' 次工具调用）。完整历史见源文件。'
+    if (attach.steps.length > 0) {
+      attach.steps[0].content.unshift({ type: 'reasoning', text: summaryText })
+    } else {
+      attach.steps.push({ content: [{ type: 'reasoning', text: summaryText }], toolCalls: [], toolResults: [] })
+    }
+    trimmed.summaryInserted = true
+  }
+
+  // L3：单条兜底——裁剪后单条消息仍超预算一半 → 直接丢弃（宁缺毋滥）。首轮
+  // prompt 永不丢弃（保证至少一条可续聊的用户消息）；超大的 step 连同其工具调用
+  // 一起丢（配对保持完整），超大的工具结果丢后由 synthesizeSession 补空结果。
+  const halfBudget = budget / 2
+  const kept2 = []
+  for (let i = 0; i < kept.length; i++) {
+    const t = kept[i]
+    if (i > 0 && estimateTokens(t.prompt) > halfBudget) {
+      trimmed.droppedTurns++
+      let resultCount = 0
+      for (const s of t.steps) {
+        trimmed.droppedToolCalls += s.toolCalls.length
+        trimmed.droppedToolResults += s.toolResults.length
+        resultCount += s.toolResults.length
+      }
+      trimmed.droppedMessages += 1 + t.steps.length + resultCount
+      trimmed.droppedOversized++
+      continue
+    }
+    const steps = []
+    for (const s of t.steps) {
+      if (estimateBlocks(s.content) > halfBudget) {
+        trimmed.droppedMessages++
+        trimmed.droppedToolCalls += s.toolCalls.length
+        trimmed.droppedToolResults += s.toolResults.length
+        trimmed.droppedOversized++
+        continue
+      }
+      const toolResults = []
+      for (const tr of s.toolResults) {
+        if (estimateBlocks(tr.content) > halfBudget) {
+          trimmed.droppedMessages++
+          trimmed.droppedToolResults++
+          trimmed.droppedOversized++
+          continue
+        }
+        toolResults.push(tr)
+      }
+      steps.push({ ...s, toolResults })
+    }
+    kept2.push({ ...t, steps })
+  }
+
+  trimmed.estimatedTokens = estimateTurns(kept2)
+  return { turns: kept2, trimmed }
+}
+
+// 统一裁剪入口（convertXxx 接线用）：budget 缺省/非正数 → 原样返回（trimmed=null，
+// 不产生上报）；保护未实际生效（无任何裁剪/截断/丢弃）时同样返回 null，避免噪音。
+export function applyBudgetTrim(turns, budget) {
+  if (budget === undefined || budget === null) return { turns: turns || [], trimmed: null }
+  const b = Number(budget)
+  if (!Number.isFinite(b) || b <= 0) return { turns: turns || [], trimmed: null }
+  const { turns: out, trimmed } = trimTurns(turns, b)
+  const engaged = trimmed.croppedBlocks > 0 || trimmed.droppedTurns > 0 || trimmed.droppedMessages > 0
+    || trimmed.droppedToolCalls > 0 || trimmed.droppedToolResults > 0 || trimmed.droppedOversized > 0
+    || trimmed.summaryInserted
+  return { turns: out, trimmed: engaged ? trimmed : null }
+}
+
 // 逐行解析 JSONL：直连人类提问（type==='user' 且 content 为字符串）开新轮；每条
 // assistant 消息 = 一步。Claude 源格式把多条连续 assistant（各带 tool_use）与后置的
 // tool_result 分开（assistant[callA] assistant[callB] user[resultA] user[resultB]）；
@@ -364,8 +619,9 @@ export function convertClaudeJsonl(raw, args = {}) {
   if (sourceId) meta.sourceId = sourceId
   if (cwd) meta.cwd = cwd
 
-  const syn = synthesizeSession({ meta, turns, title, provider: 'claude-code', model, skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
-  return { ...syn, droppedToolResults }
+  const { turns: seedTurns, trimmed } = applyBudgetTrim(turns, args.budget)
+  const syn = synthesizeSession({ meta, turns: seedTurns, title, provider: 'claude-code', model, skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
+  return { ...syn, droppedToolResults, ...(trimmed ? { trimmed } : {}) }
 }
 
 // Codex / ChatGPT CLI rollout JSONL → 统一的回合中间结构。
@@ -505,9 +761,11 @@ export function convertCodexJsonl(raw, args = {}) {
   if (sourceId) meta.sourceId = sourceId
   if (cwd) meta.cwd = cwd
 
+  const { turns: seedTurns, trimmed } = applyBudgetTrim(turns, args.budget)
   return {
-    ...synthesizeSession({ meta, turns, title, provider: 'codex', model, skipped, records: recs.length, imported: { sourcePath: args.sourcePath } }),
+    ...synthesizeSession({ meta, turns: seedTurns, title, provider: 'codex', model, skipped, records: recs.length, imported: { sourcePath: args.sourcePath } }),
     droppedMalformedArgs,
+    ...(trimmed ? { trimmed } : {}),
   }
 }
 
@@ -831,7 +1089,9 @@ function convertChatgptConversation(conv, args) {
   if (conv.id) meta.sourceId = conv.id
   // 无用户回合（如只有 system 注入的会话）不产生空会话
   if (turns.length === 0) return null
-  return synthesizeSession({ meta, turns, title, provider: 'chatgpt', model: 'chatgpt', skipped: 0, records: thread.length, imported: { sourcePath: args.sourcePath } })
+  const { turns: seedTurns, trimmed } = applyBudgetTrim(turns, args.budget)
+  const out = synthesizeSession({ meta, turns: seedTurns, title, provider: 'chatgpt', model: 'chatgpt', skipped: 0, records: thread.length, imported: { sourcePath: args.sourcePath } })
+  return trimmed ? { ...out, trimmed } : out
 }
 
 // 提取 ChatGPT 消息正文：content.parts 数组（字符串或 {text} 对象）。
@@ -912,7 +1172,9 @@ export function convertCursorJsonl(raw, args = {}) {
   const finalId = args.sessionId || mintSessionId(args.cursorId)
   const meta = { version: SESSION_FORMAT_VERSION, id: finalId, createdAt: Date.now() }
   if (args.cursorId) meta.sourceId = args.cursorId
-  return synthesizeSession({ meta, turns, title: undefined, provider: 'cursor', model: 'cursor', skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
+  const { turns: seedTurns, trimmed } = applyBudgetTrim(turns, args.budget)
+  const out = synthesizeSession({ meta, turns: seedTurns, title: undefined, provider: 'cursor', model: 'cursor', skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
+  return trimmed ? { ...out, trimmed } : out
 }
 
 // 过滤 Cursor 的 "[REDACTED]" 哨兵文本；整段被剥离后返回空串。
@@ -1012,7 +1274,9 @@ export function convertGeminiJson(raw, args = {}) {
   const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: parseTime(chat.startTime) }
   if (chat.sessionId) meta.sourceId = chat.sessionId
   if (Array.isArray(chat.directories) && chat.directories[0]) meta.cwd = chat.directories[0]
-  return synthesizeSession({ meta, turns, title: undefined, provider: 'gemini', model, skipped: 0, records: chat.messages.length, imported: { sourcePath: args.sourcePath } })
+  const { turns: seedTurns, trimmed } = applyBudgetTrim(turns, args.budget)
+  const out = synthesizeSession({ meta, turns: seedTurns, title: undefined, provider: 'gemini', model, skipped: 0, records: chat.messages.length, imported: { sourcePath: args.sourcePath } })
+  return trimmed ? { ...out, trimmed } : out
 }
 
 // 提取 Gemini 内联工具结果文本；无结果返回 null。
@@ -1134,7 +1398,9 @@ export function convertReasonixJsonl(raw, args = {}) {
   }
   if (args.reasonixId) meta.sourceId = args.reasonixId
   if (args.cwd) meta.cwd = args.cwd
-  return synthesizeSession({ meta, turns, title: args.title, provider: 'reasonix', model: 'reasonix', skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
+  const { turns: seedTurns, trimmed } = applyBudgetTrim(turns, args.budget)
+  const out = synthesizeSession({ meta, turns: seedTurns, title: args.title, provider: 'reasonix', model: 'reasonix', skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
+  return trimmed ? { ...out, trimmed } : out
 }
 // opencode 历史库会话（index 层从 SQLite 抽取的中间 JSON）→ DSH 会话。
 //
@@ -1237,9 +1503,10 @@ export function convertOpencodeJson(raw, args = {}) {
   if (chat.id) meta.sourceId = chat.id
   if (typeof chat.directory === 'string' && chat.directory) meta.cwd = chat.directory
   const title = typeof chat.title === 'string' ? chat.title.trim() : undefined
-  return synthesizeSession({
+  const { turns: seedTurns, trimmed } = applyBudgetTrim(turns, args.budget)
+  const out = synthesizeSession({
     meta,
-    turns,
+    turns: seedTurns,
     title,
     provider: 'opencode',
     model: opencodeSessionModel(chat),
@@ -1247,6 +1514,7 @@ export function convertOpencodeJson(raw, args = {}) {
     records: chat.messages.length,
     imported: { sourcePath: args.sourcePath },
   })
+  return trimmed ? { ...out, trimmed } : out
 }
 
 // 消息级模型：平铺 modelID 优先，其次 model.modelID / model 字符串。

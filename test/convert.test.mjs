@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION, tailSessionEvents, codexCustomToolArguments, jsObjectLiteralToJson } from '../convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION, tailSessionEvents, codexCustomToolArguments, jsObjectLiteralToJson, estimateTokens, cropContentBlocks, trimTurns, applyBudgetTrim, TEXT_BLOCK_CHAR_LIMIT, TOOL_RESULT_CHAR_LIMIT } from '../convert.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -1201,4 +1201,169 @@ test('tailSessionEvents: 指向尾外的 sourceEventSeqs 原样保留并计 drop
   // 指向尾外的引用原样保留（前段 seq 未变，旧值仍指向真实调用）
   assert.deepEqual(result.sourceEventSeqs, [4])
   assert.deepEqual(tail.events.map((e) => e.seq), [50, 51, 52, 53])
+})
+
+// ---- REQ-37 超长会话三层保护（纯函数） ----
+
+test('estimateTokens: CJK 1 token/字、ASCII 1 token/4 字符', () => {
+  assert.equal(estimateTokens(''), 0)
+  assert.equal(estimateTokens('汉字测试'), 4)
+  assert.equal(estimateTokens('abcd'), 1)
+  assert.equal(estimateTokens('abcdefgh'), 2)
+  assert.equal(estimateTokens('a'.repeat(5)), 2) // ceil(5/4)
+  assert.equal(estimateTokens('汉a'), 2) // 1 + ceil(1/4)
+  assert.equal(estimateTokens('，。'), 2) // CJK 标点按 CJK 计
+  assert.equal(estimateTokens(null), 0)
+  assert.equal(estimateTokens(undefined), 0)
+  assert.equal(estimateTokens(123), 0) // 非字符串按 0
+})
+
+test('cropContentBlocks: 超限文本保留头 75% + 尾、未超限原样、tool-result 内部块按结果上限', () => {
+  const long = 'A'.repeat(100) + 'B'.repeat(20000)
+  const r1 = cropContentBlocks([{ type: 'text', text: long }])
+  assert.equal(r1.cropped, 1)
+  const out1 = r1.blocks[0].text
+  assert.ok(out1.length <= TEXT_BLOCK_CHAR_LIMIT)
+  assert.ok(out1.startsWith('A'.repeat(100))) // 头保留
+  assert.ok(out1.endsWith('B'.repeat(100))) // 尾保留
+  assert.ok(out1.includes('…（已裁剪）…'))
+
+  const short = { type: 'text', text: 'short' }
+  const r2 = cropContentBlocks([short])
+  assert.equal(r2.cropped, 0)
+  assert.deepEqual(r2.blocks, [short])
+
+  // reasoning 同样按文本上限裁剪
+  const reasoning = { type: 'reasoning', text: 'R'.repeat(TOOL_RESULT_CHAR_LIMIT + 10) }
+  const r3 = cropContentBlocks([reasoning], { textLimit: TOOL_RESULT_CHAR_LIMIT })
+  assert.equal(r3.cropped, 1)
+  assert.ok(r3.blocks[0].text.length <= TOOL_RESULT_CHAR_LIMIT)
+
+  // tool-result 内部块按工具结果上限（默认 40K）裁剪
+  const toolResult = { type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'T'.repeat(TOOL_RESULT_CHAR_LIMIT + 10) }] }
+  const r4 = cropContentBlocks([toolResult])
+  assert.equal(r4.cropped, 1)
+  assert.ok(r4.blocks[0].content[0].text.length <= TOOL_RESULT_CHAR_LIMIT)
+
+  // 非数组安全
+  assert.deepEqual(cropContentBlocks(undefined), { blocks: [], cropped: 0 })
+})
+
+// 合成 N 轮纯文本 turns（每轮 ~2×len tokens），供预算截断用例。
+function textTurns(n, perTurnChars = 100) {
+  const turns = []
+  for (let i = 0; i < n; i++) {
+    turns.push({
+      prompt: '问题' + '字'.repeat(perTurnChars - 2) + i,
+      steps: [{ content: [{ type: 'text', text: '回答' + '字'.repeat(perTurnChars - 2) + i }], toolCalls: [], toolResults: [] }],
+    })
+  }
+  return turns
+}
+
+test('trimTurns: 预算内会话原样保留（无截断、无摘要）', () => {
+  const turns = textTurns(2, 10)
+  const { turns: out, trimmed } = trimTurns(turns, 100000)
+  assert.equal(out.length, 2)
+  assert.equal(trimmed.droppedTurns, 0)
+  assert.equal(trimmed.droppedMessages, 0)
+  assert.equal(trimmed.summaryInserted, false)
+  assert.equal(trimmed.estimatedTokens, trimmed.originalTokens)
+  assert.equal(out[0].prompt, turns[0].prompt) // 未裁剪
+})
+
+test('trimTurns: 超长会话保留开头锚点 3 条 user 文本 + 摘要 + 尾部，总估算 ≤ 预算', () => {
+  const turns = textTurns(40, 100) // ~40×200 = 8000 tokens > 3×2000
+  const { turns: out, trimmed } = trimTurns(turns, 2000)
+  assert.ok(trimmed.droppedTurns > 0)
+  assert.equal(trimmed.droppedTurns, 40 - out.length)
+  assert.ok(trimmed.summaryInserted)
+  assert.ok(trimmed.estimatedTokens <= 2000)
+  assert.ok(trimmed.originalTokens > 3 * 2000)
+  // 开头锚点：前 3 轮原样保留（prompt 未动）
+  assert.equal(out[0].prompt, turns[0].prompt)
+  assert.equal(out[1].prompt, turns[1].prompt)
+  assert.equal(out[2].prompt, turns[2].prompt)
+  // 尾部保留：最后一轮在尾部
+  assert.equal(out.at(-1).prompt, turns[39].prompt)
+  // 摘要作为 reasoning 块前置到首个保留尾部轮
+  const firstTail = out[3]
+  assert.equal(firstTail.steps[0].content[0].type, 'reasoning')
+  assert.ok(firstTail.steps[0].content[0].text.includes('导入预算裁剪'))
+  // 输入未被修改（纯函数）
+  assert.equal(turns.length, 40)
+  assert.equal(turns[0].prompt, '问题' + '字'.repeat(98) + '0')
+})
+
+test('trimTurns: 单条巨 assistant 消息（> 预算一半）在锚点内被第三层丢弃', () => {
+  // 锚点第一轮含 3000-token 的巨消息：L2 保留锚点（病态小预算下收缩到 1 轮），
+  // L3 把超半的整条 assistant 消息丢弃，只留 prompt（宁缺毋滥）。
+  const turns = [
+    { prompt: '锚点', steps: [{ content: [{ type: 'text', text: '字'.repeat(3000) }], toolCalls: [], toolResults: [] }] },
+    ...textTurns(30, 10),
+  ]
+  const { turns: out, trimmed } = trimTurns(turns, 2000)
+  assert.ok(trimmed.droppedOversized > 0)
+  // 首轮仍在（prompt 保留），巨 step 被丢弃（宁缺毋滥，不超限）
+  assert.equal(out[0].prompt, '锚点')
+  assert.equal(out[0].steps.length, 0)
+  assert.ok(trimmed.estimatedTokens <= 2000)
+  assert.ok(trimmed.droppedMessages >= 1)
+})
+
+test('trimTurns: 单条巨工具结果（> 预算一半）被丢弃而非超限', () => {
+  const turns = [
+    {
+      prompt: '锚点一',
+      steps: [{
+        content: [{ type: 'text', text: '回答一' }],
+        toolCalls: [{ id: 'c1', name: 'read', arguments: '{}' }],
+        toolResults: [{ toolCallId: 'c1', content: [{ type: 'text', text: '字'.repeat(40000) }] }],
+      }],
+    },
+    ...textTurns(30, 10),
+  ]
+  const { turns: out, trimmed } = trimTurns(turns, 2000)
+  assert.ok(trimmed.droppedOversized > 0)
+  // 首轮仍在（锚点），但其巨工具结果被丢弃（调用保留 → synthesizeSession 补空结果）
+  assert.equal(out[0].prompt, '锚点一')
+  assert.equal(out[0].steps[0].toolResults.length, 0)
+  assert.equal(out[0].steps[0].toolCalls.length, 1)
+  assert.ok(trimmed.estimatedTokens <= 2000)
+})
+
+test('applyBudgetTrim: 无预算 / 非法预算 → 原样返回且无 trimmed 上报', () => {
+  const turns = textTurns(5, 10)
+  for (const budget of [undefined, null, 0, -1, 'abc', NaN]) {
+    const r = applyBudgetTrim(turns, budget)
+    assert.equal(r.trimmed, null)
+    assert.equal(r.turns.length, 5)
+    assert.equal(r.turns[0].prompt, turns[0].prompt)
+  }
+  // 字符串预算被 Number 归一（与 index 层 parseBudgetValue 口径一致）
+  const str = applyBudgetTrim(textTurns(40, 100), '1000')
+  assert.ok(str.trimmed)
+  // 合法预算 + 保护未实际生效（预算内）→ 无上报
+  const r2 = applyBudgetTrim(textTurns(2, 10), 100000)
+  assert.equal(r2.trimmed, null)
+})
+
+test('convertClaudeJsonl: budget 裁剪后事件仍平衡（配对 + 投影顺序合法）', () => {
+  const lines = []
+  const sessionId = 'sess-trim-001'
+  for (let i = 1; i <= 60; i++) {
+    lines.push(JSON.stringify({ sessionId, type: 'user', cwd: 'D:\\demo', message: { role: 'user', content: '问题' + '字'.repeat(49) + i } }))
+    lines.push(JSON.stringify({ sessionId, type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '回答' + '字'.repeat(49) + i }] } }))
+  }
+  const out = convertClaudeJsonl(lines.join('\n'), { budget: 1000, sourcePath: 'D:\\demo\\sess-trim-001.jsonl' })
+  assert.ok(out.trimmed)
+  assert.ok(out.trimmed.droppedTurns > 0)
+  assert.ok(out.trimmed.estimatedTokens <= 1000)
+  assert.equal(out.trimmed.budget, 1000)
+  assertToolPairing(out.events)
+  assertMessageOrderLegal(out.events)
+  // 无 budget 时行为不变（无裁剪上报）
+  const plain = convertClaudeJsonl(lines.join('\n'), { sourcePath: 'D:\\demo\\sess-trim-001.jsonl' })
+  assert.equal(plain.trimmed, undefined)
+  assert.ok(plain.turns.length > out.turns.length)
 })
