@@ -11,6 +11,17 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ## [Unreleased]
 
+### Added
+
+- **Import panel follows the DSH web language (zh / en)** — every panel string
+  (trigger title/label, panel title, source filter, search, select-all,
+  pagination, import-status labels, per-item buttons and result summaries) moved
+  from hardcoded Chinese into a `chat-import` dictionary registered with
+  `@deepseek-ai/dsh-client-locale` (`LocaleRuntime.register`), switching live
+  with the web UI's language via `subscribe`. Missing `locale` service degrades
+  to the built-in zh dictionary (previous behavior). The bilingual README
+  tagline is corrected to 12 sources.
+
 ## [0.3.1] - 2026-08-14
 
 ### Added

@@ -8,7 +8,7 @@
 
 # DSH Chat Import
 
-> **11 agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, and export / sync back to Claude Code.
+> **12 agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, and export / sync back to Claude Code.
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-chat-import"><img src="https://img.shields.io/npm/v/dsh-chat-import" alt="npm version"></a>

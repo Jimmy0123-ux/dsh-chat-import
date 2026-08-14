@@ -19,7 +19,8 @@ lib/             导入/同步驱动（按职责拆分，均消费 ctx、非纯�
                  （makeImportTool 工厂 + IMPORT_SPECS）、export-tool.mjs（export_claude 执行体）、
                  retract.mjs（REQ-33 识别/撤回）、discovery-host.mjs（scan_discover host 适配）、
                  panel.mjs（REQ-41 面板路由）、client.js（Browser 侧 bundle，REQ-41：sidebar.footer.action
-                 槽 → 按工作区分组的面板 + 单选/多选导入）、opencode.mjs / zcode.mjs / hermes.mjs
+                 槽 → 按工作区分组的面板 + 单选/多选导入；文案注册到 "chat-import" ns 经
+                 @deepseek-ai/dsh-client-locale 随 web 语言切换，缺失时降级内置 zh）、opencode.mjs / zcode.mjs / hermes.mjs
                  （SQLite 读取，node:sqlite）、convert/（转换核心按源拆分）、export/（反向序列化按目标
                  格式拆分，当前仅 claude.mjs）
 convert.mjs      转换核心 re-export shim（已按源拆到 lib/convert/{core,claude,codex,chatgpt,cursor,gemini,reasonix,opencode,zcode,grokbuild,openclaw,hermes,pi}.mjs，纯函数、零 DSH 依赖、可独立单测）
