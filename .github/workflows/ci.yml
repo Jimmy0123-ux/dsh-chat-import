@@ -17,7 +17,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm install --no-audit --no-fund
+      # 严格按 package-lock.json 复现依赖树（与 npm install 不同，lockfile 与 package.json 不一致时直接失败）
+      - run: npm ci --no-audit --no-fund
       - run: npm test
+      # 锁文件漂移护栏：package.json 改了版本/依赖而未同步 lockfile 时，
+      # npm 重算出的 lockfile 与仓库版本不一致 → git diff 非空 → 该步红
+      - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - run: git diff --exit-code -- package-lock.json
       # 发布面回归护栏：files 白名单缺失/拼错会在此失败
       - run: npm pack --dry-run
