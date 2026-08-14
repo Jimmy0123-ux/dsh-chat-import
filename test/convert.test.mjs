@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION, tailSessionEvents } from '../convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION, tailSessionEvents, codexCustomToolArguments, jsObjectLiteralToJson } from '../convert.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -442,6 +442,8 @@ test('convertCodexJsonl: 注入块被过滤、reasoning 加密被跳过、custom
   assert.equal(call.data.name, 'apply_patch')
   assert.equal(call.data.callId, 'call_sYb5HPObaiJRLYhllTHqbIxP')
   assert.ok(call.data.arguments.includes('*** Begin Patch'))
+  // 补丁自由文本不是 JS 调用形态：不误转、不计入 droppedMalformedArgs（REQ-44）
+  assert.equal(out.droppedMalformedArgs, 0)
   const result = out.events.find((e) => e.type === 'tool/result')
   assert.equal(result.data.message.content[0].content[0].text, 'Patch applied successfully.')
   assert.deepEqual(result.sourceEventSeqs, [call.seq])
@@ -492,6 +494,119 @@ test('convertCodexJsonl: 空输入不产生事件', () => {
   const out = convertCodexJsonl('')
   assert.equal(out.events.length, 0)
   assert.equal(out.turns.length, 0)
+})
+
+// ---- REQ-44: codex custom_tool_call JS 参数 → 标准 JSON（保真度） ----
+
+// 合成含一个 custom_tool_call 的单轮 codex rollout（用 JSON.stringify 生成行，
+// 避免在测试源码里手工转义 input 里的引号/花括号）。
+function codexJsCallRollout(input, name = 'exec_command') {
+  return [
+    { timestamp: 't0', type: 'session_meta', payload: { id: 'codex-js-001', timestamp: 't0', cwd: 'D:\\demo\\codex-proj' } },
+    { timestamp: 't1', type: 'turn_context', payload: { turn_id: 't1', model: 'gpt-5.5' } },
+    { timestamp: 't2', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '跑一下' }] } },
+    { timestamp: 't3', type: 'response_item', payload: { type: 'custom_tool_call', status: 'completed', call_id: 'call_js_01', name, input } },
+  ].map((l) => JSON.stringify(l)).join('\n')
+}
+
+test('convertCodexJsonl: custom_tool_call JS 参数转标准 JSON（tools.exec_command 调用形态）', () => {
+  // 2026+ 新版 custom_tool_call 的 input 是 JS 代码字符串。识别调用形态 → 提取
+  // 对象字面量 → 转标准 JSON；嵌套对象 / 数组 / 单引号 / 布尔 / 数字 / null 全支持
+  const input = 'tools.exec_command({command:"ls", args:["-la"], opts:{cwd:\'D:/p\', verbose:true, count:3, empty:null, nested:{a:[1,2,3]}}})'
+  const out = convertCodexJsonl(codexJsCallRollout(input), { sessionId: 'codex-js' })
+  const call = out.events.find((e) => e.type === 'tool/call')
+  assert.equal(call.data.name, 'exec_command')
+  // arguments 是提取出的对象字面量转成的标准 JSON（不再是 JS 调用文本）
+  assert.equal(
+    call.data.arguments,
+    '{"command":"ls","args":["-la"],"opts":{"cwd":"D:/p","verbose":true,"count":3,"empty":null,"nested":{"a":[1,2,3]}}}'
+  )
+  assert.equal(out.droppedMalformedArgs, 0)
+  assertToolPairing(out.events)
+})
+
+test('convertCodexJsonl: custom_tool_call 直接对象字面量 input 转标准 JSON（无引号键）', () => {
+  const out = convertCodexJsonl(codexJsCallRollout('{cmd: "ls", flag: true, n: -2.5}'), { sessionId: 'codex-obj' })
+  const call = out.events.find((e) => e.type === 'tool/call')
+  assert.equal(call.data.arguments, '{"cmd":"ls","flag":true,"n":-2.5}')
+  assert.equal(out.droppedMalformedArgs, 0)
+})
+
+test('convertCodexJsonl: custom_tool_call 括号包裹 / 并行形态取第一个对象字面量', () => {
+  // Promise.all([...]) 并行多调用：取第一个对象字面量转 JSON（与竞品行为一致）
+  const par = convertCodexJsonl(codexJsCallRollout('Promise.all([tools.exec_command({cmd:"ls"}), tools.exec_command({cmd:"pwd"})])'), { sessionId: 'codex-par' })
+  assert.equal(par.events.find((e) => e.type === 'tool/call').data.arguments, '{"cmd":"ls"}')
+  assert.equal(par.droppedMalformedArgs, 0)
+  // 括号包裹表达式（await 调用）同样识别
+  const wrapped = convertCodexJsonl(codexJsCallRollout('(await tools.exec_command({cmd:"pwd"}))'), { sessionId: 'codex-wrap' })
+  assert.equal(wrapped.events.find((e) => e.type === 'tool/call').data.arguments, '{"cmd":"pwd"}')
+  assert.equal(wrapped.droppedMalformedArgs, 0)
+})
+
+test('convertCodexJsonl: custom_tool_call JS 参数转换失败回退原样并计数 droppedMalformedArgs', () => {
+  // input 是 JS 调用形态但值含方法调用（转换器不支持的表达式）→ 转换失败
+  const input = 'tools.exec_command({cmd: shell_escape(userInput)})'
+  const out = convertCodexJsonl(codexJsCallRollout(input), { sessionId: 'codex-fb' })
+  const call = out.events.find((e) => e.type === 'tool/call')
+  // 回退原样：JSON.stringify(input)，不抛异常、不产生垃圾输出
+  assert.equal(call.data.arguments, JSON.stringify(input))
+  assert.equal(out.droppedMalformedArgs, 1)
+})
+
+test('convertCodexJsonl: function_call 不进入 JS 参数转换（arguments 原样）', () => {
+  const raw = [
+    '{"timestamp":"t0","type":"session_meta","payload":{"id":"codex-fc-001","timestamp":"t0","cwd":"D:\\\\demo"}}',
+    '{"timestamp":"t1","type":"turn_context","payload":{"turn_id":"t1","model":"gpt-5.5"}}',
+    '{"timestamp":"t2","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"查一下"}]}}',
+    JSON.stringify({ timestamp: 't3', type: 'response_item', payload: { type: 'function_call', name: 'shell_command', arguments: 'tools.exec_command({cmd:"ls"})', call_id: 'call_fc_01' } }),
+  ].join('\n')
+  const out = convertCodexJsonl(raw, { sessionId: 'codex-fc' })
+  const call = out.events.find((e) => e.type === 'tool/call')
+  // 即便是 JS 形态的 arguments 也原样保留：JS 转换只作用于 custom_tool_call
+  assert.equal(call.data.arguments, 'tools.exec_command({cmd:"ls"})')
+  assert.equal(out.droppedMalformedArgs, 0)
+})
+
+test('codexCustomToolArguments: 非字符串 / 空串 / 已是 JSON / 自由文本保持原样（fallback=false）', () => {
+  // 对象 input（老格式）→ JSON.stringify 原样，不算 fallback
+  const obj = codexCustomToolArguments({ cmd: 'ls' })
+  assert.equal(obj.arguments, '{"cmd":"ls"}')
+  assert.equal(obj.fallback, false)
+  // 空串
+  const empty = codexCustomToolArguments('')
+  assert.equal(empty.arguments, '""')
+  assert.equal(empty.fallback, false)
+  // 已是标准 JSON 的对象字符串 → 转换器幂等输出（格式化归一）
+  const json = codexCustomToolArguments('{"cmd":"ls"}')
+  assert.equal(json.arguments, '{"cmd":"ls"}')
+  assert.equal(json.fallback, false)
+  // 自由文本（apply_patch 补丁）→ 未识别为 JS 调用形态，原样保留、不算 fallback
+  const patch = codexCustomToolArguments('*** Begin Patch\n*** Update File: a.js\n@@\n-foo\n+bar\n*** End Patch')
+  assert.equal(patch.arguments, JSON.stringify('*** Begin Patch\n*** Update File: a.js\n@@\n-foo\n+bar\n*** End Patch'))
+  assert.equal(patch.fallback, false)
+})
+
+test('codexCustomToolArguments: 字符串/模板里的花括号不误导提取；模板值不支持回退原样', () => {
+  // 字符串值里的 '}' 不提前闭合对象
+  const s = codexCustomToolArguments('{a: "}", b: 2}')
+  assert.equal(s.arguments, '{"a":"}","b":2}')
+  assert.equal(s.fallback, false)
+  // 模板字符串值（含 ${…} 花括号）→ 提取不误判，但模板值转换器不支持 → 回退原样并标记
+  const t = codexCustomToolArguments('{cmd: `ls ${dir}`}')
+  assert.equal(t.arguments, JSON.stringify('{cmd: `ls ${dir}`}'))
+  assert.equal(t.fallback, true)
+})
+
+test('jsObjectLiteralToJson: 不支持的结构返回 null（尾逗号 / 注释 / 表达式 / 模板值）', () => {
+  assert.equal(jsObjectLiteralToJson('{a: 1,}'), null) // 尾逗号
+  assert.equal(jsObjectLiteralToJson('{a: 1 // 注释\n}'), null) // 注释
+  assert.equal(jsObjectLiteralToJson('{a: f(1)}'), null) // 方法调用表达式
+  assert.equal(jsObjectLiteralToJson('{a: `x`}'), null) // 模板字符串值
+  assert.equal(jsObjectLiteralToJson('{a: 0x10}'), null) // 十六进制数字
+  assert.equal(jsObjectLiteralToJson('{a: [1,]}'), null) // 数组尾逗号
+  // 支持的结构正常输出（含前导小数点数字 .5）
+  assert.equal(jsObjectLiteralToJson('{}'), '{}')
+  assert.equal(jsObjectLiteralToJson('{a: [], b: {c: "d"}, e: -1.5, f: 1e3, g: .5}'), '{"a":[],"b":{"c":"d"},"e":-1.5,"f":1000,"g":0.5}')
 })
 
 // ---- ChatGPT 网页导出 conversations.json ----
@@ -1002,7 +1117,6 @@ function threeTurnClaude() {
 test('tailSessionEvents: 按 turn 切片、seq 从 fromSeq 连续重编号、续号用源编号', () => {
   const out = convertClaudeJsonl(threeTurnClaude(), { sourcePath: 'D:\\demo\\proj\\sess-incr-001.jsonl' })
   assert.equal(out.turns.length, 3)
-  const headCount = out.events.find((e) => e.type === 'turn/start' && e.data.turn === 2).seq
   const fromSeq = 40 // 模拟已存日志长度
   const tail = tailSessionEvents(out, { fromTurn: 2, fromSeq })
   assert.equal(tail.firstTurn, 2)

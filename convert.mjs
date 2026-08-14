@@ -378,6 +378,8 @@ export function convertClaudeJsonl(raw, args = {}) {
 export function convertCodexJsonl(raw, args = {}) {
   const recs = []
   let skipped = 0
+  // REQ-44：custom_tool_call 的 JS 参数未能转标准 JSON、原样保留的个数（诊断计数）
+  let droppedMalformedArgs = 0
   for (const line of raw.split('\n')) {
     const t = line.trim()
     if (!t) continue
@@ -455,8 +457,11 @@ export function convertCodexJsonl(raw, args = {}) {
       if (payload.type === 'function_call') {
         argumentsText = typeof payload.arguments === 'string' ? payload.arguments : JSON.stringify(payload.arguments ?? {})
       } else {
-        // custom_tool_call（如 apply_patch）：arguments 是自由格式 input
-        argumentsText = JSON.stringify(payload.input ?? {})
+        // custom_tool_call（如 apply_patch）：input 是自由格式；2026+ 新版是 JS 代码
+        // （tools.exec_command({...}) 等调用形态）——识别并转标准 JSON，失败原样保留
+        const res = codexCustomToolArguments(payload.input)
+        argumentsText = res.arguments
+        if (res.fallback) droppedMalformedArgs++
       }
       const mapped = {
         id: callId,
@@ -500,7 +505,240 @@ export function convertCodexJsonl(raw, args = {}) {
   if (sourceId) meta.sourceId = sourceId
   if (cwd) meta.cwd = cwd
 
-  return synthesizeSession({ meta, turns, title, provider: 'codex', model, skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
+  return {
+    ...synthesizeSession({ meta, turns, title, provider: 'codex', model, skipped, records: recs.length, imported: { sourcePath: args.sourcePath } }),
+    droppedMalformedArgs,
+  }
+}
+
+// Codex `custom_tool_call` 的 input 是 JS 代码字符串（2026+ 新版，如
+// `tools.exec_command({cmd: "...", workdir: "..."})`、直接对象字面量或箭头/括号包裹的
+// 调用表达式）。直接 JSON.stringify 当 arguments 传模型会让模型学到错误的调用格式
+// （JS/XML 混合）。识别 JS 调用形态 → 提取最外层对象字面量 → 最小转换器转标准 JSON；
+// 提取/转换任一失败回退原样（不抛异常、不产生垃圾输出）。返回 { arguments, fallback }：
+// fallback=true 表示「识别为 JS 形态但未能转换、原样保留」（供调用方计数
+// droppedMalformedArgs）；apply_patch 这类自由文本不算，因为根本没进入转换流程。
+export function codexCustomToolArguments(input) {
+  if (typeof input !== 'string') return { arguments: JSON.stringify(input ?? {}), fallback: false }
+  const text = input.trim()
+  if (!text || !codexJsArgsShape(text)) return { arguments: JSON.stringify(input), fallback: false }
+  const start = findObjectStart(text)
+  if (start === -1) return { arguments: JSON.stringify(input), fallback: true }
+  const end = findMatchingBrace(text, start)
+  if (end === -1) return { arguments: JSON.stringify(input), fallback: true }
+  const json = jsObjectLiteralToJson(text.slice(start, end + 1))
+  if (json === null) return { arguments: JSON.stringify(input), fallback: true }
+  return { arguments: json, fallback: false }
+}
+
+// 识别 Codex custom_tool_call 的 JS 调用形态：直接对象字面量 {…}、括号包裹表达式
+// （IIFE / 箭头函数 / Promise.all）、name(…) / tools.name(…) 调用，以及带赋值/返回
+// 前缀的调用片段（const r = await tools.exec_command({…}) 等）。
+function codexJsArgsShape(text) {
+  return /^\{/.test(text)
+    || /^\(/.test(text)
+    || /^(?:return\s+|(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*)?(?:await\s+)?(?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*\s*\(/.test(text)
+}
+
+// 定位 input 中第一个不在字符串/模板字面量里的 '{'（提取调用参数的对象字面量起点）。
+function findObjectStart(text) {
+  for (let i = 0; i < text.length;) {
+    const ch = text[i]
+    if (ch === '"' || ch === "'") { i = skipJsString(text, i); continue }
+    if (ch === '`') { i = skipJsTemplate(text, i); continue }
+    if (ch === '{') return i
+    i++
+  }
+  return -1
+}
+
+// 从 start（text[start] === '{'）找到匹配的 '}'（嵌套花括号 / 字符串 / 模板 aware）。
+function findMatchingBrace(text, start) {
+  let depth = 0
+  for (let i = start; i < text.length;) {
+    const ch = text[i]
+    if (ch === '"' || ch === "'") { i = skipJsString(text, i); continue }
+    if (ch === '`') { i = skipJsTemplate(text, i); continue }
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return i
+    }
+    i++
+  }
+  return -1
+}
+
+// 跳过单/双引号字符串（含反斜杠转义）；返回越过闭合引号的下标。未闭合时扫到末尾。
+function skipJsString(text, start) {
+  const quote = text[start]
+  for (let i = start + 1; i < text.length;) {
+    const ch = text[i]
+    if (ch === '\\') { i += 2; continue }
+    i++
+    if (ch === quote) return i
+  }
+  return text.length
+}
+
+// 跳过模板字面量（含 ${…} 插值：插值内按 JS 代码扫描，可嵌套字符串/模板/花括号）；
+// 返回越过闭合反引号的下标。未闭合时扫到末尾。
+function skipJsTemplate(text, start) {
+  for (let i = start + 1; i < text.length;) {
+    const ch = text[i]
+    if (ch === '\\') { i += 2; continue }
+    if (ch === '$' && text[i + 1] === '{') {
+      let depth = 1
+      i += 2
+      while (i < text.length && depth > 0) {
+        const c = text[i]
+        if (c === '"' || c === "'") { i = skipJsString(text, i); continue }
+        if (c === '`') { i = skipJsTemplate(text, i); continue }
+        if (c === '{') { depth++; i++; continue }
+        if (c === '}') { depth--; i++; if (depth === 0) break }
+        i++
+      }
+      continue
+    }
+    i++
+    if (ch === '`') return i
+  }
+  return text.length
+}
+
+// 最小 JS 对象字面量 → JSON 文本（零依赖、无 eval；递归下降）。
+// 支持：字符串键/值（单/双引号 + 常用转义）、无引号标识符键、数字、true/false/null、
+// 数组、嵌套对象。不支持（返回 null）：函数/方法调用、变量引用、注释、尾逗号、
+// 模板字符串值、十六进制数字等——调用方回退原样。
+export function jsObjectLiteralToJson(src) {
+  let i = 0
+  const err = () => { throw new SyntaxError('unsupported JS object literal at ' + i) }
+  const skipWs = () => { while (i < src.length && (src[i] === ' ' || src[i] === '\t' || src[i] === '\n' || src[i] === '\r')) i++ }
+  const parseString = () => {
+    const quote = src[i]
+    i++
+    let out = ''
+    while (i < src.length) {
+      const ch = src[i]
+      if (ch === quote) { i++; return out }
+      if (ch !== '\\') { out += ch; i++; continue }
+      i++
+      const e = src[i]
+      switch (e) {
+        case 'n': out += '\n'; i++; break
+        case 't': out += '\t'; i++; break
+        case 'r': out += '\r'; i++; break
+        case 'b': out += '\b'; i++; break
+        case 'f': out += '\f'; i++; break
+        case 'v': out += '\v'; i++; break
+        case '0': out += '\0'; i++; break
+        case 'u': {
+          i++
+          if (src[i] === '{') {
+            // \u{…}：1–6 位十六进制码点
+            let hex = ''
+            i++
+            while (i < src.length && /[0-9a-fA-F]/.test(src[i])) { hex += src[i]; i++ }
+            if (src[i] !== '}' || hex.length === 0 || hex.length > 6) err()
+            const cp = parseInt(hex, 16)
+            if (cp > 0x10ffff) err()
+            out += String.fromCodePoint(cp)
+            i++
+          } else {
+            const hex = src.slice(i, i + 4)
+            if (!/^[0-9a-fA-F]{4}$/.test(hex)) err()
+            out += String.fromCharCode(parseInt(hex, 16))
+            i += 4
+          }
+          break
+        }
+        case 'x': {
+          i++
+          const hex = src.slice(i, i + 2)
+          if (!/^[0-9a-fA-F]{2}$/.test(hex)) err()
+          out += String.fromCharCode(parseInt(hex, 16))
+          i += 2
+          break
+        }
+        default:
+          // 身份转义（\\ \' \" 与未知转义按 JS 语义取原字符）
+          out += e
+          i++
+      }
+    }
+    err() // 未闭合字符串
+  }
+  const parseIdentifier = () => {
+    const m = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(src.slice(i))
+    if (!m) err()
+    i += m[0].length
+    return m[0]
+  }
+  const parseNumber = () => {
+    const m = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/.exec(src.slice(i))
+    if (!m) err()
+    const n = Number(m[0])
+    if (!Number.isFinite(n)) err()
+    i += m[0].length
+    return n
+  }
+  const parseValue = () => {
+    skipWs()
+    if (i >= src.length) err()
+    const ch = src[i]
+    if (ch === '{') return parseObject()
+    if (ch === '[') return parseArray()
+    if (ch === '"' || ch === "'") return parseString()
+    if (ch === '-' || ch === '.' || (ch >= '0' && ch <= '9')) return parseNumber()
+    if (src.startsWith('true', i) && !/[A-Za-z0-9_$]/.test(src[i + 4] || '')) { i += 4; return true }
+    if (src.startsWith('false', i) && !/[A-Za-z0-9_$]/.test(src[i + 5] || '')) { i += 5; return false }
+    if (src.startsWith('null', i) && !/[A-Za-z0-9_$]/.test(src[i + 4] || '')) { i += 4; return null }
+    err()
+  }
+  const parseArray = () => {
+    i++ // '['
+    const arr = []
+    skipWs()
+    if (src[i] === ']') { i++; return arr }
+    for (;;) {
+      arr.push(parseValue())
+      skipWs()
+      if (src[i] === ',') { i++; continue }
+      if (src[i] === ']') { i++; return arr }
+      err()
+    }
+  }
+  const parseObject = () => {
+    i++ // '{'
+    const obj = {}
+    skipWs()
+    if (src[i] === '}') { i++; return obj }
+    for (;;) {
+      skipWs()
+      const key = src[i] === '"' || src[i] === "'" ? parseString() : parseIdentifier()
+      skipWs()
+      if (src[i] !== ':') err()
+      i++
+      obj[key] = parseValue()
+      skipWs()
+      if (src[i] === ',') { i++; continue }
+      if (src[i] === '}') { i++; return obj }
+      err()
+    }
+  }
+  const parseTop = () => {
+    skipWs()
+    const value = parseValue()
+    skipWs()
+    if (i !== src.length) err()
+    return JSON.stringify(value)
+  }
+  try {
+    return parseTop()
+  } catch {
+    // 解析器不支持的结构（函数/表达式/注释/尾逗号/模板字符串值等）→ null，调用方回退原样
+    return null
+  }
 }
 
 // ChatGPT 网页导出 conversations.json → 每个会话一个 DSH 会话。
@@ -629,7 +867,6 @@ export function convertCursorJsonl(raw, args = {}) {
 
   const turns = []
   let cur = null
-  let lastStep = null
   for (const rec of recs) {
     if (!rec || (rec.role !== 'user' && rec.role !== 'assistant')) continue
     const content = Array.isArray(rec.message?.content) ? rec.message.content : []
@@ -646,7 +883,6 @@ export function convertCursorJsonl(raw, args = {}) {
       if (prompt) {
         cur = { prompt, steps: [] }
         turns.push(cur)
-        lastStep = null
       }
     } else if (rec.role === 'assistant' && cur) {
       const step = { content: [], toolCalls: [], toolResults: [] }
@@ -667,7 +903,6 @@ export function convertCursorJsonl(raw, args = {}) {
       }
       if (step.content.length > 0 || step.toolCalls.length > 0) {
         cur.steps.push(step)
-        lastStep = step
       }
     }
   }
@@ -710,7 +945,6 @@ export function convertGeminiJson(raw, args = {}) {
   let model = null
   const turns = []
   let cur = null
-  let lastStep = null
   for (const msg of chat.messages) {
     if (!msg || typeof msg !== 'object') continue
     if (msg.type === 'user') {
@@ -727,7 +961,6 @@ export function convertGeminiJson(raw, args = {}) {
       if (prompt) {
         cur = { prompt, steps: [] }
         turns.push(cur)
-        lastStep = null
       }
     } else if (msg.type === 'gemini' && cur) {
       const step = { content: [], toolCalls: [], toolResults: [] }
@@ -771,7 +1004,6 @@ export function convertGeminiJson(raw, args = {}) {
         }
       }
       cur.steps.push(step)
-      lastStep = step
     }
     // info 与未知类型跳过
   }

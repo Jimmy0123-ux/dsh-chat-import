@@ -151,7 +151,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 
 ### Codex / ChatGPT CLI rollout
 
-行 envelope：`{ timestamp, type, payload }`。`event_msg` 的 user/agent 消息是 `response_item` 的重复、被忽略；以 `<` 开头的用户消息块（`<environment_context>`、`<user_instructions>` 等）是 harness 注入，不进入 prompt。Codex `reasoning` 内容加密，跳过。`function_call` / `custom_tool_call` 无对应 `*_output` 记录（会话中断）时补发空 `tool/result`。
+行 envelope：`{ timestamp, type, payload }`。`event_msg` 的 user/agent 消息是 `response_item` 的重复、被忽略；以 `<` 开头的用户消息块（`<environment_context>`、`<user_instructions>` 等）是 harness 注入，不进入 prompt。Codex `reasoning` 内容加密，跳过。`function_call` / `custom_tool_call` 无对应 `*_output` 记录（会话中断）时补发空 `tool/result`。`custom_tool_call` 的 input 若是 JS 调用形态（如 `tools.exec_command({cmd: "...", workdir: "..."})`、直接对象字面量或括号/箭头包裹的调用）会自动转成标准 JSON 作为 `tool/call` 参数，避免模型学到 JS/XML 混合的调用格式；无法转换的（如 `apply_patch` 自由文本）原样保留并计数（`droppedMalformedArgs`）。
 
 | Codex rollout | DSH SessionEvent |
 | --- | --- |
@@ -260,7 +260,7 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 - 源 transcript 只读、绝不原地改写；DSH 历史事件 append-only（deep-frozen）——只新增、绝不修改既有事件。`export_claude` 只读会话日志、绝不修改。
 - 插件不修改 DSH 引擎、apiproxy 或官方 UI 包；不发布任何服务，无需 isolate realm。
 - 读取工作区之外的 transcript 需要会话沙箱允许访问该路径；导出写入 `<outputDir>/<slug>/<uuid>.jsonl`，目标在工作区之外同样需要会话沙箱放行。
-- 已知边界：不导入 `permission` / `summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃 `message.content` 之外的附加字段；Claude subagent / workflow 片段 transcript 跳过（只有主 `<sessionId>.jsonl` 成为会话），无对应 `tool_use` 的孤儿 `tool_result` 丢弃并计数（`droppedToolResults`）；Codex `reasoning` 加密跳过；ChatGPT 导出只重建主线程（分支取最后 child）、工具消息降级为最近一步的文本块（导出无结构化 tool call，不再产生孤儿 `tool/result`）；Cursor transcript 无 `tool_result`（每个调用补发合成空 `tool/result`）、`[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方无稳定 schema）；Reasonix 读取 JSONL checkpoint（V2 WAL 排除）；opencode `patch` part 无 diff（只发 `[patch: <N> files]` 占位）、工具输出可能原样保留 ANSI 转义。
+- 已知边界：不导入 `permission` / `summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃 `message.content` 之外的附加字段；Claude subagent / workflow 片段 transcript 跳过（只有主 `<sessionId>.jsonl` 成为会话），无对应 `tool_use` 的孤儿 `tool_result` 丢弃并计数（`droppedToolResults`）；Codex `reasoning` 加密跳过；Codex `custom_tool_call` 的 JS 形态参数自动转标准 JSON——无法转换的原样保留并计数（`droppedMalformedArgs`）；ChatGPT 导出只重建主线程（分支取最后 child）、工具消息降级为最近一步的文本块（导出无结构化 tool call，不再产生孤儿 `tool/result`）；Cursor transcript 无 `tool_result`（每个调用补发合成空 `tool/result`）、`[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方无稳定 schema）；Reasonix 读取 JSONL checkpoint（V2 WAL 排除）；opencode `patch` part 无 diff（只发 `[patch: <N> files]` 占位）、工具输出可能原样保留 ANSI 转义。
 - **本次修复后需重新导入：** 已导入的会话是不可变日志——插件绝不改写既有历史。增长按增量续写 append；旧版本导入、缺少 call/result 配对的会话无法就地修复（删除旧会话后重新导入即可获得配对不变量）。源文件截断（`sourceShrunk`）或在已导入轮次内变化（`changedInPlace`）时跳过并报告——`force: true` 可另存完整副本。
 - **导出边界：** 导出的 `thinking` 块带空 `signature`（Claude Code 在 resume 时丢弃这类思考块——文档化的降级）；非人类直连的注入与非 text 内容块（如图片）跳过并计数（`skippedInjections` / `skippedBlocks`）；DSH 日志里没有对应 `tool/call` 的孤儿 `tool_result` 丢弃并计数（`droppedToolResults`）；中断会话末尾补发空 `tool_result`。
 
