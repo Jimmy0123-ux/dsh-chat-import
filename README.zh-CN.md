@@ -13,6 +13,7 @@
 [![Node.js >= 22.13](https://img.shields.io/badge/Node.js-%3E%3D22.13-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](package.json)
 [![CI](https://img.shields.io/github/actions/workflow/status/Nwflower/dsh-chat-import/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nwflower/dsh-chat-import)
+[![已收录于 Awesome DeepSeek Harness](https://img.shields.io/badge/%E5%B7%B2%E6%94%B6%E5%BD%95%E4%BA%8E-Awesome_DeepSeek_Harness-6A5ACD?style=for-the-badge&logo=awesome&logoColor=white)](https://github.com/0xsline/awesome-deepseek-harness)
 
 [💡 概念](#-概念) · [✨ 功能特性](#-功能特性) · [🗂 支持的来源](#-支持的来源) · [🚀 快速开始](#-快速开始) · [🛠 使用](#-使用) · [🔑 关键行为](#-关键行为) · [🏗️ 技术栈](#-技术栈) · [🗺️ 路线图](#-路线图) · [🤝 贡献](#-贡献)
 

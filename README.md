@@ -13,6 +13,7 @@
 [![Node.js >= 22.13](https://img.shields.io/badge/Node.js-%3E%3D22.13-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](package.json)
 [![CI](https://img.shields.io/github/actions/workflow/status/Nwflower/dsh-chat-import/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nwflower/dsh-chat-import)
+[![Listed in Awesome DeepSeek Harness](https://img.shields.io/badge/Listed_in-Awesome_DeepSeek_Harness-6A5ACD?style=for-the-badge&logo=awesome&logoColor=white)](https://github.com/0xsline/awesome-deepseek-harness)
 
 [💡 Concept](#-concept) · [✨ Features](#-features) · [🗂 Supported sources](#-supported-sources) · [🚀 Quick start](#-quick-start) · [🛠 Usage](#-usage) · [🔑 Key behaviors](#-key-behaviors) · [🏗️ Tech Stack](#-tech-stack) · [🗺️ Roadmap](#-roadmap) · [🤝 Contributing](#-contributing)
 
