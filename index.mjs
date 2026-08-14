@@ -1559,7 +1559,9 @@ function makeDiscoveryHost(ctx) {
 }
 
 // scan_discover 执行：registry 只读 loadImports（importStatus 标注），发现层零副作用
-//（不写库、不 create/append、不 touch 任何会话）。30s TTL 缓存由 discovery 模块持有。
+//（不写库、不 create/append、不 touch 任何会话）。30s TTL 缓存由 discovery 模块持有；
+// REQ-40 持久化 mtime/size 书签落 $DSH_HOME/dsh-chat-import/scan-cache.json（与 imports
+// registry 同目录），跨进程未变文件免重扫（写盘原子写，失败不影响扫描结果）。
 async function runScanDiscover(ctx, args, registryDir) {
   const registry = await loadImports(registryDir)
   return discoverSessions({
@@ -1568,6 +1570,7 @@ async function runScanDiscover(ctx, args, registryDir) {
     query: args.query,
     host: makeDiscoveryHost(ctx),
     imports: registry.imports,
+    cacheDir: registryDir,
   })
 }
 
@@ -2141,8 +2144,9 @@ function apply(ctx) {
     },
   }))
   // REQ-25/REQ-40 会话发现：第 11 个工具，只读扫描（发现核心在 lib/discovery.mjs，
-  // host 适配见 makeDiscoveryHost；30s TTL 缓存进程内共享）。零副作用：不写库、
-  // 不 create/append，registry 只读 loadImports 供 importStatus 标注。
+  // host 适配见 makeDiscoveryHost；30s TTL 缓存进程内共享 + 持久化 mtime 书签跨进程
+  // 免重扫）。零副作用：不写库、不 create/append，registry 只读 loadImports 供
+  // importStatus 标注（书签文件是缓存元数据，非会话数据）。
   ctx.tools.register(defineTool({
     name: 'scan_discover',
     description:
@@ -2154,6 +2158,7 @@ function apply(ctx) {
       'format 可选：只扫指定格式（chatgpt 无自动根，需 path 显式指向 conversations.json）。' +
       'query 可选：按标题 / 项目 / 路径子串过滤（忽略大小写）。' +
       '进程内 30s TTL 缓存：同 key 30 秒内重复扫描直接命中，不重读源文件。' +
+      '持久化 mtime/size 书签（scan-cache.json）：跨进程重启后未变文件免重扫。' +
       '只读工具：不写库、不 create/append、不修改任何会话或 registry。返回 { sessions, total }。',
     parameters: {
       path: {
