@@ -1,6 +1,6 @@
 // index.mjs — 外部聊天记录（Claude Code / Codex-ChatGPT / ChatGPT / Cursor /
-// Gemini / Reasonix / opencode / zcode / grokbuild / openclaw / hermes）→ DSH
-// 会话导入器 + DSH → Claude Code JSONL 反向导出
+// Gemini / Reasonix / Pi Coding Agent / opencode / zcode / grokbuild / openclaw /
+// hermes）→ DSH 会话导入器 + DSH → Claude Code JSONL 反向导出
 //
 // 消费 host 的 sessionPersistence / fs / tools / workspaceRegistry 服务，注册
 // `import_claude` 等导入工具：读取各自源格式的 transcript（单个文件或整个目录；
@@ -21,8 +21,8 @@ import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
   convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl,
-  convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, convertZcodeJson,
-  convertGrokbuildJson, convertOpenclawJson, convertHermesJson,
+  convertGeminiJson, convertReasonixJsonl, convertPiJsonl, convertOpencodeJson,
+  convertZcodeJson, convertGrokbuildJson, convertOpenclawJson, convertHermesJson,
 } from './convert.mjs'
 import { openclawDisplayNames } from './lib/convert/openclaw.mjs'
 import { readHermesDb } from './lib/hermes.mjs'
@@ -1859,7 +1859,39 @@ function apply(ctx) {
       '解析 flat/nested 双形态 JSONL 或 DB 中间 JSON（thinking→reasoning、tool_use/tool_result 成对）并持久化；' +
       '重复导入同一会话会幂等跳过。返回批量统计与逐会话明细。',
   }))
-  // REQ-16 反向导出：第 9 个工具，独立注册（导出流程与导入状态机完全不同）。
+  // Pi Coding Agent 源（第 12 个导入源）：Pi Coding Agent 会话 JSONL
+  // ~/.pi/agent/sessions/--<cwd>--/<timestamp>_<uuid>.jsonl（树形条目，id/parentId
+  // 链接）。活动分支（叶→根）重建、compaction 默认尊重（fullHistory 入参数指纹）；
+  // 头行缺失时用文件名 stem 作稳定源 id（幂等）。
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_pi',
+    sourceLabel: 'Pi Coding Agent',
+    convert: convertPiJsonl,
+    registryDir,
+    // 头行缺失时用文件名 stem 作稳定源 id（幂等）；正常路径取会话头 id（uuid）
+    deriveArgs: (target) => {
+      const p = target.displayPath || ctx.fs.processPath(target)
+      const base = String(p).split(/[\\/]/).pop() || ''
+      return { piId: base.replace(/\.jsonl$/i, '') }
+    },
+    // fullHistory 计入导入参数指纹：换值重导 → argsChanged（同 opencode 语义）
+    fingerprintKeys: ['fullHistory'],
+    extraParameters: {
+      fullHistory: {
+        type: 'boolean',
+        description: '可选：true 时导入全量历史（忽略 Pi 的上下文压缩）；默认 false（尊重压缩：只导最后一次摘要 + 尾巴）。',
+      },
+    },
+    description:
+      '从 Pi Coding Agent 的会话 JSONL 导入历史对话为可继续的 DSH 会话（' +
+      '~/.pi/agent/sessions/--<cwd>--/<timestamp>_<uuid>.jsonl）。' +
+      'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的目录（目录模式递归扫描，每个文件导入为独立会话）。' +
+      '解析活动分支（叶→根树遍历）的 user/assistant/toolResult 消息、thinking→reasoning、' +
+      'branch_summary/compaction 摘要→reasoning、bashExecution/custom 注入→文本块，合成会话事件并持久化；' +
+      '默认尊重上下文压缩（只导最后一次摘要+尾巴），可选 fullHistory 导全量；' +
+      '重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
+  }))
+  // REQ-16 反向导出：第 13 个工具，独立注册（导出流程与导入状态机完全不同）。
   ctx.tools.register(defineTool({
     name: 'export_claude',
     description:
@@ -1933,7 +1965,7 @@ function apply(ctx) {
       return exportClaudeSession(ctx, args, { registryDir })
     },
   }))
-  // REQ-36 反向同步（双向同步桥 B 第一步）：第 10 个工具，把 DSH 会话新增轮次
+  // REQ-36 反向同步（双向同步桥 B 第一步）：第 14 个工具，把 DSH 会话新增轮次
   // 增量写回 Claude Code JSONL（目标 = 导入源文件或 export_claude 副本）。写回
   // 核心在 lib/backfill.mjs（纯逻辑 + ctx 注入，零 DSH 依赖）；uuid 工厂经
   // syncClaudeSession 的 args.uuid 注入（测试确定性），工具 schema 不暴露它。
@@ -2054,7 +2086,7 @@ function apply(ctx) {
       return syncClaudeSession(ctx, args, { registryDir })
     },
   }))
-  // REQ-33 导入识别 / 撤回（只读）：第 12/13 个工具。平台无 delete 面
+  // REQ-33 导入识别 / 撤回（只读）：第 15/16 个工具。平台无 delete 面
   //（sessionPersistence.remove / fs.removeFile 未提供，见文件头 REQ-33 段落）——
   // list_imported_sessions 只读识别（标记权威 + registry 兜底），retract_import
   // 移除 registry 记录 + 引导手动删工件，绝不调用任何删除。
@@ -2143,16 +2175,16 @@ function apply(ctx) {
       return retractImport(ctx, args, registryDir)
     },
   }))
-  // REQ-25/REQ-40 会话发现：第 11 个工具，只读扫描（发现核心在 lib/discovery.mjs，
+  // REQ-25/REQ-40 会话发现：第 17 个工具，只读扫描（发现核心在 lib/discovery.mjs，
   // host 适配见 makeDiscoveryHost；30s TTL 缓存进程内共享 + 持久化 mtime 书签跨进程
   // 免重扫）。零副作用：不写库、不 create/append，registry 只读 loadImports 供
   // importStatus 标注（书签文件是缓存元数据，非会话数据）。
   ctx.tools.register(defineTool({
     name: 'scan_discover',
     description:
-      '只读扫描本机 11 种外部聊天记录格式的已知数据根（Claude Code / Codex / Cursor / ' +
-      'Gemini CLI / Reasonix / opencode / zcode / Grok Build / OpenClaw / Hermes / ' +
-      'ChatGPT 导出），返回结构化会话索引（format / sessionId / title / project / ' +
+      '只读扫描本机 12 种外部聊天记录格式的已知数据根（Claude Code / Codex / Cursor / ' +
+      'Gemini CLI / Reasonix / opencode / zcode / Grok Build / OpenClaw / Pi Coding Agent / ' +
+      'Hermes / ChatGPT 导出），返回结构化会话索引（format / sessionId / title / project / ' +
       'createdAt / lastActiveAt / messageCount / sourcePath / importStatus），供批导入前预览。' +
       'path 可选：给定时在该根下按格式探测（目录或单文件）；缺省扫全部格式的默认数据根。' +
       'format 可选：只扫指定格式（chatgpt 无自动根，需 path 显式指向 conversations.json）。' +

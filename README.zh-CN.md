@@ -8,7 +8,7 @@
 
 # DSH Chat Import
 
-> **一个插件，11 种来源** —— 全保真导入 DeepSeek Harness，无缝续聊，并可导出 / 同步回 Claude Code。
+> **一个插件，12 种来源** —— 全保真导入 DeepSeek Harness，无缝续聊，并可导出 / 同步回 Claude Code。
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-chat-import"><img src="https://img.shields.io/npm/v/dsh-chat-import" alt="npm version"></a>
@@ -25,7 +25,7 @@
   &nbsp;&nbsp;·&nbsp;&nbsp; <b>更新日志（英文）：</b> <a href="CHANGELOG.md">CHANGELOG.md</a>
 </p>
 
-`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw 与 Hermes** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区。
+`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw、Pi Coding Agent 与 Hermes** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区。
 
 反向方向同样覆盖：`export_claude` 把 DSH 会话序列化回 Claude Code JSONL（只读——绝不修改你的 DSH 日志），Claude Code 可用 `--resume` 加载续聊；`sync_to_claude` 再把会话新增轮次增量写回 Claude Code 文件——带守卫、绝不静默覆盖。
 
@@ -33,7 +33,7 @@
 
 **📥 导入**
 
-- **11 种来源，一个插件** — 每种来源一条命令，从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录。
+- **12 种来源，一个插件** — 每种来源一条命令，从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录。
 - **🔍 全保真** — 工具调用与结果、思考块、标题、模型与时间戳，源有记录就原样保留。
 - **📦 批量导入** — 指向一个目录（或整个数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。
 
@@ -66,6 +66,7 @@
 | **ZCode**（z.ai CLI） | `~/.zcode/cli/db/db.sqlite` | `import_zcode` |
 | **Grok Build** | `~/.grok/sessions/<project>/<session_id>/` | `import_grokbuild` |
 | **OpenClaw** | `~/.openclaw/agents/<agent>/sessions/*.jsonl` | `import_openclaw` |
+| **Pi Coding Agent** | `~/.pi/agent/sessions/--<cwd>--/<timestamp>_<uuid>.jsonl` | `import_pi` |
 | **Hermes** | `~/.hermes/`（Windows `%LOCALAPPDATA%\hermes`） | `import_hermes` |
 
 每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、时间戳、工具调用与结果、思考过程。数据较少的源导入其已有的内容；源格式无法保留的部分，会在导入报告里显式标注。
@@ -116,7 +117,7 @@ import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl"
 
 ### scan_discover — 只读会话发现
 
-`scan_discover` 扫描全部 11 种格式的已知数据根，返回结构化会话索引（标题、项目、路径、导入状态），供批导入前预览。零副作用：
+`scan_discover` 扫描全部 12 种格式的已知数据根，返回结构化会话索引（标题、项目、路径、导入状态），供批导入前预览。零副作用：
 
 ```
 scan_discover()
@@ -161,7 +162,7 @@ sync_to_claude({ sessionId: "…", target: "copy", dryRun: true })
 
 ## ⚙️ 兼容性
 
-面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 324 个用例。
+面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 335 个用例。
 
 ## 📦 安装与卸载
 

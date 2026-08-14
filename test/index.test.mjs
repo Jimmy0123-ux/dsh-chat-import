@@ -225,12 +225,12 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册十六个工具（11 导入 + scan_discover + export_claude + sync_to_claude + REQ-33 识别/撤回）', () => {
+test('apply 注册十七个工具（12 导入 + scan_discover + export_claude + sync_to_claude + REQ-33 识别/撤回）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 16)
+  assert.equal(registered.length, 17)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_openclaw', 'import_opencode', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'retract_import', 'scan_discover', 'sync_to_claude'])
+  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'retract_import', 'scan_discover', 'sync_to_claude'])
   for (const def of registered) {
     if (['export_claude', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import'].includes(def.name)) {
       // 导出 / 写回 / 发现 / 识别 / 撤回工具：单对象输出 schema（非 oneOf）
@@ -819,6 +819,86 @@ test('import_reasonix 幂等：同名 stem 不重复落盘', async () => {
   assert.equal(persistence.sessions.size, 1)
 })
 
+
+// ---- import_pi 集成 ----
+
+test('import_pi 单文件：头行 cwd/id 落盘、归组、返回值符合 schema', async () => {
+  const { ctx, persistence, attached } = makeCtx({ 'D:\\demo\\pi\\2025-06-01_pi-simple.jsonl': load('pi-simple.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_pi')
+  const value = await def.execute({ path: 'D:\\demo\\pi\\2025-06-01_pi-simple.jsonl' })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-019f0a11-2222-7333-8444-555566667777')
+  assert.equal(value.turns, 2)
+  assert.equal(value.messages, 4)
+  assert.equal(value.toolCalls, 0)
+  assert.equal(value.alreadyImported, false)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get('import-019f0a11-2222-7333-8444-555566667777')
+  assert.ok(saved)
+  assert.equal(saved.meta.cwd, 'D:\\demo\\pi-proj')
+  assert.equal(saved.events.at(-1).type, 'turn/end')
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+  assertImportedMarker(saved.events, { tool: 'pi-coding-agent', sourceId: '019f0a11-2222-7333-8444-555566667777', sourcePath: 'D:\\demo\\pi\\2025-06-01_pi-simple.jsonl' })
+  // cwd → 归组
+  assert.equal(attached.length, 1)
+  assert.equal(attached[0].id, 'import-019f0a11-2222-7333-8444-555566667777')
+})
+
+test('import_pi 目录批量导入：递归扫描、逐文件独立会话、schema 校验', async () => {
+  const tree = {
+    'D:\\demo\\pi': 'dir',
+    'D:\\demo\\pi\\s1.jsonl': load('pi-simple.jsonl'),
+    'D:\\demo\\pi\\sub': 'dir',
+    'D:\\demo\\pi\\sub\\s2.jsonl': load('pi-v1.jsonl'),
+    'D:\\demo\\pi\\notes.txt': 'not a transcript',
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_pi')
+  const value = await def.execute({ path: 'D:\\demo\\pi' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2) // 两个 .jsonl（notes.txt 被过滤）
+  assert.equal(value.imported, 2)
+  assert.equal(value.failed, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  assert.equal(persistence.sessions.size, 2)
+  assert.ok(persistence.sessions.has('import-019f0a11-2222-7333-8444-555566667777'))
+  assert.ok(persistence.sessions.has('import-019f0a11-6666-7777-8888-999900001111'))
+})
+
+test('import_pi 幂等 + fullHistory 入 args 指纹（换值重导 → argsChanged）', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\pi\\c.jsonl': load('pi-compaction.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_pi')
+  const first = await def.execute({ path: 'D:\\demo\\pi\\c.jsonl' })
+  const second = await def.execute({ path: 'D:\\demo\\pi\\c.jsonl' })
+  assert.equal(first.alreadyImported, false)
+  assert.equal(second.alreadyImported, true)
+  assert.equal(persistence.sessions.size, 1)
+  // 换 fullHistory 重导 → 参数指纹变化 → argsChanged 跳过，不另建会话
+  const third = await def.execute({ path: 'D:\\demo\\pi\\c.jsonl', fullHistory: true })
+  assert.equal(third.alreadyImported, true)
+  assert.equal(third.argsChanged, true)
+  assert.equal(persistence.sessions.size, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, third), [])
+})
+
+test('import_pi 非 Pi 文件：单文件跳过并返回 skipReason', async () => {
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\pi\\codex.jsonl': load('codex-simple.jsonl') })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_pi')
+  const value = await def.execute({ path: 'D:\\demo\\pi\\codex.jsonl' })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'none')
+  assert.equal(value.skipped, 1)
+  assert.match(value.skipReason, /no session header/)
+  assert.equal(persistence.sessions.size, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
 
 // ---- import_opencode 集成（真实 SQLite 临时库） ----
 
