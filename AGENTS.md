@@ -7,15 +7,20 @@
 根目录只放发布到 GitHub / npm 的文件；本地工程文件一律收进 `dev/`（gitignore，永不提交）。
 
 ```
-index.mjs        插件入口（host 面）：注册 12 个导入工具（import_claude / import_codex / import_chatgpt /
-                 import_cursor / import_gemini / import_reasonix / import_opencode / import_zcode /
-                 import_grokbuild / import_openclaw / import_hermes / import_pi）+ scan_discover +
-                 export_claude + sync_to_claude + list_imported_sessions + retract_import；并注册
-                 webServer 路由（POST /api-import/sessions 发现、POST /api-import/import 面板导入）
-lib/             导入/同步驱动：imports.mjs（幂等 registry）、backfill.mjs（sync_to_claude 写回）、
-                 discovery.mjs（12 格式统一发现 + 30s TTL / 持久化书签）、client.js（Browser 侧 bundle，
-                 REQ-41：sidebar.footer.action 槽 → 按工作区分组的面板 + 单选/多选导入）、
-                 opencode.mjs / zcode.mjs / hermes.mjs（SQLite 读取，node:sqlite）、convert/（转换核心按源拆分）
+index.mjs        插件入口（薄组合层，host 面）：只做组装——registerTools（lib/tools.mjs 注册 12 个
+                 导入工具 + scan_discover + export_claude + sync_to_claude + list_imported_sessions +
+                 retract_import）+ ctx.inject(['webServer']) 延迟挂载面板路由
+                 （POST /api-import/sessions 发现、POST /api-import/import 面板导入）
+lib/             导入/同步驱动（按职责拆分，均消费 ctx、非纯函数）：imports.mjs（幂等 registry）、
+                 backfill.mjs（sync_to_claude 写回）、discovery.mjs（12 格式统一发现 + 30s TTL / 持久化
+                 书签）、budget.mjs（REQ-37 预算解析链）、import-core.mjs（共享导入编排：importTranscript
+                 状态机 / importDirectory / runDecision 落盘 / 归组 / 标准预览）、import-variants.mjs
+                 （chatgpt / grokbuild / hermes 编排 + opencode / zcode 等 dry-run 预览）、toolkit.mjs
+                 （makeImportTool 工厂 + IMPORT_SPECS）、export-tool.mjs（export_claude 执行体）、
+                 retract.mjs（REQ-33 识别/撤回）、discovery-host.mjs（scan_discover host 适配）、
+                 panel.mjs（REQ-41 面板路由）、client.js（Browser 侧 bundle，REQ-41：sidebar.footer.action
+                 槽 → 按工作区分组的面板 + 单选/多选导入）、opencode.mjs / zcode.mjs / hermes.mjs
+                 （SQLite 读取，node:sqlite）、convert/（转换核心按源拆分）
 convert.mjs      转换核心 re-export shim（已按源拆到 lib/convert/{core,claude,codex,chatgpt,cursor,gemini,reasonix,opencode,zcode,grokbuild,openclaw,hermes,pi}.mjs，纯函数、零 DSH 依赖、可独立单测）
 export.mjs       反向导出序列化器（DSH 会话日志 → Claude Code JSONL，纯函数、零 DSH 依赖）
 cordis.patch.yml bundle 声明（insert import-claude）
@@ -29,7 +34,7 @@ test/            convert 单测 + export 单测 + index mock 集成 + zcode 自�
 dev/             ❌ 本地工程面：HANDOFF.md、GROWTH.md、脚本（bin/）、夹具——永不提交；sessions/ 为遗留目录（协议已切 dsh-file-claim，可忽略）
 ```
 
-- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/client.js`、`lib/discovery.mjs`、`lib/convert`、`lib/hermes.mjs`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
+- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/client.js`、`lib/discovery.mjs`、`lib/budget.mjs`、`lib/import-core.mjs`、`lib/import-variants.mjs`、`lib/toolkit.mjs`、`lib/export-tool.mjs`、`lib/retract.mjs`、`lib/discovery-host.mjs`、`lib/panel.mjs`、`lib/tools.mjs`、`lib/convert`、`lib/hermes.mjs`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
 - **永不提交**：`dev/`、`node_modules/`、`.prev-session*.jsonl`、`.dsh-file-claim/`（插件运行时目录）、真实用户 transcript（含敏感内容）、任何凭据/密钥。
 
 ## 命令
@@ -88,7 +93,7 @@ npm test        # node --test 跑 test/*.test.mjs（convert 单测 + export 单�
 ## 质量约定
 
 - 文件以**恰好一个**换行结尾；空 `catch` 必须说明吞掉什么且 `try` 只包一条语句；不注释代码里显而易见的事实。
-- 保持 `lib/convert/*`（含 `convert.mjs` re-export shim）零依赖纯函数：任何 DSH 依赖只允许出现在 `index.mjs` 与 `lib/{imports,backfill,opencode,zcode}.mjs`。
+- 保持 `lib/convert/*`（含 `convert.mjs` re-export shim）零依赖纯函数：任何 DSH 依赖只允许出现在 `index.mjs` 与 `lib/{imports,backfill,opencode,zcode,hermes,discovery,budget,import-core,import-variants,toolkit,export-tool,retract,discovery-host,panel,tools}.mjs`（即所有消费 ctx 的 host 面模块）。
 - 测试描述行为而非背书正确性；fixtures 用合成数据，永不掺真实 transcript。
 - 不写行内文档废话：注释写契约与上下文，不叙述控制流。
 

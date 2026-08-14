@@ -33,6 +33,26 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   **pagination** (50 per page, `offset`/`limit` + `total` from
   `/api-import/sessions`), with selections kept across pages for bulk imports.
 
+### Changed
+
+- **`index.mjs` split by responsibility into `lib/` host modules** — the plugin
+  entry shrank from ~2500 lines to a 54-line composition that only assembles the
+  pieces; every moved line is byte-identical (pure refactor, zero
+  behavior change, verified by the full mock-integration suite). New layout:
+  `lib/budget.mjs` (REQ-37 context-budget chain), `lib/import-core.mjs` (shared
+  import orchestration: `importTranscript` state machine / `importDirectory` /
+  `runDecision` / workspace attach / projection warm-up / standard previews),
+  `lib/import-variants.mjs` (special-shaped sources: chatgpt / grokbuild /
+  hermes orchestration + opencode / zcode dry-run previews), `lib/toolkit.mjs`
+  (`makeImportTool` factory + `IMPORT_SPECS`), `lib/export-tool.mjs`
+  (`export_claude` body), `lib/retract.mjs` (REQ-33 identify / retract),
+  `lib/discovery-host.mjs` (REQ-25/40 `scan_discover` host adapter),
+  `lib/panel.mjs` (REQ-41 panel routes), `lib/tools.mjs` (all 17 tool
+  registrations). `package.json` `files` whitelist and `AGENTS.md` layout /
+  DSH-dependency rules updated to match; the `index.mjs` public export surface
+  (`apply` / `inject` / `name` / `readOpencodeDb` / `readZcodeDb` /
+  `exportClaudeSession`) is unchanged.
+
 ### Fixed
 
 - **Import panel: session list now scrolls; workspace groups collapse on click**
