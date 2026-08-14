@@ -14,6 +14,8 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Nwflower/dsh-chat-import/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nwflower/dsh-chat-import)
 [![已收录于 Awesome DeepSeek Harness](https://img.shields.io/badge/%E5%B7%B2%E6%94%B6%E5%BD%95%E4%BA%8E-Awesome_DeepSeek_Harness-6A5ACD?style=for-the-badge&logo=awesome&logoColor=white)](https://github.com/0xsline/awesome-deepseek-harness)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+[![已收录于 Awesome DSH Plugins](https://img.shields.io/badge/%E5%B7%B2%E6%94%B6%E5%BD%95%E4%BA%8E-Awesome_DSH_Plugins-6A5ACD?style=for-the-badge&logo=awesome&logoColor=white)](https://github.com/Dominic789654/awesome-deepseek-harness)
 
 [💡 概念](#-概念) · [✨ 功能特性](#-功能特性) · [🗂 支持的来源](#-支持的来源) · [🚀 快速开始](#-快速开始) · [🛠 使用](#-使用) · [🔑 关键行为](#-关键行为) · [🏗️ 技术栈](#-技术栈) · [🗺️ 路线图](#-路线图) · [🤝 贡献](#-贡献)
 
@@ -25,7 +27,7 @@
 
 <img src="./assets/image-20260814205401839.png" alt="从多个来源导入会话到侧边栏面板" width="600" />
 
-**已收录于：** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import) · [更新日志（英文）](CHANGELOG.md)
+**更新日志（英文）：** [CHANGELOG.md](CHANGELOG.md)
 
 </div>
 
