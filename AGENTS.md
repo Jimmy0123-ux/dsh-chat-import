@@ -31,7 +31,7 @@ CHANGELOG.md     变更日志（进 npm 包）
 LICENSE          MIT
 assets/          LOGO（import.svg，README 双语顶部引用，进 npm 包）
 test/            convert 单测 + export 单测 + index mock 集成 + zcode 自包含（进 GitHub，不进 npm 包）
-dev/             ❌ 本地工程面：HANDOFF.md、GROWTH.md、脚本（bin/）、夹具——永不提交；sessions/ 为遗留目录（协议已切 dsh-file-claim，可忽略）
+dev/             ❌ 本地工程面（gitignore，永不提交）：bin/（脚本：session.mjs 多会话认领 CLI、verify-*、totp）、hooks/（pre-push）、research/（竞品/方向调研）、HANDOFF.md、REQUIREMENTS.md、GROWTH.md、RELEASING.md、ORCHESTRATOR-PROMPT.md、TESTER-PROMPT.md、gh-pat.txt（凭据勿提交）；多会话协调靠 dsh-file-claim 插件
 ```
 
 - `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/client.js`、`lib/discovery.mjs`、`lib/budget.mjs`、`lib/import-core.mjs`、`lib/import-variants.mjs`、`lib/toolkit.mjs`、`lib/export-tool.mjs`、`lib/retract.mjs`、`lib/discovery-host.mjs`、`lib/panel.mjs`、`lib/tools.mjs`、`lib/convert`、`lib/hermes.mjs`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
