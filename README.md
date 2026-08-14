@@ -8,64 +8,82 @@
 
 # DSH Chat Import
 
-> Bring your Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw and Hermes conversations into DeepSeek Harness — and keep talking exactly where you left off.
+> **11 agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, and export / sync back to Claude Code.
 
-[![npm version](https://img.shields.io/npm/v/dsh-chat-import)](https://www.npmjs.com/package/dsh-chat-import)
-[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import)](https://github.com/Nwflower/dsh-chat-import)
-[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
-**Listed in:** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import)
-**Changelog:** [CHANGELOG.md](CHANGELOG.md)
+<p align="center">
+  <a href="https://www.npmjs.com/package/dsh-chat-import"><img src="https://img.shields.io/npm/v/dsh-chat-import" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-chat-import"><img src="https://img.shields.io/npm/dm/dsh-chat-import" alt="npm downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license: MIT"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.13-339933?logo=node.js&logoColor=white" alt="Node.js >= 22.13"></a>
+  <a href="https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml"><img src="https://github.com/Nwflower/dsh-chat-import/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Nwflower/dsh-chat-import"><img src="https://img.shields.io/github/stars/Nwflower/dsh-chat-import" alt="GitHub stars"></a>
+  <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="Awesome DSH Plugin"></a>
+</p>
 
-`dsh-chat-import` turns your external agent chat history into **full-fidelity, resumable DeepSeek Harness sessions** — tool calls, reasoning and all. During import it reads transcripts **read-only** (your source files are never rewritten), never touches the DSH engine, and appends every import as a fresh, event-balanced session log through the public `sessionPersistence` service, grouped into the workspace of its `cwd`. It also works in reverse: `export_claude` serializes a DSH session back into a Claude Code JSONL transcript (read-only — your DSH log is never modified) that Claude Code can load with `--resume`, and `sync_to_claude` incrementally appends a session's new turns back to a Claude Code file — guarded, never silently overwriting.
+<p align="center">
+  <b>Listed in:</b> <a href="https://github.com/0xsline/awesome-deepseek-harness">Awesome DeepSeek Harness</a> · <a href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin">Awesome DSH Plugin</a> · <a href="https://github.com/Dominic789654/awesome-deepseek-harness">Awesome DSH Plugins</a> · <a href="https://www.npmjs.com/package/dsh-chat-import">npm</a>
+  &nbsp;&nbsp;·&nbsp;&nbsp; <b>Changelog:</b> <a href="CHANGELOG.md">CHANGELOG.md</a>
+</p>
 
-`11 sources` · `Import + export` · `Seamlessly resumable` · `Auto workspace grouping`
+`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw and Hermes** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Imports read your source files **read-only** (they are never rewritten), never touch the DSH engine, and append each import as a fresh, event-balanced session log through the public `sessionPersistence` service, grouped into the workspace of its `cwd`.
+
+The reverse direction is covered too: `export_claude` serializes a DSH session back into a Claude Code JSONL transcript (read-only — your DSH log is never modified) that Claude Code can load with `--resume`, and `sync_to_claude` incrementally appends a session's new turns back to a Claude Code file — guarded, never silently overwriting.
 
 ## ✨ Features
 
-- **📥 Import from 11 sources** — Claude Code JSONL, Codex / ChatGPT CLI rollouts, ChatGPT web exports, Cursor agent transcripts, Gemini CLI sessions, Reasonix sessions, opencode SQLite history, ZCode (z.ai CLI) SQLite history, Grok Build session directories, OpenClaw session JSONL, and Hermes SQLite / JSONL storage. One plugin, one call per source.
+**📥 Import**
+
+- **11 sources, one call per source** — Claude Code JSONL, Codex / ChatGPT CLI rollouts, ChatGPT web exports, Cursor agent transcripts, Gemini CLI sessions, Reasonix sessions, opencode SQLite history, ZCode (z.ai CLI) SQLite history, Grok Build session directories, OpenClaw session JSONL, and Hermes SQLite / JSONL storage.
 - **🔍 Full fidelity** — tool history becomes real `tool/call` + `tool/result` pairs (error flags and `sourceEventSeqs` linkage included), thinking blocks become `reasoning`, multi-step assistant messages are preserved.
-- **▶️ Seamlessly resumable** — every import synthesizes a balanced, loadable session (`turn/start` → `step/start` → `user/message` → `assistant/message` → `tool/call`/`tool/result` → `step/end` → `turn/end`): open it and keep chatting.
+- **📦 Batch import** — point at a directory (or a whole opencode / ZCode / Hermes database) and every file / conversation becomes its own session, with a per-file summary.
+
+**▶️ Resume**
+
+- **Seamlessly resumable** — every import synthesizes a balanced, loadable session (`turn/start` → `step/start` → `user/message` → `assistant/message` → `tool/call`/`tool/result` → `step/end` → `turn/end`): open it and keep chatting.
 - **🗂 Auto workspace grouping** — sessions land in the workspace of their source `cwd` (no more "ungrouped"); session id, title, model and creation time are preserved where the source records them.
-- **🔁 Idempotent + incremental** — re-importing an unchanged source skips it without re-reading the file; a grown source appends only its **new turns** to the same DSH session (`seq` continues, nothing already imported is rewritten); a truncated source is detected (`sourceShrunk`) and reported without touching the imported session; malformed lines are counted and reported, never aborting the import.
+
+**🔄 Reverse**
+
 - **📤 Export back to Claude Code** — `export_claude` serializes any DSH session (imported or native) into Claude Code JSONL at `<outputDir>/<slug>/<uuid>.jsonl`, ready for `--resume`: user / assistant / tool calls & results, thinking blocks and the session title are rebuilt in the Claude record layout.
 - **🔄 Sync back to Claude Code** — `sync_to_claude` incrementally appends a DSH session's **new complete turns** back to the import source (or the `export_claude` copy), chaining to the file's last record; guards report shrink / external edits / tail mismatches / concurrent writers instead of overwriting, and a format pre-check rolls bad writes back.
-- **📦 Batch import** — point at a directory (or a whole opencode / ZCode / Hermes database) and every file / conversation becomes its own session, with a per-file summary.
+
+**🛡️ Guardrails**
+
+- **🔁 Idempotent + incremental** — re-importing an unchanged source skips it without re-reading the file; a grown source appends only its **new turns** to the same DSH session (`seq` continues, nothing already imported is rewritten); a truncated source is detected (`sourceShrunk`) and reported without touching the imported session; malformed lines are counted and reported, never aborting the import.
 - **🧮 Context budget protection** — imported sessions have no provider configuration, so dsh never auto-compacts them and an all-in history fails with 400 on resume. Oversize sessions are trimmed to fit a context budget (resolved as the `budget` parameter > `DSH_IMPORT_CONTEXT_BUDGET` env > the dynamic model window via `agentDefaultModel` + `llm` > a 550k static default): per-message caps (text ≤16K chars, tool results ≤40K chars, head 75% + tail kept), a message-level truncation (earliest 3 user texts + a compressed summary + the tail), and a last-resort drop of any single message still exceeding half the budget. The trimming is reported back (`trimmed` with budget, token estimates and drop counts).
 
 ## 🚀 Quick start
 
-```bash
-# 1. Install (npm package)
-dsh plugin --profile web add dsh-chat-import
+**1. Install** — add the plugin to a profile:
 
-# or from a local checkout
-dsh plugin --profile web add -w link:/path/to/dsh-chat-import
+```bash
+dsh plugin --profile web add dsh-chat-import                    # npm package
+dsh plugin --profile web add -w link:/path/to/dsh-chat-import   # local checkout (symlink)
 ```
 
-2. In any DSH session, import a single file or a whole directory:
+**2. Import** — in any DSH session, import a single file or a whole directory:
 
 ```
 import_claude({ path: "~/.claude/projects" })
 ```
 
-3. Refresh the session list once, open the imported session, and continue chatting — it resumes exactly where the source left off.
+**3. Resume** — refresh the session list once, open the imported session, and continue chatting — it resumes exactly where the source left off.
 
 ## 🗂 What can I import / export?
 
-| Source | Storage location | Import tool |
-| --- | --- | --- |
-| Claude Code | `~/.claude/projects/<slug>/<sessionId>.jsonl` | `import_claude` |
-| Codex / ChatGPT CLI | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `import_codex` |
-| ChatGPT (web export) | exported ZIP → `conversations.json` | `import_chatgpt` |
-| Cursor | `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` | `import_cursor` |
-| Gemini CLI | `~/.gemini/history/<slot>/chats/session-*.json` | `import_gemini` |
-| Reasonix | `~/.reasonix/sessions/desktop-*.jsonl` | `import_reasonix` |
-| opencode | `~/.local/share/opencode/opencode.db` (SQLite) | `import_opencode` |
-| ZCode (z.ai CLI) | `~/.zcode/cli/db/db.sqlite` (SQLite) | `import_zcode` |
-| Grok Build | `~/.grok/sessions/<project>/<session_id>/` (`summary.json` + `chat_history.jsonl`) | `import_grokbuild` |
-| OpenClaw | `~/.openclaw/agents/<agent>/sessions/*.jsonl` | `import_openclaw` |
-| Hermes | `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`): `state.db` (SQLite) + `sessions/*.jsonl` | `import_hermes` |
+| Source | Storage format | Storage location | Import tool |
+| --- | --- | --- | --- |
+| **Claude Code** | JSONL transcript | `~/.claude/projects/<slug>/<sessionId>.jsonl` | `import_claude` |
+| **Codex / ChatGPT CLI** | JSONL rollout | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `import_codex` |
+| **ChatGPT** (web export) | ZIP → `conversations.json` | anywhere you saved the export | `import_chatgpt` |
+| **Cursor** | JSONL transcript | `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` | `import_cursor` |
+| **Gemini CLI** | JSON session | `~/.gemini/history/<slot>/chats/session-*.json` | `import_gemini` |
+| **Reasonix** | JSONL session | `~/.reasonix/sessions/desktop-*.jsonl` | `import_reasonix` |
+| **opencode** | SQLite database | `~/.local/share/opencode/opencode.db` | `import_opencode` |
+| **ZCode** (z.ai CLI) | SQLite database | `~/.zcode/cli/db/db.sqlite` | `import_zcode` |
+| **Grok Build** | session directory | `~/.grok/sessions/<project>/<session_id>/` (`summary.json` + `chat_history.jsonl`) | `import_grokbuild` |
+| **OpenClaw** | JSONL session | `~/.openclaw/agents/<agent>/sessions/*.jsonl` | `import_openclaw` |
+| **Hermes** | SQLite + JSONL | `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`): `state.db` + `sessions/*.jsonl` | `import_hermes` |
 
 Each import preserves what the source actually records — session id, `cwd`, title, model, creation time, tool calls & results, reasoning — and formats with less data (Cursor transcripts, ChatGPT exports) import what exists and clearly report what they don’t.
 
@@ -87,7 +105,7 @@ import_openclaw({ path: "C:\Users\<you>\.openclaw\agents\<agent>\sessions\<sessi
 import_hermes({ path: "C:\Users\<you>\AppData\Local\hermes\state.db" })
 ```
 
-`import_claude` / `import_codex` / `import_cursor` / `import_gemini` / `import_reasonix` / `import_openclaw` behave alike:
+**`import_claude` / `import_codex` / `import_cursor` / `import_gemini` / `import_reasonix` / `import_openclaw`** behave alike:
 
 - `path` can be a **single file or a directory** (directories are scanned recursively; each file becomes its own session).
 - Optional `sessionId` overrides the target DSH session id (default `import-<source sessionId>`; Cursor uses the file-name composer id, Reasonix the file-name stem). Changing it on a re-import creates a new full copy under the new id (the old session stays untouched).
@@ -95,15 +113,15 @@ import_hermes({ path: "C:\Users\<you>\AppData\Local\hermes\state.db" })
 - Returns `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported, status }` where `status` is `imported` | `already-imported` | `appended` | `skipped`, plus optional `appendedTurns` / `appendedEvents` (grew), `sourceShrunk` (truncated), `changedInPlace` (grew inside existing turns — append-only cannot rewrite them), `argsChanged` (import parameters changed), `budgetChanged` (context budget changed), `backfilled` (registry record restored for a legacy import), `forceImported: { previous, current }` (force / sessionId-change copy) and `droppedBoundaryResults`.
 - Optional `budget` (integer tokens) sets the context budget for this import (resolution order: this parameter > `DSH_IMPORT_CONTEXT_BUDGET` env > dynamic model window > 550k static default). When the three-layer protection actually engages, the result carries `trimmed: { budget, source, originalTokens, estimatedTokens, croppedBlocks, droppedTurns, droppedMessages, droppedToolCalls, droppedToolResults, droppedOversized, summaryInserted }` — see "Context budget protection" under Data model.
 
-`import_chatgpt` differs: one `conversations.json` holds **all** conversations, so even a single file returns the batch shape `{ mode: 'batch', total, imported, alreadyImported, appended, skipped, failed, results: [...] }` (each `results` entry is one conversation, status `imported` | `already-imported` | `appended` | `skipped` | `failed`). Incremental logic applies per conversation: grown conversations are appended, conversations removed from the export are reported in `missingFromSource` (their sessions stay untouched), and `force: true` copies every conversation. ChatGPT exports carry no `cwd`, so imported sessions are not grouped into workspaces.
+**`import_chatgpt`** differs: one `conversations.json` holds **all** conversations, so even a single file returns the batch shape `{ mode: 'batch', total, imported, alreadyImported, appended, skipped, failed, results: [...] }` (each `results` entry is one conversation, status `imported` | `already-imported` | `appended` | `skipped` | `failed`). Incremental logic applies per conversation: grown conversations are appended, conversations removed from the export are reported in `missingFromSource` (their sessions stay untouched), and `force: true` copies every conversation. ChatGPT exports carry no `cwd`, so imported sessions are not grouped into workspaces.
 
-`import_opencode` also always returns the batch shape — one `opencode.db` holds **all** sessions. `path` may be the `.db` file or its data directory; optional `sessionIds` restricts the import to the listed sessions; optional `fullHistory: true` imports the full message history instead of respecting opencode’s conversation compaction (default `false` — compacted sessions import as their last summary plus the retained tail). `fullHistory` is part of the import-args fingerprint: re-importing with a different value reports `argsChanged` (use `force: true` to switch). The database is fingerprinted at the DB level (version + size): an unchanged DB is skipped without re-reading SQLite; per-session growth appends, compaction that removes turns reports `sourceShrunk`. Imported sessions keep their `directory` as `cwd` and are grouped into workspaces.
+**`import_opencode`** also always returns the batch shape — one `opencode.db` holds **all** sessions. `path` may be the `.db` file or its data directory; optional `sessionIds` restricts the import to the listed sessions; optional `fullHistory: true` imports the full message history instead of respecting opencode’s conversation compaction (default `false` — compacted sessions import as their last summary plus the retained tail). `fullHistory` is part of the import-args fingerprint: re-importing with a different value reports `argsChanged` (use `force: true` to switch). The database is fingerprinted at the DB level (version + size): an unchanged DB is skipped without re-reading SQLite; per-session growth appends, compaction that removes turns reports `sourceShrunk`. Imported sessions keep their `directory` as `cwd` and are grouped into workspaces.
 
-`import_zcode` also always returns the batch shape — one `db.sqlite` holds **all** ZCode (z.ai official CLI) sessions. `path` may be the `.db` file, a directory containing `db.sqlite` (auto-located, no recursion), or a `zcode://<sessionId>` pseudo-path that imports only that session from the default `~/.zcode/cli/db/db.sqlite`; optional `sessionIds` restricts the import to the listed sessions. The database is fingerprinted at the DB level (version + size): an unchanged DB is skipped without re-reading SQLite; per-session growth appends, compaction that removes turns reports `sourceShrunk`. Imported sessions keep their `directory` as `cwd` and are grouped into workspaces. When the DB is unavailable, the import falls back to the legacy `transcript.jsonl` layout.
+**`import_zcode`** also always returns the batch shape — one `db.sqlite` holds **all** ZCode (z.ai official CLI) sessions. `path` may be the `.db` file, a directory containing `db.sqlite` (auto-located, no recursion), or a `zcode://<sessionId>` pseudo-path that imports only that session from the default `~/.zcode/cli/db/db.sqlite`; optional `sessionIds` restricts the import to the listed sessions. The database is fingerprinted at the DB level (version + size): an unchanged DB is skipped without re-reading SQLite; per-session growth appends, compaction that removes turns reports `sourceShrunk`. Imported sessions keep their `directory` as `cwd` and are grouped into workspaces. When the DB is unavailable, the import falls back to the legacy `transcript.jsonl` layout.
 
-`import_grokbuild` treats a single session directory (containing `summary.json` + `chat_history.jsonl`) as a single-session import, or a `~/.grok/sessions` / `~/.grok/archived_sessions` root as a recursive batch scan (each `summary.json` becomes its own session). Titles resolve `generated_title` > `session_summary` (pinned via a `session/title` event), with a first-question fallback; `reasoning` (encrypted internal state) and `system` (harness injection) records are filtered and counted. Imported sessions keep the `summary.json` `info.cwd` and are grouped into workspaces.
+**`import_grokbuild`** treats a single session directory (containing `summary.json` + `chat_history.jsonl`) as a single-session import, or a `~/.grok/sessions` / `~/.grok/archived_sessions` root as a recursive batch scan (each `summary.json` becomes its own session). Titles resolve `generated_title` > `session_summary` (pinned via a `session/title` event), with a first-question fallback; `reasoning` (encrypted internal state) and `system` (harness injection) records are filtered and counted. Imported sessions keep the `summary.json` `info.cwd` and are grouped into workspaces.
 
-`import_hermes` returns the batch shape for a `state.db` — the SQLite authority index that holds **all** Hermes sessions (column-name variants `cwd`/`directory`, `started_at`/`created_at`/`ended_at`/`updated_at` are tolerated). When the DB is unavailable, the import falls back to a recursive scan of `sessions/*.jsonl` (flat or nested lines, one session per file; a lone `.jsonl` imports as a single session). Imported sessions keep their recorded `cwd` and are grouped into workspaces.
+**`import_hermes`** returns the batch shape for a `state.db` — the SQLite authority index that holds **all** Hermes sessions (column-name variants `cwd`/`directory`, `started_at`/`created_at`/`ended_at`/`updated_at` are tolerated). When the DB is unavailable, the import falls back to a recursive scan of `sessions/*.jsonl` (flat or nested lines, one session per file; a lone `.jsonl` imports as a single session). Imported sessions keep their recorded `cwd` and are grouped into workspaces.
 
 ## 🔁 Incremental re-import
 
@@ -191,7 +209,7 @@ Messages carry stable ids and `surfaceOp: 'append'`; `tool/result` events link b
   3. **Single-message fallback** — any single message that still exceeds half the budget after cropping is dropped (a dropped tool result leaves its call in place and the empty-result fill emits `"(no output)"`); the very first user text is never dropped, so at least one turn always survives.
 The seed estimate of the stored session never exceeds the budget. The budget resolves as `budget` parameter > `DSH_IMPORT_CONTEXT_BUDGET` env > dynamic model window (`agentDefaultModel.currentSelection()` + `llm.resolveModelInfo()` → `contextWindow − defaultMaxTokens − max(25% window, 40k)`; unavailable services fall back silently) > 550k static default, and is recorded in the imports registry. When protection engages, the result carries `trimmed` (see Usage) — with `source` one of `param` | `env` | `dynamic` | `default` — and a budget change on re-import reports `budgetChanged`.
 
-### Claude Code JSONL
+### Claude Code — JSONL transcript
 
 Main transcript at `~/.claude/projects/<slug>/<sessionId>.jsonl`; auxiliary subagent / workflow fragments under `<sessionId>/subagents/**` reuse the parent `sessionId` and are skipped (they can never shadow or merge into the main conversation). Claude emits consecutive assistant records first and their `tool_result` records after — results attach to the step that declared their `tool_use` (paired by `tool_use_id`), so the projected messages stay wire-legal; results inside one step are ordered to match the step's tool calls. A `tool_use` whose result never arrived (session interrupted) gets a synthesized empty `tool/result` in its own step. A `tool_result` with no matching `tool_use` in the transcript is an orphan: it is dropped and counted (`droppedToolResults`) instead of emitting an orphan tool message the model API would reject.
 
@@ -204,7 +222,7 @@ Main transcript at `~/.claude/projects/<slug>/<sessionId>.jsonl`; auxiliary suba
 | `{ type: "user", content: [{ type: "tool_result", … }] }` | `tool/result` on the step that declared the call (`sourceEventSeqs` links its `tool/call`) |
 | turn ends | `step/end` + `turn/end` |
 
-### Codex / ChatGPT CLI rollout
+### Codex / ChatGPT CLI — rollout JSONL
 
 Line envelope: `{ timestamp, type, payload }`. `event_msg` user/agent messages duplicate `response_item` records and are ignored; user blocks starting with `<` (`<environment_context>`, `<user_instructions>`, …) are harness injections and never enter the prompt. Codex `reasoning` content is encrypted and skipped. A `function_call` / `custom_tool_call` without a matching `*_output` record (session cut off) gets a synthesized empty `tool/result`. `custom_tool_call` inputs in JS call form (e.g. `tools.exec_command({cmd: "...", workdir: "..."})`, a bare object literal, or a wrapped call) are parsed to standard JSON for the `tool/call` arguments so the model never learns a JS/XML-mixed call format; inputs that cannot be parsed (e.g. `apply_patch` free text) stay verbatim and are counted (`droppedMalformedArgs`).
 
@@ -218,7 +236,7 @@ Line envelope: `{ timestamp, type, payload }`. `event_msg` user/agent messages d
 | `response_item reasoning` | skipped (encrypted, unreadable) |
 | turn ends | `step/end` + `turn/end` |
 
-### ChatGPT web export (`conversations.json`)
+### ChatGPT — web export (conversations.json)
 
 Top level is a JSON array (one file, all conversations); each conversation has a `mapping` DAG. The active branch (last `children` entry) is rebuilt as the main thread; placeholder nodes with `message: null` and `author.role === 'system'` are skipped; timestamps are Unix seconds (×1000 → ms). No `cwd` exists, so sessions are not grouped.
 
@@ -231,7 +249,7 @@ Top level is a JSON array (one file, all conversations); each conversation has a
 | `author.role: "system"` / `message: null` | skipped |
 | turn ends | `step/end` + `turn/end` |
 
-### Cursor agent transcript
+### Cursor — agent transcript
 
 Line structure: `{ role: "user" | "assistant", message: { content: [...] } }`. First user message is wrapped in `<user_query>` (stripped); `[REDACTED]` sentinels are filtered. Transcripts contain **no `tool_result`** (results live only in the UI bubble store) and no timestamps / model — the session id comes from the file name, and there is no `cwd`. Because no results exist, every tool call is paired with a synthesized empty `tool/result` so imported sessions still resume.
 
@@ -243,7 +261,7 @@ Line structure: `{ role: "user" | "assistant", message: { content: [...] } }`. F
 | `[REDACTED]` sentinels | filtered |
 | turn ends | `step/end` + `turn/end` |
 
-### Gemini CLI session JSON
+### Gemini CLI — session JSON
 
 One JSON object per file at `~/.gemini/history/<slot>/chats/session-*.json`. Message types: `user` (parts array) opens a turn; `gemini` (string content, optional `thoughts` and `toolCalls`) is one assistant step; `info` (CLI notices) is skipped. Tool results are **inline** on the same object as the call; a call without a result gets a synthesized empty `tool/result`.
 
@@ -257,7 +275,7 @@ One JSON object per file at `~/.gemini/history/<slot>/chats/session-*.json`. Mes
 | `type: "info"` | skipped |
 | turn ends | `step/end` + `turn/end` |
 
-### Reasonix session JSONL
+### Reasonix — session JSONL
 
 OpenAI-style messages without envelope at `~/.reasonix/sessions/<stem>.jsonl`; both v1 (nested `{ id, type: "function", function: { name, arguments } }`) and v2 (flat `{ id, name, arguments }`) `tool_calls` are accepted. Tool results (`role: "tool"` with `tool_call_id`) pair by `tool_calls[].id`; a `tool_calls` block without a following `role: "tool"` message gets a synthesized empty `tool/result`. A sibling `<stem>.meta.json` provides `workspace` → `cwd` and `summary` → pinned title; when neither the transcript nor the meta carries a timestamp, the creation time falls back to the one embedded in the file name. V2 WAL sidecars (`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`) are excluded from directory scans.
 
@@ -271,7 +289,7 @@ OpenAI-style messages without envelope at `~/.reasonix/sessions/<stem>.jsonl`; b
 | `<stem>.meta.json` (`workspace` / `summary`) | `cwd` / `session/title` |
 | turn ends | `step/end` + `turn/end` |
 
-### opencode session database (SQLite)
+### opencode — session database (SQLite)
 
 Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/opencode.db` (the `event` table is only a partial mirror and `session_message` / `session_input` are empty — ignored). Tool results are **inline** in the tool part’s `state`, so `tool/call` + `tool/result` are emitted together; a tool part without output still emits an empty result so calls and results stay paired. opencode **compaction** is respected by default: only the last compaction summary (a leading `reasoning` block) plus the messages from `tail_start_id` onward are imported; `fullHistory: true` imports everything.
 
@@ -289,7 +307,7 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 | part `type: "compaction"` (`tail_start_id`) | drop pre-`tail_start_id` history; summary becomes leading `reasoning` |
 | turn ends | `step/end` + `turn/end` |
 
-### ZCode session database (SQLite)
+### ZCode — session database (SQLite)
 
 Reads the `session` / `message` / `part` tables of `~/.zcode/cli/db/db.sqlite` — the z.ai official CLI's SQLite authority index. The `message` / `part` rows carry **no `sequence` column**, so the message stream is rebuilt by `ORDER BY time_created, id`; only main sessions (`parent_id IS NULL` or `''`) are imported. Tool results are **inline** in the tool part's `state`, so `tool/call` + `tool/result` are emitted together; a tool part without output still emits an empty result so calls and results stay paired. **compaction** parts (`type: "compaction"`) restore their compressed context summary (`data.summary.body`) as a leading `reasoning` block on the first assistant step — the model sees the compressed-away history outline without the full prefix re-entering the context; the compaction body itself never enters the conversation. User messages containing `<system-reminder>` are filtered entirely (harness injections never enter the prompt). When the DB is unavailable, the import falls back to the legacy `transcript.jsonl` (the last `model_request`'s messages, tool results back-filled into the corresponding tool part's `state.output`). One DB holds all sessions, so the tool always returns the batch shape; `zcode://<id>` imports a single session from the default DB.
 
@@ -307,7 +325,7 @@ Reads the `session` / `message` / `part` tables of `~/.zcode/cli/db/db.sqlite` �
 | user message containing `<system-reminder>` | filtered (injection) |
 | turn ends | `step/end` + `turn/end` |
 
-### Grok Build session directory
+### Grok Build — session directory
 
 Each session lives in its own directory at `~/.grok/sessions/<project>/<session_id>/` (archived sessions under `~/.grok/archived_sessions/`), holding `summary.json` (metadata) plus `chat_history.jsonl` (the conversation). Records are `{ type, content, timestamp }` with `type` ∈ `user` / `assistant` / `tool` / `system` / `reasoning`: `reasoning` (encrypted internal state) and `system` (harness injection) records are filtered and counted (`filtered`). `content` is a string or a Claude-style block array (`text` / `input_text` / `output_text` / `thinking` / `tool_use` / `tool_result`); `input_text` / `output_text` normalize to text blocks.
 
@@ -323,7 +341,7 @@ Each session lives in its own directory at `~/.grok/sessions/<project>/<session_
 | `type: "reasoning"` / `type: "system"` | filtered + counted (`filtered`) |
 | turn ends | `step/end` + `turn/end` |
 
-### OpenClaw session JSONL
+### OpenClaw — session JSONL
 
 One file per session at `~/.openclaw/agents/<agent>/sessions/*.jsonl`; a sibling `sessions.json` index supplies the display name used as the pinned title. Lines are either `{ type: "session", id, cwd, timestamp }` metadata or `{ type: "message", message: { role, content }, timestamp }` with `role` ∈ `user` / `assistant` / `toolResult` (→ tool result). `content` is a string or Claude-style block array; `[message_id: …]` gateway suffixes appended by OpenClaw are stripped. Titles resolve `sessions.json` `displayName` > first user text > `cwd` basename (the latter two only fill the `title` field).
 
@@ -338,7 +356,7 @@ One file per session at `~/.openclaw/agents/<agent>/sessions/*.jsonl`; a sibling
 | orphan / duplicate tool results | dropped + counted (`droppedToolResults`) |
 | turn ends | `step/end` + `turn/end` |
 
-### Hermes session storage
+### Hermes — SQLite + JSONL storage
 
 Hermes keeps its history at `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`). `state.db` (SQLite `sessions` + `messages` tables) is the authority index and is read first — column-name variants (`cwd`/`directory`, `started_at`/`created_at`, `ended_at`/`updated_at`) are tolerated and messages are ordered by time; when the DB is unavailable the import falls back to `sessions/*.jsonl` (flat `{ role, content, ts }` or nested `{ type: "session" | "message", message, timestamp }`). `content` is a string or Claude-style block array; `session` / `init` lines supply `id` / `title` / `cwd` / `model` metadata.
 
@@ -383,9 +401,24 @@ Hermes keeps its history at `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`). `sta
 - Import never rewrites source transcripts (read-only); DSH history events are append-only (deep-frozen) — new events are added, existing ones are never modified. `export_claude` reads the session log read-only and never modifies it; `sync_to_claude` only appends complete turns to the target file through a guarded CAS write (shrink / external edits / tail mismatches / concurrent writers are reported, never overwritten; a failed format pre-check rolls the write back).
 - The plugin never modifies the DSH engine, apiproxy, or official UI packages; it publishes no services, so no isolate realm is needed.
 - Reading transcripts outside the workspace requires the session sandbox to allow access to that path; exporting writes `<outputDir>/<slug>/<uuid>.jsonl`, so a target outside the workspace likewise requires the session sandbox to allow it.
-- Known boundaries: `permission` / `summary` auxiliary records are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts are skipped (only the main `<sessionId>.jsonl` becomes a session) and a `tool_result` with no matching `tool_use` is dropped and counted (`droppedToolResults`); Codex `reasoning` is encrypted and skipped; Codex `custom_tool_call` inputs in JS call form are converted to standard JSON arguments — unconvertible ones stay verbatim and are counted (`droppedMalformedArgs`); ChatGPT exports rebuild only the main thread (branch = last child) and tool messages degrade to text blocks on the nearest step (exports carry no structured tool calls, so no orphan `tool/result` is produced); Cursor transcripts have no `tool_result` (every call gets a synthesized empty `tool/result`) and `[REDACTED]` text is filtered; Gemini follows the format observed 2026-04 (no stable official schema); Reasonix reads the JSONL checkpoint (the V2 WAL is excluded); opencode `patch` parts carry no diff (placeholder `[patch: <N> files]` only) and tool output may keep ANSI escapes verbatim; ZCode imports the z.ai CLI SQLite index (no `sequence` column — the stream is rebuilt by `time_created, id`), compaction parts import as a leading `reasoning` summary (the compaction body itself never enters the conversation), and db-unavailable imports fall back to the legacy `transcript.jsonl`; Grok Build filters `reasoning` (encrypted internal state) and `system` (harness injection) records, and a session directory is recognized by its `summary.json`; OpenClaw strips `[message_id: …]` gateway suffixes and derives the pinned title from the sibling `sessions.json` index; Hermes reads the SQLite `state.db` authority index (column-variant tolerant) with a `sessions/*.jsonl` fallback.
+
+**Known boundaries per source:**
+
+- **General** — `permission` / `summary` auxiliary records are not imported; a `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`.
+- **Claude Code** — subagent / workflow fragment transcripts are skipped (only the main `<sessionId>.jsonl` becomes a session); a `tool_result` with no matching `tool_use` is dropped and counted (`droppedToolResults`).
+- **Codex / ChatGPT CLI** — `reasoning` is encrypted and skipped; `custom_tool_call` inputs in JS call form are converted to standard JSON arguments — unconvertible ones stay verbatim and are counted (`droppedMalformedArgs`).
+- **ChatGPT web export** — only the main thread is rebuilt (branch = last child); tool messages degrade to text blocks on the nearest step (exports carry no structured tool calls, so no orphan `tool/result` is produced).
+- **Cursor** — transcripts have no `tool_result` (every call gets a synthesized empty `tool/result`); `[REDACTED]` text is filtered.
+- **Gemini CLI** — follows the format observed 2026-04 (no stable official schema).
+- **Reasonix** — reads the JSONL checkpoint (the V2 WAL is excluded).
+- **opencode** — `patch` parts carry no diff (placeholder `[patch: <N> files]` only); tool output may keep ANSI escapes verbatim.
+- **ZCode** — imports the z.ai CLI SQLite index (no `sequence` column — the stream is rebuilt by `time_created, id`); compaction parts import as a leading `reasoning` summary (the compaction body itself never enters the conversation); db-unavailable imports fall back to the legacy `transcript.jsonl`.
+- **Grok Build** — `reasoning` (encrypted internal state) and `system` (harness injection) records are filtered; a session directory is recognized by its `summary.json`.
+- **OpenClaw** — `[message_id: …]` gateway suffixes are stripped; the pinned title derives from the sibling `sessions.json` index.
+- **Hermes** — reads the SQLite `state.db` authority index (column-variant tolerant) with a `sessions/*.jsonl` fallback.
+
 - **Context budget protection:** the three layers described under Data model — per-message caps (16K / 40K chars, applied to every import), message-level budget truncation (anchor 3 user texts + summary + tail), and single-message drop above half the budget — run purely in `convert.mjs` before session synthesis and are reported in `trimmed`. Dropped turns are counted (`droppedTurns` / `droppedMessages` / `droppedToolCalls` / `droppedToolResults` / `droppedOversized`) and a compressed summary (`reasoning`) is inserted so the session still reads coherently; the full source history stays untouched on disk.
-- **Re-import after this fix:** already-imported sessions are immutable logs — the plugin never rewrites existing history. Growth is appended incrementally; sessions imported by an older version that lack the call/result pairing cannot be repaired in place (delete the stale session and re-import to pick up the pairing invariant). A source that shrank (`sourceShrunk`) or changed inside already-imported turns (`changedInPlace`) is skipped and reported — `force: true` gives a complete fresh copy. A context-budget change on re-import reports `budgetChanged` and skips (like `argsChanged`): the stored session was trimmed under the old budget, so switching budgets requires `force: true` (or a new `sessionId`) to rebuild it.
+- **Re-import & immutable logs:** already-imported sessions are immutable logs — the plugin never rewrites existing history. Growth is appended incrementally; sessions imported by an older version that lack the call/result pairing cannot be repaired in place (delete the stale session and re-import to pick up the pairing invariant). A source that shrank (`sourceShrunk`) or changed inside already-imported turns (`changedInPlace`) is skipped and reported — `force: true` gives a complete fresh copy. A context-budget change on re-import reports `budgetChanged` and skips (like `argsChanged`): the stored session was trimmed under the old budget, so switching budgets requires `force: true` (or a new `sessionId`) to rebuild it.
 - **Export boundaries:** exported `thinking` blocks carry an empty `signature` (Claude Code drops such thinking on resume — documented degradation); non-human prompt injections and non-text content blocks (e.g. images) are skipped and counted (`skippedInjections` / `skippedBlocks`); orphan `tool_result` records with no matching `tool/call` in the DSH log are dropped and counted (`droppedToolResults`); interrupted sessions get a trailing empty `tool_result`.
 
 ## 🧪 Tests
