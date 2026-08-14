@@ -1,10 +1,11 @@
 // index.mjs — 外部聊天记录（Claude Code / Codex-ChatGPT / ChatGPT / Cursor /
-// Gemini / Reasonix / opencode / zcode）→ DSH 会话导入器 + DSH → Claude Code JSONL
-// 反向导出
+// Gemini / Reasonix / opencode / zcode / grokbuild / openclaw / hermes）→ DSH
+// 会话导入器 + DSH → Claude Code JSONL 反向导出
 //
 // 消费 host 的 sessionPersistence / fs / tools / workspaceRegistry 服务，注册
 // `import_claude` 等导入工具：读取各自源格式的 transcript（单个文件或整个目录；
-// opencode 直接读 SQLite 库），把对话合成 DSH 事件日志（turn/start、step/start、
+// opencode / zcode / hermes 直接读 SQLite 库；grokbuild 读会话目录的 summary.json +
+// chat_history.jsonl），把对话合成 DSH 事件日志（turn/start、step/start、
 // user/message、assistant/message、tool/call、tool/result、step/end、turn/end），
 // 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区；
 // 并注册 `export_claude`（REQ-16）：把 DSH 会话日志只读序列化为 Claude Code
@@ -16,7 +17,13 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, convertZcodeJson } from './convert.mjs'
+import {
+  convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl,
+  convertGeminiJson, convertReasonixJsonl, convertOpencodeJson, convertZcodeJson,
+  convertGrokbuildJson, convertOpenclawJson, convertHermesJson,
+} from './convert.mjs'
+import { openclawDisplayNames } from './lib/convert/openclaw.mjs'
+import { readHermesDb } from './lib/hermes.mjs'
 import { slugifyClaudeCwd, serializeClaudeJsonl } from './export.mjs'
 import { syncClaudeSession } from './lib/backfill.mjs'
 import { resolveRegistryDir, loadImports, rememberImport, unwrapRecord, listPersistedIds, argsFingerprint, isSessionIdChange, decideSingle, decideMulti } from './lib/imports.mjs'
@@ -350,10 +357,217 @@ async function importChatgptDirectory(ctx, dirTarget, args, { registryDir, persi
   return { total: results.length, imported, alreadyImported, appended, skipped, failed, results }
 }
 
+// ── import_grokbuild 编排：源是会话目录（summary.json + chat_history.jsonl）────
+
+// 会话目录复合 stat：两文件 size/version 拼接（任一文件变化 → 复合指纹变化 → 重读）。
+// registry 的 sizeBytes/version 落复合值，REQ-24 短路径判定对双文件都有效。
+async function grokbuildStat(ctx, summaryTarget, chatTarget) {
+  const s = await ctx.fs.stat(summaryTarget)
+  const c = await ctx.fs.stat(chatTarget)
+  return {
+    type: 'file',
+    size: (s && typeof s.size === 'number' ? s.size : 0) + (c && typeof c.size === 'number' ? c.size : 0),
+    version: (s ? s.version : '') + '|' + (c ? c.version : ''),
+  }
+}
+
+// 递归收集会话目录：目录含 summary.json 即会话（收下，不下钻）；否则 recursive 时
+// 下钻（sessions 根 → <project>/ → <session_id>/ 两级结构）。
+async function collectGrokbuildSessions(ctx, dirTarget, out, recursive) {
+  const entries = await ctx.fs.listDir(dirTarget)
+  for (const entry of entries) {
+    if (entry.type !== 'directory') continue
+    const sub = await ctx.fs.resolve(entry.target.displayPath || entry.target.targetKey)
+    const sumTarget = await ctx.fs.resolve(join(sub.targetKey, 'summary.json'))
+    const sumStat = await ctx.fs.stat(sumTarget)
+    if (sumStat && sumStat.type === 'file') {
+      out.push(sub)
+    } else if (recursive) {
+      await collectGrokbuildSessions(ctx, sub, out, recursive)
+    }
+  }
+}
+
+// chat_history.jsonl 可选：会话目录缺失该文件（仅 summary 的会话）按空文本读，
+// 转换层按无回合跳过（meta 仍来自 summary）。
+async function readGrokHistory(ctx, chatTarget) {
+  try {
+    return await ctx.fs.readText(chatTarget)
+  } catch {
+    // 缺失 chat_history.jsonl：视为无历史，不当作失败
+    return ''
+  }
+}
+
+// 单会话目录导入（REQ-24 状态机）：幂等键 = 会话目录路径；复合 stat 指纹；
+// 读 summary.json + chat_history.jsonl 再转换落盘。persisted 可传共享快照。
+async function importGrokbuildSession(ctx, target, args, { registryDir, persisted } = {}) {
+  const persistedSet = persisted ?? await listPersistedIds(ctx)
+  const sourcePath = target.displayPath || ctx.fs.processPath(target)
+  const registry = await loadImports(registryDir)
+  let known = unwrapRecord(registry.imports[sourcePath])
+  if (known && known.kind !== 'single') known = null
+  // 记录指向的会话已不存在（被删 / DSH_HOME 迁移）→ 视作无记录重导
+  if (known && (!known.dshId || !persistedSet.has(known.dshId))) known = null
+  const fingerprint = argsFingerprint(args, [])
+
+  const summaryTarget = await ctx.fs.resolve(join(sourcePath, 'summary.json'))
+  const chatTarget = await ctx.fs.resolve(join(sourcePath, 'chat_history.jsonl'))
+  const stat = await grokbuildStat(ctx, summaryTarget, chatTarget)
+
+  // S3 短路径（不 readText）：force / 显式 sessionId 变更需读文件建副本，不在此跳过
+  if (known && args.force !== true && !isSessionIdChange(args, known.dshId)) {
+    if (typeof known.args === 'string' && fingerprint !== known.args) {
+      return { sessionId: known.dshId, turns: known.turns, messages: 0, toolCalls: 0, skipped: 0, alreadyImported: true, status: 'already-imported', argsChanged: true }
+    }
+    // REQ-37：预算变化（文件未变）→ 跳过并报告（同 argsChanged 语义）
+    if (typeof known.budget === 'number' && known.budget !== args.budget) {
+      return { sessionId: known.dshId, turns: known.turns, messages: 0, toolCalls: 0, skipped: 0, alreadyImported: true, status: 'already-imported', budgetChanged: true }
+    }
+    if (stat && stat.version === known.version && stat.size === known.sizeBytes) {
+      return { sessionId: known.dshId, turns: known.turns, messages: 0, toolCalls: 0, skipped: 0, alreadyImported: true, status: 'already-imported' }
+    }
+  }
+
+  const summaryText = await ctx.fs.readText(summaryTarget)
+  const chatText = await readGrokHistory(ctx, chatTarget)
+  const out = markTrimmedSource(convertGrokbuildJson(summaryText, chatText, { ...args, sourcePath }), args)
+  // 无可导入内容（空 chat_history / 畸形 summary）：计入 skipped，不落盘空会话
+  if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
+    const res = { sessionId: 'none', turns: 0, messages: 0, toolCalls: 0, skipped: 1, alreadyImported: false, status: 'skipped' }
+    if (out.skipReason) res.skipReason = out.skipReason
+    return res
+  }
+  const decision = await decideSingle(ctx, { known, converted: out, stat, args, fingerprint, persisted: persistedSet, sourcePath, budget: args.budget })
+  return runDecision(ctx, decision, registryDir, sourcePath, persistedSet)
+}
+
+// grokbuild 目录批量：递归扫 summary.json 收集会话目录，逐目录走单会话状态机。
+async function importGrokbuildDirectory(ctx, dirTarget, args, { registryDir, persisted } = {}) {
+  const sessions = []
+  await collectGrokbuildSessions(ctx, dirTarget, sessions, args.recursive !== false)
+  const results = []
+  let imported = 0
+  let alreadyImported = 0
+  let appended = 0
+  let skipped = 0
+  let failed = 0
+  const persistedSet = persisted ?? await listPersistedIds(ctx)
+  for (const target of sessions) {
+    const path = target.displayPath || ctx.fs.processPath(target)
+    try {
+      const single = await importGrokbuildSession(ctx, target, { ...args, force: args.force === true }, { registryDir, persisted: persistedSet })
+      if (single.status === 'imported') imported++
+      else if (single.status === 'appended') appended++
+      else if (single.status === 'already-imported') alreadyImported++
+      else skipped++
+      const item = batchItem(path, single)
+      if (item.status === 'skipped' && !item.reason) item.reason = 'not a grokbuild session (no user turns)'
+      results.push(item)
+    } catch (err) {
+      failed++
+      results.push({ path, status: 'failed', error: String((err && err.message) || err) })
+    }
+  }
+  return { total: sessions.length, imported, alreadyImported, appended, skipped, failed, results }
+}
+
+// ── import_hermes 编排：state.db（SQLite，恒批量）或 sessions/*.jsonl 回退 ──────
+
+// hermes 文件参数派生：无 session 记录时用文件 stem 作会话 id（幂等、确定性）。
+function hermesFileArgs(ctx, target) {
+  const p = target.displayPath || ctx.fs.processPath(target)
+  const base = String(p).split(/[\\/]/).pop() || ''
+  return { fileStem: base.replace(/\.(jsonl|json)$/i, '') }
+}
+
+// hermes 单库导入：DB 内每个会话独立落盘，恒返回批量形态（对齐 importOpencodeFile）。
+// REQ-24：DB 级 version/size 短路径检测；逐会话判增 append / 会话消失 missingFromSource。
+// sessions 可预读传入（目录模式已读一次判 db 可用性，避免二次打开）。
+async function importHermesDbFile(ctx, target, args, { registryDir, persisted, sessions } = {}) {
+  const persistedSet = persisted ?? await listPersistedIds(ctx)
+  const path = target.displayPath || ctx.fs.processPath(target)
+  const stat = await ctx.fs.stat(target)
+  const registry = await loadImports(registryDir)
+  let known = unwrapRecord(registry.imports[path])
+  if (known && known.kind !== 'multi') known = null
+  const fingerprint = argsFingerprint(args, [])
+
+  // S3 短路径（不重读 SQLite）。仅当记录里所有会话仍存在时短路径才成立
+  if (known && (!known.sessions || typeof known.sessions !== 'object')) known = null
+  if (known && args.force !== true) {
+    const subs = Object.values(known.sessions)
+    const allPersisted = subs.length > 0 && subs.every((sub) => persistedSet.has(sub.dshId))
+    if (allPersisted) {
+      const skipResults = () => Object.entries(known.sessions).map(([, sub]) => ({
+        path, status: 'already-imported', sessionId: sub.dshId, turns: sub.turns, messages: 0, toolCalls: 0, skipped: 0,
+      }))
+      if (typeof known.args === 'string' && fingerprint !== known.args) {
+        const results = skipResults().map((r) => ({ ...r, argsChanged: true }))
+        return { total: results.length, imported: 0, alreadyImported: results.length, appended: 0, skipped: 0, failed: 0, results }
+      }
+      // REQ-37：预算变化 → 跳过并上报 budgetChanged（同 argsChanged 语义）
+      if (typeof known.budget === 'number' && known.budget !== args.budget) {
+        const results = skipResults().map((r) => ({ ...r, budgetChanged: true }))
+        return { total: results.length, imported: 0, alreadyImported: results.length, appended: 0, skipped: 0, failed: 0, results }
+      }
+      if (stat && stat.version === known.version && stat.size === known.sizeBytes) {
+        const count = Object.keys(known.sessions).length
+        return { total: count, imported: 0, alreadyImported: count, appended: 0, skipped: 0, failed: 0, results: skipResults() }
+      }
+    }
+  }
+
+  const dbSessions = sessions ?? readHermesDb(path)
+  if (dbSessions === null) throw new Error('hermes db 不可用（非 SQLite / 无 sessions 表）: ' + path)
+  const items = []
+  const preSkipped = []
+  for (const s of dbSessions) {
+    const out = markTrimmedSource(convertHermesJson(JSON.stringify(s), { ...args, sourcePath: path }), args)
+    if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
+      preSkipped.push({ path, status: 'skipped', reason: 'no user turns (session ' + s.id + ')' })
+      continue
+    }
+    items.push({ key: s.id, converted: out })
+  }
+  const decision = await decideMulti(ctx, { known, items, stat, args, fingerprint, persisted: persistedSet, sourcePath: path, subTable: 'sessions', budget: args.budget })
+  const missing = known && known.sessions ? Object.keys(known.sessions).filter((k) => !dbSessions.some((s) => s.id === k)) : []
+  const result = await runDecision(ctx, decision, registryDir, path, persistedSet)
+  return {
+    ...result,
+    total: dbSessions.length,
+    skipped: result.skipped + preSkipped.length,
+    results: [...preSkipped, ...result.results],
+    ...(missing.length ? { missingFromSource: missing } : {}),
+  }
+}
+
+// hermes 目录导入：优先定位 state.db（SQLite 恒批量）；db 不可用（readHermesDb
+// 返回 null：目录无 state.db / 非 hermes 库）→ 回退递归扫 .jsonl（逐文件单会话）。
+async function importHermesDirectory(ctx, dirTarget, args, { registryDir, persisted } = {}) {
+  const dirPath = dirTarget.displayPath || ctx.fs.processPath(dirTarget)
+  const dbPath = join(dirPath, 'state.db')
+  const dbTarget = await ctx.fs.resolve(dbPath)
+  const dbSessions = readHermesDb(dbPath)
+  if (dbSessions !== null) {
+    return importHermesDbFile(ctx, dbTarget, args, { registryDir, persisted, sessions: dbSessions })
+  }
+  return importDirectory(ctx, dirTarget, args, { convert: convertHermesJson, sourceLabel: 'Hermes', deriveArgs: (target) => hermesFileArgs(ctx, target), collect: collectJsonlFiles, registryDir })
+}
+
+// hermes 单文件入口：.db → SQLite 恒批量；.jsonl/.json → 标准单会话导入。
+async function importHermesFile(ctx, target, args, { registryDir } = {}) {
+  const path = target.displayPath || ctx.fs.processPath(target)
+  if (/\.db$/i.test(String(path))) {
+    return importHermesDbFile(ctx, target, args, { registryDir })
+  }
+  return importTranscript(ctx, target, args, convertHermesJson, { registryDir })
+}
+
 // 两个导入工具共享的 schema / render / execute 骨架，只差名称、描述、转换器与导入函数。
 // registryDir 由 apply 传入（$DSH_HOME/dsh-chat-import）；fingerprintKeys 决定哪些
 // 工具参数计入 imports registry 的 args 指纹（opencode 的 fullHistory 等）。
-function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect, extraParameters, pathDescription, dropParameters, batchUnit = '文件', skippedNote, registryDir, fingerprintKeys = [] }) {
+function makeImportTool(ctx, { toolName, sourceLabel, convert, description, importFile, importDir, alwaysBatch, deriveArgs, collect, extraParameters, pathDescription, dropParameters, batchUnit = '文件', skippedNote, registryDir, fingerprintKeys = [], dirSingle, fileBatch }) {
   const derive = deriveArgs || (async () => ({}))
   const importSingle = importFile || ((c, t, a) => importTranscript(c, t, a, convert, { registryDir, fingerprintKeys }))
   const importBatch = importDir || ((c, d, a) => importDirectory(c, d, a, { convert, sourceLabel, deriveArgs: derive, collect, registryDir, fingerprintKeys }))
@@ -602,13 +816,19 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
       const target = await ctx.fs.resolve(effective.path)
       const info = await ctx.fs.stat(target)
       if (info && info.type === 'directory') {
+        // grokbuild：会话目录（含 summary.json）视作单源 → 单会话导入；其余目录批量
+        if (dirSingle && await dirSingle(ctx, target)) {
+          const fileArgs = { ...effective, ...(await derive(target)) }
+          const single = await importSingle(ctx, target, fileArgs)
+          return { mode: 'single', ...single }
+        }
         const batch = await importBatch(ctx, target, effective)
         return { mode: 'batch', ...batch }
       }
       // 单文件：合并按文件派生的转换参数（可 async；Cursor 的 composer id、Reasonix 的 meta）
       const fileArgs = { ...effective, ...(await derive(target)) }
-      if (alwaysBatch) {
-        // ChatGPT 导出：单文件也含多个会话，恒返回批量形态
+      // hermes：.db 单文件恒返回批量形态（SQLite 一库多会话）
+      if (alwaysBatch || (fileBatch && await fileBatch(ctx, target))) {
         const batch = await importSingle(ctx, target, fileArgs)
         return { mode: 'batch', ...batch }
       }
@@ -868,6 +1088,95 @@ function apply(ctx) {
       'compaction 自动压缩摘要（part.type === "compaction" 的 data.summary.body）还原为前置上下文 reasoning 块；' +
       '含 <system-reminder> 的系统注入 user 消息过滤；db 不可用时回退读旧版 transcript.jsonl；' +
       '可选 sessionIds 只导指定源会话；重复导入同一会话会幂等跳过。返回批量统计与逐会话明细。',
+  }))
+  // grokbuild 源（第 9 个导入源）：Grok Build 本地 CLI 会话存储
+  // ~/.grok/sessions/<project>/<session_id>/（及 ~/.grok/archived_sessions/），
+  // 每会话目录含 summary.json + chat_history.jsonl。path 可指向单个会话目录
+  // （mode single）或 sessions/archived_sessions 根（递归扫 summary.json，批量）。
+  // 转换器 convertGrokbuildJson 需读两个文件再转换，编排见文件头的
+  // importGrokbuildSession / importGrokbuildDirectory。
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_grokbuild',
+    sourceLabel: 'Grok Build',
+    convert: convertGrokbuildJson,
+    importFile: (c, t, a) => importGrokbuildSession(c, t, a, { registryDir }),
+    importDir: (c, d, a) => importGrokbuildDirectory(c, d, a, { registryDir }),
+    // 会话目录（含 summary.json）视作单源走单会话导入；其余目录走批量扫描
+    dirSingle: async (ctx, target) => {
+      const dirPath = target.displayPath || ctx.fs.processPath(target)
+      const sumTarget = await ctx.fs.resolve(join(dirPath, 'summary.json'))
+      const sumStat = await ctx.fs.stat(sumTarget)
+      return !!(sumStat && sumStat.type === 'file')
+    },
+    registryDir,
+    pathDescription: 'Grok Build 会话目录（含 summary.json + chat_history.jsonl）的路径（单会话导入），或 ~/.grok/sessions / archived_sessions 根目录路径（递归扫 summary.json，批量导入）。',
+    batchUnit: '会话',
+    skippedNote: '无用户回合',
+    description:
+      '从 Grok Build 的本地会话目录导入历史对话为可继续的 DSH 会话（' +
+      '~/.grok/sessions/<project>/<session_id>/，每会话目录含 summary.json + chat_history.jsonl）。' +
+      'path 可指向单个会话目录（单文件导入），或 sessions/archived_sessions 根（递归扫 summary.json，批量导入）。' +
+      '解析 user/assistant/tool/system/reasoning 记录（reasoning 加密内部状态与 system 注入过滤）、' +
+      'Claude 风格 content block（tool_use/tool_result 配对挂回所属 step）并持久化；' +
+      '标题取 generated_title > session_summary；重复导入同一会话会幂等跳过。' +
+      '返回新会话 id（或批量统计）与明细；provider=grokbuild，可用 grok --resume <id> 续聊。',
+  }))
+  // openclaw 源（第 10 个导入源）：OpenClaw 会话 JSONL
+  // ~/.openclaw/agents/<agent>/sessions/*.jsonl（同目录 sessions.json 索引提供
+  // displayName 作会话标题）。标准单文件/目录批量形态；deriveArgs 按文件 stem 从
+  // sessions.json 查 displayName（openclawDisplayNames 纯函数）。
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_openclaw',
+    sourceLabel: 'OpenClaw',
+    convert: convertOpenclawJson,
+    registryDir,
+    deriveArgs: async (target) => {
+      const p = target.displayPath || ctx.fs.processPath(target)
+      const base = String(p).split(/[\\/]/).pop() || ''
+      const stem = base.replace(/\.jsonl$/i, '')
+      const derived = { openclawId: stem }
+      try {
+        // sessions.json 与 transcript 同目录：<dir>/sessions.json（displayName 索引）
+        const dirPath = String(p).replace(/[\\/][^\\/]*\.jsonl$/i, '')
+        const indexTarget = await ctx.fs.resolve(join(dirPath, 'sessions.json'))
+        const name = openclawDisplayNames(await ctx.fs.readText(indexTarget)).get(stem)
+        if (name) derived.displayName = name
+      } catch {
+        // sessions.json 缺失/损坏不致命：仍按 stem 导入，仅无 displayName（标题回退首问）
+      }
+      return derived
+    },
+    description:
+      '从 OpenClaw 的会话 JSONL 导入历史对话为可继续的 DSH 会话（' +
+      '~/.openclaw/agents/<agent>/sessions/*.jsonl，同目录 sessions.json 索引提供 displayName 作标题）。' +
+      'path 可以是单个 .jsonl 文件，也可以是包含多个 .jsonl 的 sessions 目录（目录模式递归扫描，每个文件导入为独立会话）。' +
+      '解析 user/assistant/toolResult 事件（tool_use/tool_result 配对挂回所属 step、剥 message_id 尾缀）并持久化；' +
+      '重复导入同一会话会幂等跳过。返回新会话 id（或批量统计）与明细。',
+  }))
+  // hermes 源（第 11 个导入源）：Hermes（本地 AI 编码 CLI）会话存储
+  // ~/.hermes/state.db（SQLite 权威索引，恒批量）+ ~/.hermes/sessions/*.jsonl 回退
+  // （db 不可用 readHermesDb 返回 null 时）。.db 单文件恒批量（对齐 import_opencode）；
+  // 单 .jsonl = 单会话（mode single）；目录优先 state.db、不可用则递归扫 .jsonl。
+  ctx.tools.register(makeImportTool(ctx, {
+    toolName: 'import_hermes',
+    sourceLabel: 'Hermes',
+    convert: convertHermesJson,
+    importFile: (c, t, a) => importHermesFile(c, t, a, { registryDir }),
+    importDir: (c, d, a) => importHermesDirectory(c, d, a, { registryDir }),
+    deriveArgs: (target) => hermesFileArgs(ctx, target),
+    // .db 单文件恒返回批量形态（SQLite 一库多会话）；.jsonl 走单会话导入
+    fileBatch: (ctx, target) => /\.db$/i.test(String(target.displayPath || ctx.fs.processPath(target))),
+    registryDir,
+    pathDescription: 'Hermes 历史库（state.db）的文件路径、包含 state.db 的目录路径（SQLite 恒批量），或 sessions/*.jsonl 单文件/目录路径（db 不可用时回退）。',
+    batchUnit: '会话',
+    skippedNote: '无用户回合',
+    description:
+      '从 Hermes（本地 AI 编码 CLI）的会话存储导入历史对话为可继续的 DSH 会话（' +
+      '~/.hermes/state.db SQLite 权威索引 + sessions/*.jsonl 回退）。' +
+      'path 可指向 state.db 文件或包含 state.db 的目录（恒批量，一库多会话）；' +
+      'db 不可用（readHermesDb 返回 null）时回退递归扫描 sessions/*.jsonl，单文件 = 单会话。' +
+      '解析 flat/nested 双形态 JSONL 或 DB 中间 JSON（thinking→reasoning、tool_use/tool_result 成对）并持久化；' +
+      '重复导入同一会话会幂等跳过。返回批量统计与逐会话明细。',
   }))
   // REQ-16 反向导出：第 9 个工具，独立注册（导出流程与导入状态机完全不同）。
   ctx.tools.register(defineTool({

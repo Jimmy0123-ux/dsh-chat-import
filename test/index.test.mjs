@@ -222,12 +222,12 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册十个工具（8 导入 + export_claude + sync_to_claude）', () => {
+test('apply 注册十三个工具（11 导入 + export_claude + sync_to_claude）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 10)
+  assert.equal(registered.length, 13)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_opencode', 'import_reasonix', 'import_zcode', 'sync_to_claude'])
+  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_openclaw', 'import_opencode', 'import_reasonix', 'import_zcode', 'sync_to_claude'])
   for (const def of registered) {
     if (def.name === 'export_claude' || def.name === 'sync_to_claude') {
       // 导出 / 写回工具：单对象输出 schema（非 oneOf）
@@ -1011,6 +1011,311 @@ test('import_opencode 读不到 DB：失败大声抛错', async () => {
   apply(ctx)
   const def = registeredDef(ctx, 'import_opencode')
   await assert.rejects(() => def.execute({ path: join(tmpdir(), 'no-such-opencode.db') }))
+})
+
+// ---- import_grokbuild 集成（会话目录：summary.json + chat_history.jsonl） ----
+
+// 合成 Grok Build chat_history.jsonl：N 轮 user/assistant 交替。
+function grokChat(n) {
+  const lines = []
+  for (let i = 1; i <= n; i++) {
+    lines.push(JSON.stringify({ type: 'user', content: [{ type: 'text', text: '问题' + i }] }))
+    lines.push(JSON.stringify({ type: 'assistant', content: [{ type: 'text', text: '回答' + i }] }))
+  }
+  return lines.join('\n')
+}
+
+test('import_grokbuild 单会话目录：双文件转换、落盘、归组、schema 校验', async () => {
+  const dir = 'D:\\demo\\grok\\sessions\\proj-a\\grok-sess-001'
+  const tree = {
+    [dir]: 'dir',
+    [dir + '\\summary.json']: JSON.stringify({
+      info: { id: 'grok-sess-001', cwd: 'D:/demo/grok-proj' },
+      generated_title: 'Grok 会话标题',
+      created_at: '2026-07-16T12:00:00Z',
+    }),
+    [dir + '\\chat_history.jsonl']: grokChat(1),
+  }
+  const { ctx, persistence, attached } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_grokbuild')
+  const value = await def.execute({ path: dir })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-grok-sess-001')
+  assert.equal(value.turns, 1)
+  assert.equal(value.messages, 2)
+  assert.equal(value.toolCalls, 0)
+  assert.equal(value.alreadyImported, false)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get('import-grok-sess-001')
+  assert.ok(saved)
+  assert.equal(saved.meta.cwd, 'D:/demo/grok-proj')
+  assert.equal(saved.meta.sourceId, 'grok-sess-001')
+  // 显式标题（generated_title）钉 session/title 事件
+  assert.equal(saved.events.at(-1).type, 'session/title')
+  assert.equal(saved.events.at(-1).data.title, 'Grok 会话标题')
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+  // 幂等键 = 会话目录路径
+  assertImportedMarker(saved.events, { tool: 'grokbuild', sourceId: 'grok-sess-001', sourcePath: dir })
+  assert.equal(attached.length, 1)
+  assert.equal(attached[0].id, 'import-grok-sess-001')
+})
+
+test('import_grokbuild 目录批量：递归扫 summary.json、逐会话独立落盘', async () => {
+  const root = 'D:\\demo\\grok\\sessions'
+  const mkSession = (dir, id) => ({
+    [dir]: 'dir',
+    [dir + '\\summary.json']: JSON.stringify({ info: { id }, created_at: '2026-07-16T12:00:00Z' }),
+    [dir + '\\chat_history.jsonl']: grokChat(1),
+  })
+  const tree = {
+    [root]: 'dir',
+    [root + '\\proj-a']: 'dir',
+    ...mkSession(root + '\\proj-a\\grok-sess-001', 'grok-sess-001'),
+    [root + '\\archived_sessions']: 'dir',
+    ...mkSession(root + '\\archived_sessions\\grok-sess-002', 'grok-sess-002'),
+    [root + '\\notes.txt']: 'not a session',
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_grokbuild')
+  const value = await def.execute({ path: root })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.equal(value.failed, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  const ids = [...persistence.sessions.keys()].sort()
+  assert.deepEqual(ids, ['import-grok-sess-001', 'import-grok-sess-002'])
+})
+
+test('import_grokbuild 增量续写：chat_history 增长 → appended 同一会话（REQ-24）', async () => {
+  const dir = 'D:\\demo\\grok\\sessions\\p\\grok-sess-incr'
+  const summary = JSON.stringify({ info: { id: 'grok-sess-incr', cwd: 'D:/demo/grok-proj' }, created_at: '2026-07-16T12:00:00Z' })
+  const tree = { [dir]: 'dir', [dir + '\\summary.json']: summary, [dir + '\\chat_history.jsonl']: grokChat(2) }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_grokbuild')
+  const first = await def.execute({ path: dir })
+  assert.equal(first.status, 'imported')
+  const before = persistence.sessions.get('import-grok-sess-incr').events.length
+
+  tree[dir + '\\chat_history.jsonl'] = grokChat(3)
+  const second = await def.execute({ path: dir })
+  assert.equal(second.mode, 'single')
+  assert.equal(second.status, 'appended')
+  assert.equal(second.appendedTurns, 1)
+  assert.ok(second.appendedEvents > 0)
+  assert.equal(persistence.sessions.size, 1) // 同一会话续写
+  const saved = persistence.sessions.get('import-grok-sess-incr')
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+  assert.equal(saved.events.length, before + second.appendedEvents)
+  assert.equal(saved.events.filter((e) => e.type === 'turn/start').length, 3)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, second), [])
+})
+
+// ---- import_openclaw 集成（sessions.json 索引提供 displayName） ----
+
+test('import_openclaw 单文件：displayName 从同目录 sessions.json 派生、落盘、归组、schema 校验', async () => {
+  const tree = {
+    'D:\\demo\\openclaw\\sessions.json': JSON.stringify({
+      'agent:main:a': { sessionId: 'sess-openclaw-001', displayName: '重构登录模块' },
+    }),
+    'D:\\demo\\openclaw\\sess-openclaw-001.jsonl': [
+      '{"type":"session","id":"sess-openclaw-001","cwd":"/home/dev/proj","timestamp":"2026-03-06T10:00:00Z"}',
+      '{"type":"message","message":{"role":"user","content":"帮我看看构建失败"},"timestamp":"2026-03-06T10:01:00Z"}',
+      '{"type":"message","message":{"role":"assistant","content":"是缺少依赖。"},"timestamp":"2026-03-06T10:02:00Z"}',
+    ].join('\n'),
+  }
+  const { ctx, persistence, attached } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_openclaw')
+  const value = await def.execute({ path: 'D:\\demo\\openclaw\\sess-openclaw-001.jsonl' })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-sess-openclaw-001')
+  assert.equal(value.turns, 1)
+  assert.equal(value.messages, 2)
+  assert.equal(value.alreadyImported, false)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get('import-sess-openclaw-001')
+  assert.ok(saved)
+  assert.equal(saved.meta.cwd, '/home/dev/proj')
+  assert.equal(saved.meta.sourceId, 'sess-openclaw-001')
+  // displayName（sessions.json 索引）→ 标题钉 session/title 事件
+  assert.equal(saved.events.at(-1).type, 'session/title')
+  assert.equal(saved.events.at(-1).data.title, '重构登录模块')
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+  assertImportedMarker(saved.events, { tool: 'openclaw', sourceId: 'sess-openclaw-001', sourcePath: 'D:\\demo\\openclaw\\sess-openclaw-001.jsonl' })
+  assert.equal(attached.length, 1)
+  assert.equal(attached[0].id, 'import-sess-openclaw-001')
+})
+
+test('import_openclaw 目录批量：递归扫 .jsonl、逐文件独立会话、schema 校验', async () => {
+  const file = (id) => [
+    '{"type":"session","id":"' + id + '","cwd":"/home/dev/proj","timestamp":"2026-03-06T10:00:00Z"}',
+    '{"type":"message","message":{"role":"user","content":"问题"},"timestamp":"2026-03-06T10:01:00Z"}',
+    '{"type":"message","message":{"role":"assistant","content":"回答"},"timestamp":"2026-03-06T10:02:00Z"}',
+  ].join('\n')
+  const tree = {
+    'D:\\demo\\openclaw\\agents\\main\\sessions': 'dir',
+    'D:\\demo\\openclaw\\agents\\main\\sessions\\sessions.json': JSON.stringify({
+      a: { sessionId: 'sess-a', displayName: '会话A' },
+      b: { sessionId: 'sess-b', displayName: '会话B' },
+    }),
+    'D:\\demo\\openclaw\\agents\\main\\sessions\\sess-a.jsonl': file('sess-a'),
+    'D:\\demo\\openclaw\\agents\\main\\sessions\\sess-b.jsonl': file('sess-b'),
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_openclaw')
+  const value = await def.execute({ path: 'D:\\demo\\openclaw\\agents\\main\\sessions' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2) // sessions.json 是 .json 非 .jsonl，不收集
+  assert.equal(value.imported, 2)
+  assert.equal(value.failed, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  const ids = [...persistence.sessions.keys()].sort()
+  assert.deepEqual(ids, ['import-sess-a', 'import-sess-b'])
+  // 标题来自 sessions.json displayName
+  assert.equal(persistence.sessions.get('import-sess-a').events.at(-1).type, 'session/title')
+  assert.equal(persistence.sessions.get('import-sess-b').events.at(-1).type, 'session/title')
+})
+
+test('import_openclaw 幂等：重复导入同一文件已存在则跳过', async () => {
+  const tree = {
+    'D:\\demo\\openclaw\\sess-static.jsonl': [
+      '{"type":"session","id":"sess-static","cwd":"/tmp/p","timestamp":"2026-03-06T10:00:00Z"}',
+      '{"type":"message","message":{"role":"user","content":"hi"},"timestamp":"2026-03-06T10:01:00Z"}',
+      '{"type":"message","message":{"role":"assistant","content":"ok"},"timestamp":"2026-03-06T10:02:00Z"}',
+    ].join('\n'),
+  }
+  const { ctx, persistence } = makeCtx(tree) // 无 sessions.json：deriveArgs 吞缺索引，仅无 displayName
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_openclaw')
+  const first = await def.execute({ path: 'D:\\demo\\openclaw\\sess-static.jsonl' })
+  const second = await def.execute({ path: 'D:\\demo\\openclaw\\sess-static.jsonl' })
+  assert.equal(first.alreadyImported, false)
+  assert.equal(first.sessionId, 'import-sess-static')
+  assert.equal(second.alreadyImported, true)
+  assert.equal(persistence.sessions.size, 1)
+})
+
+// ---- import_hermes 集成（state.db SQLite 恒批量 / JSONL 回退） ----
+
+// 建临时 hermes state.db（真实 schema：sessions + messages 表，content 为 TEXT）。
+function makeHermesTestDb() {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hermes-'))
+  const dbPath = join(dir, 'state.db')
+  const db = new DatabaseSync(dbPath)
+  db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, started_at REAL)')
+  db.exec('CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT, created_at REAL)')
+  db.prepare('INSERT INTO sessions (id, title, cwd, started_at) VALUES (?, ?, ?, ?)').run('hm-a', 'Fix hermes build', 'E:/demo/hermes', 1786000000000)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('hm-a', 'user', '为什么构建失败', 1786000000001)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('hm-a', 'assistant', '是缺依赖。', 1786000000002)
+  db.prepare('INSERT INTO sessions (id, title, cwd, started_at) VALUES (?, ?, ?, ?)').run('hm-b', 'Refactor', 'E:/demo/hermes', 1786000100000)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('hm-b', 'user', '重构模块', 1786000100001)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('hm-b', 'assistant', '完成', 1786000100002)
+  db.close()
+  return dbPath
+}
+
+// 往临时 hermes state.db 追加一轮（user + assistant）。
+function addHermesTurn(dbPath, sessionId, userText, asstText, timeBase) {
+  const db = new DatabaseSync(dbPath)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(sessionId, 'user', userText, timeBase)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(sessionId, 'assistant', asstText, timeBase + 1)
+  db.close()
+}
+
+test('import_hermes SQLite：state.db 恒批量、逐会话落盘、归组、schema 校验', async () => {
+  const dbPath = makeHermesTestDb()
+  const { ctx, persistence, attached } = makeCtx({}) // stat 回退 node:fs（真实 db 文件）
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_hermes')
+  const value = await def.execute({ path: dbPath })
+
+  assert.equal(value.mode, 'batch') // 单 .db 也恒批量
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.equal(value.alreadyImported, 0)
+  assert.equal(value.failed, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const savedA = persistence.sessions.get('import-hm-a')
+  assert.ok(savedA)
+  assert.equal(savedA.meta.cwd, 'E:/demo/hermes')
+  assert.equal(savedA.events.at(-1).type, 'session/title')
+  assert.equal(savedA.events.at(-1).data.title, 'Fix hermes build')
+  assert.ok(savedA.events.every((e, i) => e.seq === i))
+  assertImportedMarker(savedA.events, { tool: 'hermes', sourceId: 'hm-a', sourcePath: dbPath })
+  const ids = [...persistence.sessions.keys()].sort()
+  assert.deepEqual(ids, ['import-hm-a', 'import-hm-b'])
+  assert.equal(attached.length, 2) // 两个会话都有 cwd → 归组
+})
+
+test('import_hermes db 增量续写：库增长 → 逐会话 append（REQ-24）', async () => {
+  const dbPath = makeHermesTestDb()
+  const { ctx, persistence } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_hermes')
+  const first = await def.execute({ path: dbPath })
+  assert.equal(first.imported, 2)
+  const before = persistence.sessions.get('import-hm-a').events.length
+
+  addHermesTurn(dbPath, 'hm-a', '继续追问', '追加回答', 1786000000100)
+  const second = await def.execute({ path: dbPath })
+  assert.equal(second.mode, 'batch')
+  assert.equal(second.appended, 1)
+  assert.equal(second.alreadyImported, 1) // hm-b 未变
+  const appended = second.results.find((r) => r.status === 'appended')
+  assert.ok(appended)
+  assert.equal(appended.sessionId, 'import-hm-a')
+  const sesA = persistence.sessions.get('import-hm-a')
+  assert.ok(sesA.events.every((e, i) => e.seq === i))
+  assert.equal(sesA.events.length, before + appended.appendedEvents)
+  assert.equal(sesA.events.filter((e) => e.type === 'turn/start').length, 2)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, second), [])
+})
+
+test('import_hermes JSONL 回退：目录无可用 state.db → 递归扫 .jsonl 批量', async () => {
+  const tree = {
+    'D:\\demo\\hermes\\sessions': 'dir',
+    'D:\\demo\\hermes\\sessions\\s1.jsonl': JSON.stringify({ role: 'user', content: '什么是 Rust？', ts: 1700000000 }) + '\n' + JSON.stringify({ role: 'assistant', content: '一种系统编程语言。', ts: 1700000001 }) + '\n',
+    'D:\\demo\\hermes\\sessions\\s2.jsonl': '{"type":"session","id":"s2","title":"My Session","cwd":"/home/u/proj"}\n{"type":"message","message":{"role":"user","content":"Hello"},"timestamp":"2026-01-01T00:00:00Z"}\n{"type":"message","message":{"role":"assistant","content":"Hi"},"timestamp":"2026-01-01T00:01:00Z"}\n',
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_hermes')
+  const value = await def.execute({ path: 'D:\\demo\\hermes\\sessions' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.equal(value.failed, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  assert.equal(persistence.sessions.size, 2)
+  // 无 session 记录的 flat JSONL → 文件 stem 兜底会话 id
+  assert.ok(persistence.sessions.get('import-s1'))
+  assert.ok(persistence.sessions.get('import-s2'))
+})
+
+test('import_hermes 单 .jsonl：db 之外的单会话源，mode single', async () => {
+  const raw = JSON.stringify({ role: 'user', content: 'hi', ts: 1 }) + '\n' + JSON.stringify({ role: 'assistant', content: 'hello', ts: 2 }) + '\n'
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\hermes\\sessions\\s1.jsonl': raw })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_hermes')
+  const value = await def.execute({ path: 'D:\\demo\\hermes\\sessions\\s1.jsonl' })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-s1') // fileStem 兜底
+  assert.equal(value.status, 'imported')
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  assert.equal(persistence.sessions.size, 1)
 })
 
 // ---- REQ-24 增量续写（重导 append 新轮次 + 源路径幂等键） ----
