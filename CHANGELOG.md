@@ -28,7 +28,10 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   (`conversations.json`, opencode/zcode/hermes DBs) import whole-source
   (opencode/zcode restrict to the selected `sessionId`s), and the list refreshes
   with the new statuses after importing. The `pi` source joins the panel filter,
-  and the `source` filter may be omitted to scan all formats at once.
+  and the `source` filter may be omitted to scan all formats at once. Stage 3
+  adds **search** (by title / workspace / path, server-side filtered) and
+  **pagination** (50 per page, `offset`/`limit` + `total` from
+  `/api-import/sessions`), with selections kept across pages for bulk imports.
 
 ## [0.3.0] - 2026-08-14
 

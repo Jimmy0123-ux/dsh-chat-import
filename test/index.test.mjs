@@ -2951,6 +2951,55 @@ test('REQ-41 /api-import/sessions handler：合成夹具经 discoverSessions 返
   assert.match(bad.data.error, /未知来源/)
 })
 
+test('REQ-41 /api-import/sessions handler：分页（offset/limit + total）+ 搜索组合', async () => {
+  const root = 'D:\\demo\\claude\\projects'
+  const tree = {
+    [root]: 'dir',
+    [root + '\\proj-a']: 'dir',
+    [root + '\\proj-a\\sess-aaa.jsonl']: '{"sessionId":"sess-aaa","type":"user","cwd":"D:\\\\demo\\\\proj-a","message":{"role":"user","content":"第一个问题"}}\n{"sessionId":"sess-aaa","type":"assistant","message":{"role":"assistant","content":"ok"}}',
+    [root + '\\proj-b']: 'dir',
+    [root + '\\proj-b\\sess-bbb.jsonl']: '{"sessionId":"sess-bbb","type":"user","cwd":"D:\\\\demo\\\\proj-b","message":{"role":"user","content":"第二个问题"}}\n{"sessionId":"sess-bbb","type":"assistant","message":{"role":"assistant","content":"ok"}}',
+    [root + '\\proj-c']: 'dir',
+    [root + '\\proj-c\\sess-ccc.jsonl']: '{"sessionId":"sess-ccc","type":"user","cwd":"D:\\\\demo\\\\proj-c","message":{"role":"user","content":"第三个问题"}}\n{"sessionId":"sess-ccc","type":"assistant","message":{"role":"assistant","content":"ok"}}',
+  }
+  const { ctx, webRoutes } = makeCtx(tree)
+  apply(ctx)
+  const route = webRoutes.find((r) => r.path === '/api-import/sessions')
+  const invoke = async (body) => {
+    const req = { async *[Symbol.asyncIterator]() { yield JSON.stringify(body) } }
+    const res = { status: null, headers: null, body: null, writeHead(s, h) { this.status = s; this.headers = h }, end(b) { this.body = b } }
+    await route.handler(req, res)
+    return { res, data: JSON.parse(res.body) }
+  }
+
+  // 第 0 页 limit=2：返回 2 条 + 过滤后总数 3（discovery 排序稳定：目录名序 aaa/bbb/ccc）
+  const p0 = await invoke({ source: 'claude-code', path: root, limit: 2 })
+  assert.equal(p0.res.status, 200)
+  assert.equal(p0.data.ok, true)
+  assert.equal(p0.data.sessions.length, 2)
+  assert.equal(p0.data.total, 3)
+  assert.equal(p0.data.limit, 2)
+  assert.equal(p0.data.offset, 0)
+  assert.deepEqual(p0.data.sessions.map((s) => s.sessionId), ['sess-aaa', 'sess-bbb'])
+
+  // 第 1 页（offset=2）：返回剩余 1 条，total 不变
+  const p1 = await invoke({ source: 'claude-code', path: root, limit: 2, offset: 2 })
+  assert.equal(p1.data.sessions.length, 1)
+  assert.equal(p1.data.total, 3)
+  assert.equal(p1.data.sessions[0].sessionId, 'sess-ccc')
+
+  // 搜索 + 分页组合：query 先过滤（total 收窄）再切片
+  const q = await invoke({ source: 'claude-code', path: root, query: '第二个', limit: 2 })
+  assert.equal(q.data.total, 1)
+  assert.equal(q.data.sessions.length, 1)
+  assert.equal(q.data.sessions[0].sessionId, 'sess-bbb')
+
+  // limit 缺省：不分页返回全部（limit = 实际长度）
+  const all = await invoke({ source: 'claude-code', path: root })
+  assert.equal(all.data.sessions.length, 3)
+  assert.equal(all.data.limit, 3)
+})
+
 // ---- REQ-41 Stage 2 面板导入路由（POST /api-import/import） ----
 
 // 路由调用辅助：把 body 序列化为 async iterable req + 捕获 res

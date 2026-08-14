@@ -153,7 +153,7 @@ sync_to_claude({ sessionId: "…", target: "copy", dryRun: true })
 
 ### Browser panel — discover & import from the sidebar
 
-The dsh web sidebar shows an **导入会话** entry at the bottom (a `sidebar.footer.action` slot). It opens a panel listing discovered sessions **grouped by workspace folder** (each source's `cwd`/project when available, otherwise an "(未分组)" bucket), with a source filter — "全部来源" scans every format's default data root, a single source restricts the view — and a per-session import-status badge (已导入 / 部分 / 未导入).
+The dsh web sidebar shows an **导入会话** entry at the bottom (a `sidebar.footer.action` slot). It opens a panel listing discovered sessions **grouped by workspace folder** (each source's `cwd`/project when available, otherwise an "(未分组)" bucket), with a source filter — "全部来源" scans every format's default data root, a single source restricts the view — and a per-session import-status badge (已导入 / 部分 / 未导入). A search box filters by title / workspace / path, and the list is **paginated** (50 per page) with selections kept across pages for bulk operations.
 
 Each row supports **single import**, and the checkboxes enable **multi-select import** ("导入所选 (N)"): the panel calls the same host import pipeline as the `import_*` tools, so idempotent skip / incremental append / `force` / context-budget semantics are identical, and the list refreshes with the new statuses after importing. A multi-session source (e.g. `conversations.json`, an opencode/zcode/hermes DB) is imported whole — opencode/zcode restrict to the selected `sessionId`s.
 

@@ -2357,11 +2357,13 @@ function apply(ctx) {
     },
   }))
   // REQ-41 被动发现路由：POST /api-import/sessions（Browser 面板数据源，不新增工具）。
-  // body: { source?, query?, path? }——source 是客户端来源 id（SOURCE_FORMAT 映射到
-  // discovery format；省略/空串 = 扫全部格式，面板「全部来源」视图按工作区分组）；
-  // query 按标题/项目/路径过滤；path 可选（客户端不发，调用方可钉扫描根，缺省扫该
-  // 格式默认数据根）。返回 discoverSessions 结果（{ok, sessions}），错误返回
-  // {ok:false, error}。webServer 在 inject 里（硬依赖），apply 时必可用。
+  // body: { source?, query?, path?, offset?, limit? }——source 是客户端来源 id
+  // （SOURCE_FORMAT 映射到 discovery format；省略/空串 = 扫全部格式，面板「全部来源」
+  // 视图按工作区分组）；query 按标题/项目/路径过滤；path 可选（客户端不发，调用方可
+  // 钉扫描根，缺省扫该格式默认数据根）；offset/limit 提供时分页（limit 缺省不分页，
+  // 返回全部，limit 字段 = 实际长度）。返回 discoverSessions 结果（{ok, sessions,
+  // total, offset, limit}，total 为过滤后总数，供面板分页），错误返回 {ok:false,
+  // error}。webServer 在 inject 里（硬依赖），apply 时必可用。
   ctx.webServer.register({
     kind: 'exact',
     path: '/api-import/sessions',
@@ -2375,6 +2377,8 @@ function apply(ctx) {
           res.end(JSON.stringify({ ok: false, error: '未知来源: ' + source }))
           return
         }
+        const offset = Number.isFinite(body.offset) ? Math.max(0, Math.trunc(body.offset)) : 0
+        const limit = Number.isFinite(body.limit) && body.limit > 0 ? Math.trunc(body.limit) : undefined
         const registry = await loadImports(registryDir)
         const found = await discoverSessions({
           path: typeof body.path === 'string' && body.path ? body.path : undefined,
@@ -2384,8 +2388,10 @@ function apply(ctx) {
           imports: registry.imports,
           cacheDir: registryDir,
         })
+        const all = found.sessions
+        const sessions = limit === undefined ? all : all.slice(offset, offset + limit)
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ ok: true, sessions: found.sessions }))
+        res.end(JSON.stringify({ ok: true, sessions, total: found.total, offset, limit: limit ?? all.length }))
       } catch (err) {
         res.writeHead(500, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: false, error: String((err && err.message) || err) }))
