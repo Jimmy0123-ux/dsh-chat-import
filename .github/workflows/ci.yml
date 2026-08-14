@@ -69,41 +69,14 @@ jobs:
       # 真实加载冒烟：完整 boot（含插件激活审计）+ 一次 LLM 回合。
       # DEEPSEEK_API_KEY 用假值、DEEPSEEK_BASE_URL 指向本地 mock（dsh-llm-deepseek
       # 每请求读该 env），无真实凭据、无外网依赖、结果确定。
+      # mock LLM 脚本外置 .github/scripts/dsh-mock-llm.mjs（heredoc 内联大段 JS
+      # 会让 GitHub 的 workflow YAML 校验失败，导致整个 ci.yml 无法加载）。
       - name: Headless real-load smoke (boot + plugin activation + one LLM turn)
         env:
           DEEPSEEK_API_KEY: smoke-key-not-used
           DEEPSEEK_BASE_URL: http://127.0.0.1:8790
         run: |
-          cat > "${RUNNER_TEMP}/dsh-mock-llm.mjs" <<'EOF'
-          import { createServer } from 'node:http'
-          const PORT = 8790
-          const sse = (id, delta, finish, usage) => {
-            const chunk = { id, object: 'chat.completion.chunk', created: 1700000000, model: 'deepseek-v4-flash', choices: [{ index: 0, delta, finish_reason: finish ?? null }] }
-            if (usage) chunk.usage = usage
-            return `data: ${JSON.stringify(chunk)}\n\n`
-          }
-          createServer((req, res) => {
-            if (req.method === 'GET' && req.url === '/models') {
-              res.writeHead(200, { 'content-type': 'application/json' })
-              res.end(JSON.stringify({ object: 'list', data: [{ id: 'deepseek-v4-flash' }] }))
-              return
-            }
-            if (req.method === 'POST' && req.url === '/chat/completions') {
-              let body = ''
-              req.on('data', (c) => { body += c })
-              req.on('end', () => {
-                res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
-                res.write(sse('chatcmpl-smoke', { role: 'assistant', content: 'smoke ok' }, null))
-                res.write(sse('chatcmpl-smoke', {}, 'stop', { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 }))
-                res.end('data: [DONE]\n\n')
-              })
-              return
-            }
-            res.writeHead(404)
-            res.end('not found')
-          }).listen(PORT, '127.0.0.1')
-          EOF
-          node "${RUNNER_TEMP}/dsh-mock-llm.mjs" > "${RUNNER_TEMP}/mock-llm.log" 2>&1 &
+          node "${GITHUB_WORKSPACE}/.github/scripts/dsh-mock-llm.mjs" > "${RUNNER_TEMP}/mock-llm.log" 2>&1 &
           MOCK_PID=$!
           trap 'kill "${MOCK_PID}" 2>/dev/null || true' EXIT
           for i in $(seq 1 40); do
