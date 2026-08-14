@@ -138,7 +138,20 @@ scan_discover({ path: "~/.codex/sessions", format: "codex", query: "import" })
 - `format`（可选）— 只扫指定格式（`claude` / `codex` / `cursor` / `gemini` / `reasonix` / `opencode` / `zcode` / `grokbuild` / `openclaw` / `hermes` / `chatgpt`）；缺省按路径自动探测格式。
 - `query`（可选）— 按标题 / 项目 / 路径子串过滤（忽略大小写）。
 
-返回 `{ total, sessions }`，每条会话为 `{ format, sessionId, title, project, createdAt, lastActiveAt, messageCount, sourcePath, importStatus }`——`importStatus` 为 `imported` | `partial` | `not-imported`，由 imports registry 只读解析。扫描**零副作用**（不 create/append、不写 registry、不归组），结果进程内 **30s TTL 缓存**（同 key 30 秒内重复扫描直接命中，不重读源文件）。
+返回 `{ total, sessions }`，每条会话为 `{ format, sessionId, title, project, createdAt, lastActiveAt, messageCount, sourcePath, importStatus }`——`importStatus` 为 `imported` | `partial` | `not-imported`，由 imports registry 只读解析。扫描**零副作用**（不 create/append、不写 registry、不归组），结果进程内 **30s TTL 缓存**（同 key 30 秒内重复扫描直接命中，不重读源文件）。在此之上，**mtime/size 书签持久化**到 `$DSH_HOME/dsh-chat-import/scan-cache.json`（与 imports registry 同目录）：跨进程重启后未变文件免重扫——写盘原子化，书签损坏或缺失时回退全量重扫、不影响结果。
+
+### Imported-session listing & retract — 导入会话识别与撤回（list_imported_sessions / retract_import）
+
+识别本插件已导入的会话，并「撤回」——**只识别 + 引导手动删，绝不执行任何删除**（平台无 `sessionPersistence.remove` / `fs.removeFile` 面）：
+
+```
+list_imported_sessions()
+retract_import({ sessionId: "import-019f5f27-…" })
+retract_import({ sourcePath: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl" })
+```
+
+- `list_imported_sessions()` — 只读枚举本插件导入的全部 DSH 会话：逐个检查 `list()` 会话日志首事件 `session/imported` 标记（权威信号；日志读不到时以 imports registry 的 dshId 集合兜底——日志可读但无标记的会话绝不出现）。每个命中会话返回 `{ sessionId, sourcePath, artifactPath, title?, importedAt? }`——`title` 来自 `session/title` 事件（无显式标题时省略）、`artifactPath` 由 `sessionPersistence.locate` 给出。零副作用：不落盘、不动 registry。
+- `retract_import({ sessionId })` 或 `retract_import({ sourcePath })` — 移除该会话的 **imports registry 记录**并返回手动删工件引导（`manualDelete`，`locate` 给出的工件路径）。绝不删会话或工件；标记留在日志里，重复撤回幂等（再次调用 `wasRegistered: false`）。仅移除记录还不能全新重导——工件副本仍在时，重导会把源当作已跟踪的 legacy 基线幂等跳过——**先按引导手动删工件，再重导才会生成全新完整副本**。返回 `{ removed: true, sourcePath, artifactPath, wasRegistered, manualDelete }`。
 
 ## 🔁 增量续写（重导）
 
@@ -408,7 +421,7 @@ Hermes 历史存于 `~/.hermes/`（Windows `%LOCALAPPDATA%\hermes`）。`state.d
 | DSH → Claude Code | `export_claude` | ✅ 单测 + mock 集成（`npm test`） |
 | DSH → Claude Code（增量） | `sync_to_claude` | ✅ 单测 + mock 集成（`npm test`） |
 
-- **实测（Tested）**：`dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6`——2026-08 于 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（309 个用例）覆盖十一种源格式的转换纯函数（含 REQ-37 的 `estimateTokens` / `cropContentBlocks` / `trimTurns` 纯函数）、`export.mjs` 序列化纯函数（全量 + 增量尾部 + 格式预检）与 mock 集成路径（含 `export_claude`、`sync_to_claude` 与预算自适应导入——参数 / 环境变量 / 动态 / 默认解析、`trimmed` 上报、`budgetChanged`）。
+- **实测（Tested）**：`dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6`——2026-08 于 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（324 个用例）覆盖十一种源格式的转换纯函数（含 REQ-37 的 `estimateTokens` / `cropContentBlocks` / `trimTurns` 纯函数）、`export.mjs` 序列化纯函数（全量 + 增量尾部 + 格式预检）与 mock 集成路径（含 `export_claude`、`sync_to_claude` 与预算自适应导入——参数 / 环境变量 / 动态 / 默认解析、`trimmed` 上报、`budgetChanged`）。
 - **预期兼容（Expected）**：`dsh-tools ^0.1.0-rc.6`——`dsh 0.1.x` 线，与宿主安装使用同一区间。
 - **区间外（Out of band）**：`<0.1.0-rc.6` 与 `>=0.2.0` 未测试——`dsh` 主版本升级后先跑 headless 冒烟，再更新本矩阵。
 - **导出 / 写回门槛（Export / sync gate）**：`export_claude` / `sync_to_claude` 输出由单测 + mock 集成覆盖；用真实 Claude Code `--resume` 加载导出或写回文件是反向方向的发布门槛（写出的格式可能被 Claude Code 校验拒绝——依赖前务必实测）。

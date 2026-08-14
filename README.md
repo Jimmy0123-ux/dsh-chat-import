@@ -138,7 +138,20 @@ scan_discover({ path: "~/.codex/sessions", format: "codex", query: "import" })
 - `format` (optional) — restrict the scan to one format (`claude` / `codex` / `cursor` / `gemini` / `reasonix` / `opencode` / `zcode` / `grokbuild` / `openclaw` / `hermes` / `chatgpt`); omitted, formats are auto-detected from the path.
 - `query` (optional) — substring filter over title / project / path (case-insensitive).
 
-Returns `{ total, sessions }` where each entry is `{ format, sessionId, title, project, createdAt, lastActiveAt, messageCount, sourcePath, importStatus }` — `importStatus` is `imported` | `partial` | `not-imported`, resolved read-only from the imports registry. The scan is **zero side effects** (no `create` / `append`, no registry writes, no workspace attach), and results are cached in-process with a **30s TTL** (a same-key re-scan within 30s hits the cache without re-reading source files).
+Returns `{ total, sessions }` where each entry is `{ format, sessionId, title, project, createdAt, lastActiveAt, messageCount, sourcePath, importStatus }` — `importStatus` is `imported` | `partial` | `not-imported`, resolved read-only from the imports registry. The scan is **zero side effects** (no `create` / `append`, no registry writes, no workspace attach), and results are cached in-process with a **30s TTL** (a same-key re-scan within 30s hits the cache without re-reading source files). On top of that, **mtime/size bookmarks are persisted** to `scan-cache.json` under `$DSH_HOME/dsh-chat-import/` (the same directory as the imports registry): across process restarts, unchanged files are not re-scanned — writes are atomic, and a corrupted or missing cache falls back to a full scan without affecting results.
+
+### Imported-session listing & retract — list_imported_sessions / retract_import
+
+Identify what this plugin has imported, and retract it — **identification and guided manual deletion only; nothing is ever deleted** (the platform exposes no `sessionPersistence.remove` / `fs.removeFile` surface):
+
+```
+list_imported_sessions()
+retract_import({ sessionId: "import-019f5f27-…" })
+retract_import({ sourcePath: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl" })
+```
+
+- `list_imported_sessions()` — read-only enumeration of every DSH session imported by this plugin: each `list()` header's log is checked for the `session/imported` marker at `seq 0` (the authoritative signal; when a log cannot be read, the imports-registry `dshId` set is the fallback — sessions whose log reads cleanly but has no marker never appear). Every hit returns `{ sessionId, sourcePath, artifactPath, title?, importedAt? }` — `title` from the `session/title` event (omitted when there is no explicit title), `artifactPath` from `sessionPersistence.locate`. Zero side effects: nothing is written, the registry is untouched.
+- `retract_import({ sessionId })` or `retract_import({ sourcePath })` — removes the session's **imports-registry record** and returns the manual-delete guidance (`manualDelete`, the artifact path from `locate`). It never deletes the session or any artifact; the marker stays in the log, so re-retracting the same session is idempotent (`wasRegistered: false` on a repeat call). Removing the record alone does not yet allow a fresh full re-import — while the artifact copy still exists a re-import treats the source as an already-tracked legacy baseline and skips — **delete the artifact manually first, then re-import creates a genuinely fresh full copy**. Returns `{ removed: true, sourcePath, artifactPath, wasRegistered, manualDelete }`.
 
 ## 🔁 Incremental re-import
 
@@ -408,7 +421,7 @@ Hermes keeps its history at `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`). `sta
 | DSH → Claude Code | `export_claude` | ✅ unit + mock integration (`npm test`) |
 | DSH → Claude Code (incremental) | `sync_to_claude` | ✅ unit + mock integration (`npm test`) |
 
-- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (309 cases) covers the pure conversion logic (including the REQ-37 `estimateTokens` / `cropContentBlocks` / `trimTurns` pure functions), the pure `export.mjs` serializer (full + incremental tail + format pre-check), and mock integration paths for all eleven source formats plus `export_claude`, `sync_to_claude` and the budget-adaptive import (env / parameter / dynamic / default resolution, `trimmed` reporting, `budgetChanged`).
+- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (324 cases) covers the pure conversion logic (including the REQ-37 `estimateTokens` / `cropContentBlocks` / `trimTurns` pure functions), the pure `export.mjs` serializer (full + incremental tail + format pre-check), and mock integration paths for all eleven source formats plus `export_claude`, `sync_to_claude` and the budget-adaptive import (env / parameter / dynamic / default resolution, `trimmed` reporting, `budgetChanged`).
 - **Expected**: `dsh-tools ^0.1.0-rc.6` — the `dsh 0.1.x` line, the same range the host install uses.
 - **Out of band**: `<0.1.0-rc.6` and `>=0.2.0` are untested — after a `dsh` major upgrade, run a headless smoke test first, then update this matrix.
 - **Export / sync gate**: `export_claude` / `sync_to_claude` output is covered by unit + mock integration tests; loading an exported or synced file with real Claude Code `--resume` is the release gate for the reverse direction (the written format may be rejected by Claude Code's validator — validate before relying on it).

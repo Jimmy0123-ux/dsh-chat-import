@@ -13,6 +13,28 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Added
 
+- **Imported-session listing + retract guidance — `list_imported_sessions` /
+  `retract_import`** (REQ-33) — a new read-only pair of tools: `list_imported_sessions`
+  enumerates every DSH session imported by this plugin (the `session/imported`
+  marker at `seq 0` is the authoritative signal; the imports-registry `dshId` set
+  is the fallback when a session log cannot be read — sessions without a marker
+  never appear), returning `sessionId` / `title` (when an explicit title exists) /
+  `sourcePath` / `artifactPath` (`sessionPersistence.locate`) / `importedAt`;
+  `retract_import` (`sessionId` or `sourcePath`, one of the two) removes the
+  imports-registry record and returns the manual-delete artifact guidance
+  (`manualDelete`) — nothing is ever deleted, because the platform has no delete
+  surface (`sessionPersistence.remove` / `fs.removeFile` do not exist). The marker
+  stays in the log, so re-retracting the same session is idempotent
+  (`wasRegistered: false` on a repeat call); delete the artifact manually first,
+  then a re-import creates a genuinely fresh full copy.
+- **Persistent scan bookmarks — `scan_discover`** (REQ-40) — `scan_discover`
+  now persists mtime/size bookmarks to `scan-cache.json` under
+  `$DSH_HOME/dsh-chat-import/` (the same directory as the imports registry),
+  partitioned per format as `<sourcePath> → { mtimeMs, sizeBytes, entries }`:
+  unchanged files are not re-scanned across process restarts, on top of the
+  in-process 30s TTL cache. Writes are atomic (temp + fsync + rename); a
+  corrupted or missing cache falls back to a full scan with a warning and never
+  affects results.
 - **Automatic session discovery — `scan_discover`** (REQ-25) — a new
   read-only tool that scans the known data roots of all **11 source
   formats** (Claude / Codex / ChatGPT CLI / Cursor / Gemini / Reasonix /
