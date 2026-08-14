@@ -2359,10 +2359,13 @@ function apply(ctx) {
       return runScanDiscover(ctx, args, registryDir)
     },
   }))
-  // REQ-41 面板路由：webServer 是可选 host 服务，存在才注册 /api-import/* 路由；
-  // 缺失（headless / CI 冒烟）时 12 个导入工具照常可用，apply 不因缺服务失败。
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
+  // REQ-41 面板路由：webServer 是可选 host 服务且晚挂载——web 组合的服务插件在
+  // import-claude apply 之后才发布它，apply 时 ctx.get('webServer') 仍为空（实测
+  // 重启后 /api-import/* 一律 405）。用 ctx.inject(['webServer'], …) 在服务可用时
+  // 再注册路由（dsh 各包处理晚挂载依赖的标准姿势）：headless / CI 冒烟（无
+  // webServer）时回调永不执行，12 个导入工具照常可用，apply 不因缺服务失败。
+  ctx.inject(['webServer'], (webCtx) => {
+    const ws = webCtx.webServer
   // REQ-41 被动发现路由：POST /api-import/sessions（Browser 面板数据源，不新增工具）。
   // body: { source?, query?, path?, offset?, limit? }——source 是客户端来源 id
   // （SOURCE_FORMAT 映射到 discovery format；省略/空串 = 扫全部格式，面板「全部来源」
@@ -2370,8 +2373,8 @@ function apply(ctx) {
   // 钉扫描根，缺省扫该格式默认数据根）；offset/limit 提供时分页（limit 缺省不分页，
   // 返回全部，limit 字段 = 实际长度）。返回 discoverSessions 结果（{ok, sessions,
   // total, offset, limit}，total 为过滤后总数，供面板分页），错误返回 {ok:false,
-  // error}。webServer 由上方可选守卫保证非空（web 环境）。
-  webServer.register({
+  // error}。ws 由 ctx.inject 保证已挂载（web 环境）。
+  ws.register({
     kind: 'exact',
     path: '/api-import/sessions',
     handler: async (req, res) => {
@@ -2412,7 +2415,7 @@ function apply(ctx) {
   // resolveImportBudget 一次（批内共享，registry 记录同口径，预算变化 → budgetChanged
   // 跳过语义与 import_* 工具一致）。逐条错误不拖垮整批：条目级 {status:'failed',
   // error}。返回 { ok: true, results: [{ sourcePath, format, mode, ...摘要 }] }。
-  webServer.register({
+  ws.register({
     kind: 'exact',
     path: '/api-import/import',
     handler: async (req, res) => {
@@ -2470,6 +2473,7 @@ function apply(ctx) {
         res.end(JSON.stringify({ ok: false, error: String((err && err.message) || err) }))
       }
     },
+  })
   })
 }
 

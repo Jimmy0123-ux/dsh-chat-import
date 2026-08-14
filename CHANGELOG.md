@@ -55,11 +55,14 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   added `webServer` to the plugin's `inject` list, which made the whole plugin
   (all 12 import tools included) fail to activate in any dsh profile without a
   web server (headless CLI sessions, the CI headless smoke job). The
-  `/api-import/*` panel routes are now registered via `ctx.get('webServer')`
-  only when the service exists; without it the plugin applies normally and the
-  import tools stay available. Also regenerated `package-lock.json` so the
-  REQ-41 peer dependencies (`@deepseek-ai/dsh-client-locale`, `react`) are
-  recorded and `npm ci` stops failing with EUSAGE.
+  `/api-import/*` panel routes are now registered through
+  `ctx.inject(['webServer'], …)` — a callback Cordis starts once the service is
+  available — so routes appear in web profiles (including when the web-server
+  service mounts *after* this plugin's `apply`, which a plain `ctx.get` at apply
+  time misses) while headless profiles never run the callback and the import
+  tools stay available. Also regenerated `package-lock.json` so the REQ-41 peer
+  dependencies (`@deepseek-ai/dsh-client-locale`, `react`) are recorded and
+  `npm ci` stops failing with EUSAGE.
 
 ## [0.3.0] - 2026-08-14
 

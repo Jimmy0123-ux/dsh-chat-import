@@ -194,8 +194,9 @@ function makeCtx(tree, opts = {}) {
     async create(p) { const ws = { path: p, attachSession: async (id) => attached.push({ ws: p, id }) }; workspaces.set(p, ws); return ws },
   }
 
-  // webServer 是可选服务（REQ-41 路由经 ctx.get 注册）：opts.noWebServer 模拟
-  // headless / 无 Web 的 profile（get 返回 undefined，插件不注册路由但照常 apply）。
+  // webServer 是可选且晚挂载的服务（REQ-41 路由经 ctx.inject(['webServer']) 延迟
+  // 注册）：opts.noWebServer 模拟 headless / 无 Web 的 profile——inject 回调永不
+  // 执行，插件不注册路由但照常 apply。
   const webServerStub = {
     register(def) { webRoutes.push(def); return () => {} },
   }
@@ -209,6 +210,13 @@ function makeCtx(tree, opts = {}) {
       if (service === 'sessionPersistence') return persistence
       if (service === 'webServer') return opts.noWebServer ? undefined : webServerStub
       if (services[service] !== undefined) return services[service]
+      return undefined
+    },
+    // 模拟 Cordis ctx.inject：依赖可用（webServer 在场）才同步执行回调；缺依赖
+    // （noWebServer）时不执行——对齐真实 Cordis「依赖可用再启动回调」语义。
+    inject(serviceList, cb) {
+      const list = Array.isArray(serviceList) ? serviceList : Object.keys(serviceList || {})
+      if (list.every((s) => (s === 'webServer' ? !opts.noWebServer : true))) return cb(ctx)
       return undefined
     },
     tools: {
