@@ -15,6 +15,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import)](https://github.com/Nwflower/dsh-chat-import)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 **Listed in:** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import)
+**Changelog:** [CHANGELOG.md](CHANGELOG.md)
 
 `dsh-chat-import` turns your external agent chat history into **full-fidelity, resumable DeepSeek Harness sessions** — tool calls, reasoning and all. It reads transcripts **read-only** (never rewrites your source files), never touches the DSH engine, and appends every import as a fresh, event-balanced session log through the public `sessionPersistence` service, grouped into the workspace of its `cwd`.
 

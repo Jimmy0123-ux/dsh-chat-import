@@ -6,6 +6,7 @@
   "main": "./index.mjs",
   "exports": {
     ".": "./index.mjs",
+    "./CHANGELOG.md": "./CHANGELOG.md",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -15,6 +16,7 @@
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",
+    "CHANGELOG.md",
     "assets/import.svg",
     "LICENSE"
   ],

@@ -15,6 +15,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/Nwflower/dsh-chat-import)](https://github.com/Nwflower/dsh-chat-import)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 **已收录于：** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import)
+**更新日志（英文）：** [CHANGELOG.md](CHANGELOG.md)
 
 `dsh-chat-import` 把外部 Agent 的聊天记录变成 **全保真、可继续（resume）的 DeepSeek Harness 会话**——工具调用、思考过程一应俱全。它**只读**源文件（绝不改写你的原始记录）、不碰 DSH 引擎，每次导入都通过公开的 `sessionPersistence` 服务追加一条全新的、事件平衡的会话日志，并按源 `cwd` 挂接到对应工作区。
 
