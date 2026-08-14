@@ -95,16 +95,22 @@ function seedSession(persistence, { id, meta, events, readFromThrows = false }) 
 function makeCtx(persistence, tree) {
   const fsCalls = []
   const registered = []
+  // 跨平台分隔符归一（与 index.test.mjs makeCtx 同款）：树查找三态命中，防 CI（Linux）红
+  const norm = (p) => String(p).replace(/\\/g, '/')
+  const lookup = (p) => {
+    const f = norm(p)
+    return tree[p] ?? tree[f] ?? tree[f.replace(/\//g, '\\')]
+  }
   const fs = tree
     ? {
       async resolve(path) { return { targetKey: path, displayPath: path } },
       async stat(target) {
-        const v = tree[target.targetKey]
+        const v = lookup(target.targetKey)
         if (v === undefined) throw new Error('FS_NOT_FOUND ' + target.targetKey)
         return v === 'dir' ? { type: 'directory' } : { type: 'file', size: v.length, version: 'v' + v.length }
       },
       async readText(target) {
-        const v = tree[target.targetKey]
+        const v = lookup(target.targetKey)
         if (v === undefined) throw new Error('FS_NOT_FOUND ' + target.targetKey)
         return v
       },

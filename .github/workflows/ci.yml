@@ -22,6 +22,10 @@ jobs:
       - run: npm test
       # REQ-10：eslint flat config（无插件），与 test 同机跑，违规即红
       - run: npm run lint
+      # 跨平台路径纪律护栏（check-linux-compat）：mock 树查找必须分隔符归一、node:path
+      # 结果不得与写死反斜杠字面量比较——防「本地绿、Linux CI 红」的回归（2026-08-14
+      # 曾长期红：测试反斜杠合成路径 + posix join() 混合分隔符，mock 裸查找落空）
+      - run: npm run check:linux
       # 双语 README 结构同步护栏（REQ-06）：README.md 与 README.zh-CN.md 的
       # 标题层级序列与语言无关锚点键必须一致；某一版删/加/改标题即红（翻译差异不误报）
       - run: node .github/scripts/check-readme-sync.mjs

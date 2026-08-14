@@ -242,10 +242,17 @@ function makeMinCtx(tree) {
       s.events.push(...events)
     },
   }
+  // 跨平台分隔符归一（与 index.test.mjs makeCtx 同款）：代码 join() 在 Linux 对
+  // 反斜杠合成路径产混合分隔符，树查找必须三态归一，否则 CI（ubuntu）红。
+  const norm = (p) => String(p).replace(/\\/g, '/')
+  const lookup = (p) => {
+    const f = norm(p)
+    return tree[p] ?? tree[f] ?? tree[f.replace(/\//g, '\\')]
+  }
   const fs = {
     async resolve(path) { return { targetKey: path, displayPath: path } },
     async stat(target) {
-      const v = tree[target.targetKey]
+      const v = lookup(target.targetKey)
       if (v === undefined) return undefined
       if (v === 'dir') return { type: 'directory' }
       let h = 0
@@ -253,19 +260,19 @@ function makeMinCtx(tree) {
       return { type: 'file', size: v.length, version: 'v' + h }
     },
     async readText(target) {
-      const v = tree[target.targetKey]
+      const v = lookup(target.targetKey)
       if (v === undefined || v === 'dir') throw new Error('FS_NOT_FOUND ' + target.targetKey)
       return v
     },
     async listDir(target) {
-      const prefix = target.targetKey.endsWith('\\') ? target.targetKey : target.targetKey + '\\'
+      const prefix = norm(target.targetKey).replace(/\/+$/, '') + '/'
       const entries = []
       for (const [path, v] of Object.entries(tree)) {
-        if (!path.startsWith(prefix) || path === prefix) continue
-        const rest = path.slice(prefix.length)
-        if (!rest.includes('\\')) {
-          entries.push({ name: rest, type: v === 'dir' ? 'directory' : 'file', target: { targetKey: path, displayPath: path }, version: 1 })
-        }
+        const np = norm(path)
+        if (!np.startsWith(prefix) || np === prefix) continue
+        const rest = np.slice(prefix.length)
+        if (rest.includes('/')) continue
+        entries.push({ name: rest, type: v === 'dir' ? 'directory' : 'file', target: { targetKey: path, displayPath: path }, version: 1 })
       }
       return entries.sort((a, b) => a.name.localeCompare(b.name))
     },

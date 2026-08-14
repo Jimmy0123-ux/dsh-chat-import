@@ -41,6 +41,7 @@ dev/             ❌ 本地工程面：HANDOFF.md、GROWTH.md、脚本（bin/）
 
 ```sh
 npm test        # node --test 跑 test/*.test.mjs（convert 单测 + export 单测 + index mock 集成 + zcode 自包含）
+npm run check:linux   # 跨平台路径纪律静态检查（.github/scripts/check-linux-compat.mjs，CI 同款护栏）
 ```
 
 无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` / `export.mjs` / `lib/` 即发布产物（`lib/client.js` 是手写 CJS bundle，亦无构建）。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调任一 `import_*`（12 个）/ `scan_discover` / `export_claude` / `sync_to_claude` / `list_imported_sessions` / `retract_import`；Browser 侧验证：dsh web 侧边栏底部「导入会话」按钮 → 面板按工作区分组浏览 + 单选/多选导入。
@@ -51,8 +52,9 @@ npm test        # node --test 跑 test/*.test.mjs（convert 单测 + export 单�
 - **一个逻辑变更一个 commit**：不混改（重构不带新功能，修 bug 不带 docs），不提交 WIP / 中间态。
 - **提交前必过**：
   1. `npm test` 全绿；
-  2. `git status` 无杂物（`dev/`、`node_modules/`、快照不得出现在待提交里）；
-  3. `git diff --cached --check` 无空白错误。
+  2. `npm run check:linux` 全绿（跨平台路径纪律护栏，见质量约定）；
+  3. `git status` 无杂物（`dev/`、`node_modules/`、快照不得出现在待提交里）；
+  4. `git diff --cached --check` 无空白错误。
 - **行为变更同 commit 更新 README 与测试**：README 是对外契约，测试描述现有行为；改行为必须连测试一起改，并在 commit 信息里说明为什么。
 - 提交信息说明「为什么」而非复述代码；指向关联 issue/PR 编号。
 - push 前自查：`git log --oneline` 每一条都是一个完整、可读的逻辑单元；工作树干净。
@@ -95,6 +97,7 @@ npm test        # node --test 跑 test/*.test.mjs（convert 单测 + export 单�
 - 文件以**恰好一个**换行结尾；空 `catch` 必须说明吞掉什么且 `try` 只包一条语句；不注释代码里显而易见的事实。
 - 保持 `lib/convert/*`（含 `convert.mjs` re-export shim）零依赖纯函数：任何 DSH 依赖只允许出现在 `index.mjs` 与 `lib/{imports,backfill,opencode,zcode,hermes,discovery,budget,import-core,import-variants,toolkit,export-tool,retract,discovery-host,panel,tools}.mjs`（即所有消费 ctx 的 host 面模块）。
 - 测试描述行为而非背书正确性；fixtures 用合成数据，永不掺真实 transcript。
+- **跨平台路径纪律（防 CI 红，`npm run check:linux` 护栏）**：CI 在 Linux 跑 `npm test`，测试里的反斜杠合成路径经代码 `node:path` 运算在 posix 下行为不同（`join()` 产混合分隔符、`dirname('D:\…')` 返 `'.'`）。规则：mock 树查找（`stat`/`readText`/`listDir` 读树）必须做分隔符归一（复用 `index.test.mjs` makeCtx 的 `norm` + `lookup` 三态命中）；断言若比较 `node:path` 运算结果，期望值用同口径函数计算，绝不写死 `'X:\…'` 字面量；新增导入测试优先用真实临时目录（`mkdtemp`）。
 - 不写行内文档废话：注释写契约与上下文，不叙述控制流。
 
 ## 编辑本文件

@@ -35,6 +35,18 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Changed
 
+- **Cross-platform path discipline guard — `npm run check:linux`** — CI's
+  `npm test` (ubuntu / node 22) used to stay red while the suite passed on
+  Windows: tests build synthetic trees with backslash paths while the code's
+  `join()` produces mixed separators under posix, so bare mock `tree[key]`
+  lookups missed on Linux, and assertions compared `node:path` results against
+  hardcoded `X:\…` literals. The new static guard (`.github/scripts/
+  check-linux-compat.mjs`, run in CI after lint) fails on those two
+  anti-patterns; all mock `stat`/`readText`/`listDir` lookups now normalize
+  separators (three-way `norm` + `lookup`, uniform across `index`/`req26`/
+  `req33`/`zcode` test mocks). Also documented in `AGENTS.md` (命令 /
+  提交纪律 / 质量约定) and available as a local pre-push hook
+  (`git config core.hooksPath dev/hooks`).
 - **Sidebar trigger restyled to match the Settings entry, with the plugin logo
   as its icon** — the floating **导入会话** trigger (fixed overlay so the
   full-width Cordis badge can never squeeze it out) now uses the same visual

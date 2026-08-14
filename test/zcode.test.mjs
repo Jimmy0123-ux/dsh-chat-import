@@ -69,11 +69,17 @@ function makeCtx(tree = {}) {
   const attached = []
   const workspaces = new Map()
   const registered = []
+  // 跨平台分隔符归一（与 index.test.mjs makeCtx 同款）：树查找三态命中，防 CI（Linux）红
+  const norm = (p) => String(p).replace(/\\/g, '/')
+  const lookup = (p) => {
+    const f = norm(p)
+    return tree[p] ?? tree[f] ?? tree[f.replace(/\//g, '\\')]
+  }
   const fs = {
     async resolve(path) { return { targetKey: path, displayPath: path } },
     async stat(target) {
       const path = target.targetKey
-      const v = tree[path]
+      const v = lookup(path)
       if (v !== undefined) {
         return v === 'dir' ? { type: 'directory' } : { type: 'file', size: v.length, version: contentVersion(v) }
       }
@@ -86,7 +92,7 @@ function makeCtx(tree = {}) {
       }
     },
     async readText(target) {
-      const v = tree[target.targetKey]
+      const v = lookup(target.targetKey)
       if (v === undefined || v === 'dir') throw new Error('FS_NOT_FOUND ' + target.targetKey)
       return v
     },
