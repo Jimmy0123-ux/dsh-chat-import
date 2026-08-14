@@ -20,6 +20,8 @@ jobs:
       # 严格按 package-lock.json 复现依赖树（与 npm install 不同，lockfile 与 package.json 不一致时直接失败）
       - run: npm ci --no-audit --no-fund
       - run: npm test
+      # REQ-10：eslint flat config（无插件），与 test 同机跑，违规即红
+      - run: npm run lint
       # 双语 README 结构同步护栏（REQ-06）：README.md 与 README.zh-CN.md 的
       # 标题层级序列与语言无关锚点键必须一致；某一版删/加/改标题即红（翻译差异不误报）
       - run: node .github/scripts/check-readme-sync.mjs

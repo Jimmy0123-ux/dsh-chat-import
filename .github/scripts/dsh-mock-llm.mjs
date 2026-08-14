@@ -17,8 +17,7 @@ createServer((req, res) => {
     return
   }
   if (req.method === 'POST' && req.url === '/chat/completions') {
-    let body = ''
-    req.on('data', (c) => { body += c })
+    req.resume() // mock 不读请求体，丢弃即可
     req.on('end', () => {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
       res.write(sse('chatcmpl-smoke', { role: 'assistant', content: 'smoke ok' }, null))

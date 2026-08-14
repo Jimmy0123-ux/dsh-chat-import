@@ -62,7 +62,11 @@
   },
   "scripts": {
     "test": "node --test \"test/*.test.mjs\"",
+    "lint": "eslint .",
     "prepublishOnly": "npm test && git diff --quiet && git diff --cached --quiet && npm pack --dry-run"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^10.8.1"
+  }
 }

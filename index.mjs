@@ -205,7 +205,7 @@ async function importChatgptFile(ctx, target, args, { registryDir, persisted } =
     const subs = Object.values(known.conversations)
     const allPersisted = subs.length > 0 && subs.every((sub) => persistedSet.has(sub.dshId))
     if (allPersisted && stat && stat.version === known.version && stat.size === known.sizeBytes) {
-      const results = Object.entries(known.conversations).map(([key, sub]) => ({
+      const results = Object.entries(known.conversations).map(([, sub]) => ({
         path, status: 'already-imported', sessionId: sub.dshId, turns: sub.turns, messages: 0, toolCalls: 0, skipped: 0,
       }))
       return { total: results.length, imported: 0, alreadyImported: results.length, appended: 0, skipped: 0, failed: 0, results }
@@ -366,7 +366,7 @@ async function importOpencodeFile(ctx, target, args, { registryDir, persisted } 
     const subs = Object.values(known.sessions)
     const allPersisted = subs.length > 0 && subs.every((sub) => persistedSet.has(sub.dshId))
     if (allPersisted) {
-      const skipResults = () => Object.entries(known.sessions).map(([key, sub]) => ({
+      const skipResults = () => Object.entries(known.sessions).map(([, sub]) => ({
         path, status: 'already-imported', sessionId: sub.dshId, turns: sub.turns, messages: 0, toolCalls: 0, skipped: 0,
       }))
       if (typeof known.args === 'string' && fingerprint !== known.args) {
