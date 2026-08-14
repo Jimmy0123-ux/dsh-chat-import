@@ -17,9 +17,9 @@
 **Listed in:** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import)
 **Changelog:** [CHANGELOG.md](CHANGELOG.md)
 
-`dsh-chat-import` turns your external agent chat history into **full-fidelity, resumable DeepSeek Harness sessions** — tool calls, reasoning and all. It reads transcripts **read-only** (never rewrites your source files), never touches the DSH engine, and appends every import as a fresh, event-balanced session log through the public `sessionPersistence` service, grouped into the workspace of its `cwd`.
+`dsh-chat-import` turns your external agent chat history into **full-fidelity, resumable DeepSeek Harness sessions** — tool calls, reasoning and all. It reads transcripts **read-only** (never rewrites your source files), never touches the DSH engine, and appends every import as a fresh, event-balanced session log through the public `sessionPersistence` service, grouped into the workspace of its `cwd`. It also works in reverse: `export_claude` serializes a DSH session back into a Claude Code JSONL transcript (read-only — your DSH log is never modified) that Claude Code can load with `--resume`.
 
-`7 sources` · `Copy-only` · `Seamlessly resumable` · `Auto workspace grouping`
+`7 sources` · `Import + export` · `Seamlessly resumable` · `Auto workspace grouping`
 
 ## ✨ Features
 
@@ -28,6 +28,7 @@
 - **▶️ Seamlessly resumable** — every import synthesizes a balanced, loadable session (`turn/start` → `step/start` → `user/message` → `assistant/message` → `tool/call`/`tool/result` → `step/end` → `turn/end`): open it and keep chatting.
 - **🗂 Auto workspace grouping** — sessions land in the workspace of their source `cwd` (no more "ungrouped"); session id, title, model and creation time are preserved where the source records them.
 - **🔁 Idempotent + incremental** — re-importing an unchanged source skips it without re-reading the file; a grown source appends only its **new turns** to the same DSH session (`seq` continues, nothing already imported is rewritten); a truncated source is detected (`sourceShrunk`) and reported without touching the imported session; malformed lines are counted and reported, never aborting the import.
+- **📤 Export back to Claude Code** — `export_claude` serializes any DSH session (imported or native) into Claude Code JSONL at `<outputDir>/<slug>/<uuid>.jsonl`, ready for `--resume`: user / assistant / tool calls & results, thinking blocks and the session title are rebuilt in the Claude record layout.
 - **📦 Batch import** — point at a directory (or the whole opencode DB) and every file / conversation becomes its own session, with a per-file summary.
 
 ## 🚀 Quick start
@@ -48,7 +49,7 @@ import_claude({ path: "~/.claude/projects" })
 
 3. Refresh the session list once, open the imported session, and continue chatting — it resumes exactly where the source left off.
 
-## 🗂 What can I import?
+## 🗂 What can I import / export?
 
 | Source | Storage location | Import tool |
 | --- | --- | --- |
@@ -102,6 +103,24 @@ Re-importing the **same source path** never rewrites imported history — it fol
 | import args changed (e.g. opencode `fullHistory`) | skipped + `argsChanged` |
 
 The registry record stores `{ kind, dshId, turns, events, sizeBytes, version, args, importedAt }` (multi-session sources keep a per-conversation / per-session sub-table); it tolerates a missing or corrupted file (falls back to an empty registry and re-records on the next import). All registry writes are atomic (temp + fsync + rename) and serialized in-process, and use `node:fs/promises` directly — never `ctx.fs`, whose sandbox would refuse writes under `~/.dsh`.
+
+## 📤 Export — DSH → Claude Code JSONL
+
+The reverse direction: `export_claude` serializes an existing DSH session — imported or native — into a Claude Code JSONL transcript that Claude Code can load with `--resume`. The session log is read **read-only** via `sessionPersistence` (`list` + `readFrom`, never `load` / `prepare`, never rewritten):
+
+```
+export_claude({ sessionId: "import-019f5f27-…" })
+export_claude({ sessionId: "…", cwd: "D:\work\proj", outputDir: "D:\backup\claude-projects", dryRun: true })
+```
+
+- `sessionId` (required) — the DSH session to export.
+- `cwd` (optional) — overrides the session's header `cwd`; defaults to the header value, and the export fails when neither exists.
+- `outputDir` (optional) — the Claude Code `projects` root; defaults to `~/.claude/projects`. The file is written to `<outputDir>/<slug>/<uuid>.jsonl` — the same `<slug>/<uuid>.jsonl` layout Claude Code uses (the file name is a fresh UUID v4, and writes use `createIfAbsent`, so an existing file is never overwritten).
+- `dryRun` (optional) — serialize and return the target path and statistics without writing.
+
+The exporter rebuilds the Claude record sequence from the DSH event log in `seq` order: a `mode` + `permission-mode` header, then `user` / `assistant` / `tool_result` records — tool results chained to the assistant that declared their `tool_use` (`parentUuid` / `sourceToolAssistantUUID`, so parallel results fan out to the same assistant), an `ai-title` record from the session title, `thinking` blocks from `reasoning` (with an empty `signature`), and `tool_use` input parsed from the call arguments. Interrupted sessions get a trailing empty `tool_result` for calls that never returned; orphan results with no matching call are dropped and counted. The return value carries a `mapping` object (source session id → new UUID, file path, record counts) reserved for the upcoming reverse-sync registry.
+
+**Boundaries:** exported `thinking` blocks carry an empty `signature` — Claude Code drops such thinking blocks when resuming (documented degradation). User messages whose source is not a direct human prompt are skipped and counted (`skippedInjections`); non-text content blocks (e.g. images) are skipped and counted (`skippedBlocks`). Writing outside the workspace requires the session sandbox to allow the target path.
 
 ## 🧩 Data model
 
@@ -229,18 +248,21 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 | Gemini CLI | `import_gemini` | ✅ unit + mock integration (`npm test`) |
 | Reasonix | `import_reasonix` | ✅ unit + mock integration (`npm test`); dry-run on 55 real sessions |
 | opencode | `import_opencode` | ✅ unit + mock integration (`npm test`) |
+| DSH → Claude Code | `export_claude` | ✅ unit + mock integration (`npm test`) |
 
-- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (109 cases) covers the pure conversion logic and mock integration paths for all seven source formats.
+- **Tested**: `dsh 0.1.0-rc.6` + `dsh-tools 0.1.0-rc.6` — full "import → resume → workspace attach" run on the web profile (2026-08); `npm test` (136 cases) covers the pure conversion logic, the pure `export.mjs` serializer, and mock integration paths for all seven source formats plus `export_claude`.
 - **Expected**: `dsh-tools ^0.1.0-rc.6` — the `dsh 0.1.x` line, the same range the host install uses.
 - **Out of band**: `<0.1.0-rc.6` and `>=0.2.0` are untested — after a `dsh` major upgrade, run a headless smoke test first, then update this matrix.
+- **Export gate**: `export_claude` output is covered by unit + mock integration tests; loading an exported file with real Claude Code `--resume` is the release gate for the reverse direction (the exported format may be rejected by Claude Code's validator — validate before relying on it).
 
 ## 🔒 Safety & boundaries
 
-- Source transcripts are read-only, never rewritten; DSH history events are append-only (deep-frozen) — new events are added, existing ones are never modified.
+- Source transcripts are read-only, never rewritten; DSH history events are append-only (deep-frozen) — new events are added, existing ones are never modified. `export_claude` reads the session log read-only and never modifies it.
 - The plugin never modifies the DSH engine, apiproxy, or official UI packages; it publishes no services, so no isolate realm is needed.
-- Reading transcripts outside the workspace requires the session sandbox to allow access to that path.
+- Reading transcripts outside the workspace requires the session sandbox to allow access to that path; exporting writes `<outputDir>/<slug>/<uuid>.jsonl`, so a target outside the workspace likewise requires the session sandbox to allow it.
 - Known boundaries: `permission` / `summary` auxiliary records are not imported; `tool_result` with `is_error` keeps the error flag but drops fields beyond `message.content`; Claude subagent / workflow fragment transcripts are skipped (only the main `<sessionId>.jsonl` becomes a session) and a `tool_result` with no matching `tool_use` is dropped and counted (`droppedToolResults`); Codex `reasoning` is encrypted and skipped; ChatGPT exports rebuild only the main thread (branch = last child) and tool messages degrade to text blocks on the nearest step (exports carry no structured tool calls, so no orphan `tool/result` is produced); Cursor transcripts have no `tool_result` (every call gets a synthesized empty `tool/result`) and `[REDACTED]` text is filtered; Gemini follows the format observed 2026-04 (no stable official schema); Reasonix reads the JSONL checkpoint (the V2 WAL is excluded); opencode `patch` parts carry no diff (placeholder `[patch: <N> files]` only) and tool output may keep ANSI escapes verbatim.
 - **Re-import after this fix:** already-imported sessions are immutable logs — the plugin never rewrites existing history. Growth is appended incrementally; sessions imported by an older version that lack the call/result pairing cannot be repaired in place (delete the stale session and re-import to pick up the pairing invariant). A source that shrank (`sourceShrunk`) or changed inside already-imported turns (`changedInPlace`) is skipped and reported — `force: true` gives a complete fresh copy.
+- **Export boundaries:** exported `thinking` blocks carry an empty `signature` (Claude Code drops such thinking on resume — documented degradation); non-human prompt injections and non-text content blocks (e.g. images) are skipped and counted (`skippedInjections` / `skippedBlocks`); orphan `tool_result` records with no matching `tool/call` in the DSH log are dropped and counted (`droppedToolResults`); interrupted sessions get a trailing empty `tool_result`.
 
 ## 🧪 Tests
 
@@ -248,7 +270,7 @@ Reads the `session` / `message` / `part` tables of `~/.local/share/opencode/open
 npm test
 ```
 
-`test/convert.test.mjs` covers the pure conversion logic for all seven source formats (turn balance, tool linkage, titles, malformed lines, injection filtering, dedup, mapping branches, REDACTED filtering, inline tool results, v1/v2 tool-call shapes, opencode part mapping and model fallback); `test/index.test.mjs` runs the full `apply → execute` path with mock `fs` / `sessionPersistence` / `tools` / `workspaceRegistry` (and a real SQLite temp DB for `import_opencode`) and validates the return value against the output schema.
+`test/convert.test.mjs` covers the pure conversion logic for all seven source formats (turn balance, tool linkage, titles, malformed lines, injection filtering, dedup, mapping branches, REDACTED filtering, inline tool results, v1/v2 tool-call shapes, opencode part mapping and model fallback); `test/export.test.mjs` covers the pure `export.mjs` serializer (record mapping, tool pairing, parallel fan-out, cross-step results, trailing empty results, orphan dropping, injection skipping, slugify, deterministic uuids, timestamps); `test/index.test.mjs` runs the full `apply → execute` path with mock `fs` / `sessionPersistence` / `tools` / `workspaceRegistry` (and a real SQLite temp DB for `import_opencode`) and validates the return value against the output schema.
 
 ## 📦 Install & uninstall
 

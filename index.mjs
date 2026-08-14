@@ -1,16 +1,21 @@
 // index.mjs — 外部聊天记录（Claude Code / Codex-ChatGPT / ChatGPT / Cursor /
-// Gemini / Reasonix / opencode）→ DSH 会话导入器
+// Gemini / Reasonix / opencode）→ DSH 会话导入器 + DSH → Claude Code JSONL 反向导出
 //
 // 消费 host 的 sessionPersistence / fs / tools / workspaceRegistry 服务，注册
 // `import_claude` 等导入工具：读取各自源格式的 transcript（单个文件或整个目录；
 // opencode 直接读 SQLite 库），把对话合成 DSH 事件日志（turn/start、step/start、
 // user/message、assistant/message、tool/call、tool/result、step/end、turn/end），
-// 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区。
+// 经 sessionPersistence.create + append 落盘，再挂接到其 cwd 对应的工作区；
+// 并注册 `export_claude`（REQ-16）：把 DSH 会话日志只读序列化为 Claude Code
+// JSONL（export.mjs 纯函数），写到 <outputDir>/<slug>/<uuid>.jsonl。
 
+import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertOpencodeJson } from './convert.mjs'
+import { slugifyClaudeCwd, serializeClaudeJsonl } from './export.mjs'
 import { resolveRegistryDir, loadImports, rememberImport, unwrapRecord, listPersistedIds, argsFingerprint, isSessionIdChange, decideSingle, decideMulti } from './lib/imports.mjs'
 
 const name = 'import-claude'
@@ -616,6 +621,59 @@ function makeImportTool(ctx, { toolName, sourceLabel, convert, description, impo
   })
 }
 
+// 反向导出（REQ-16）：把 DSH 会话日志只读序列化为 Claude Code JSONL。
+// 只消费 sessionPersistence（list + readFrom）+ fs（resolve + writeText），
+// 绝不 load/prepare、绝不改写会话日志（append-only 只读来源）。文件写到
+// <outputDir>/<slug>/<uuid>.jsonl（新 uuid v4 铸键 + createIfAbsent 不覆盖双保险；
+// dryRun 不写盘）。uuid 工厂可注入（测试确定性），默认 randomUUID。
+// 返回中的 mapping 是 REQ-24/36 imports registry 的预留形状（sourceSessionId →
+// 新 uuid、文件路径、记录计数），本任务只定义形状、不落库。
+async function exportClaudeSession(ctx, args, { uuid = randomUUID } = {}) {
+  const sp = ctx.get('sessionPersistence')
+  if (!sp || typeof sp.list !== 'function' || typeof sp.readFrom !== 'function') {
+    throw new Error('sessionPersistence 不可用（需要 list + readFrom）')
+  }
+  const headers = await sp.list()
+  const header = headers.find((h) => h.id === args.sessionId)
+  if (!header) throw new Error('会话不存在: ' + args.sessionId)
+  const { meta, events } = await sp.readFrom(args.sessionId, 0)
+  const cwd = typeof args.cwd === 'string' && args.cwd ? args.cwd : header.cwd
+  if (typeof cwd !== 'string' || !cwd) {
+    throw new Error('导出需要 cwd：会话 header 无 cwd 且未提供 cwd 参数')
+  }
+  const sessionUuid = uuid()
+  const slug = slugifyClaudeCwd(cwd)
+  const out = serializeClaudeJsonl({ meta, events, sessionUuid, cwd, version: args.version, gitBranch: args.gitBranch }, { uuid })
+  const filePath = join(args.outputDir || join(homedir(), '.claude', 'projects'), slug, sessionUuid + '.jsonl')
+  if (args.dryRun !== true) {
+    const target = await ctx.fs.resolve(filePath)
+    await ctx.fs.writeText(target, out.jsonl, { kind: 'createIfAbsent', displayPath: filePath })
+  }
+  return {
+    mode: 'single',
+    sessionId: sessionUuid,
+    sourceSessionId: args.sessionId,
+    filePath,
+    slug,
+    cwd,
+    recordCount: out.recordCount,
+    ...(out.title ? { title: out.title } : {}),
+    dryRun: args.dryRun === true,
+    mapping: {
+      sourceSessionId: args.sessionId,
+      sessionUuid,
+      slug,
+      filePath,
+      turns: (events ?? []).filter((e) => e && e.type === 'turn/start').length,
+      messages: (events ?? []).filter((e) => e && (e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result')).length,
+      toolCalls: out.toolCalls,
+      toolResults: out.toolResults,
+      droppedToolResults: out.droppedToolResults,
+      skippedInjections: out.skippedInjections,
+    },
+  }
+}
+
 function apply(ctx) {
   // REQ-24 imports registry 目录：$DSH_HOME/dsh-chat-import（$DSH_HOME 缺省 ~/.dsh）
   const registryDir = resolveRegistryDir()
@@ -760,6 +818,80 @@ function apply(ctx) {
       '默认尊重对话压缩（compaction，只导最后一次摘要+尾巴，摘要作 reasoning 块前置），可选 fullHistory 导全量；' +
       '可选 sessionIds 只导指定源会话；重复导入同一会话会幂等跳过。返回批量统计与逐会话明细。',
   }))
+  // REQ-16 反向导出：第 8 个工具，独立注册（导出流程与导入状态机完全不同）。
+  ctx.tools.register(defineTool({
+    name: 'export_claude',
+    description:
+      '把 DSH 会话日志（只读，不 load/prepare、不改写历史事件）序列化为 Claude Code JSONL 并写入 ' +
+      '<outputDir>/<slug>/<uuid>.jsonl，可被真实 Claude Code --resume 续聊。' +
+      '参数：sessionId 必填；cwd 可选（默认取会话 header.cwd，两者皆无则报错）；' +
+      'outputDir 可选（默认 ~/.claude/projects）；dryRun 可选（只序列化不写盘）。' +
+      'user/assistant/tool_result 按 seq 顺序映射，tool_result 挂在声明其 tool_use 的 assistant 上（' +
+      '并行结果扇出同一 assistant）；中断会话末尾补发空 tool_result；孤儿结果丢弃并计数；' +
+      '非人类注入跳过计数。返回目标文件路径、记录数与 mapping（sourceSessionId → 新 uuid，imports registry 预留）。',
+    parameters: {
+      sessionId: {
+        type: 'string',
+        required: true,
+        description: '要导出的 DSH 会话 id（必填）。',
+      },
+      cwd: {
+        type: 'string',
+        description: '可选：覆盖导出记录的 cwd（默认取会话 header.cwd；两者皆无则报错）。',
+      },
+      outputDir: {
+        type: 'string',
+        description: '可选：Claude Code projects 根目录（默认 ~/.claude/projects），文件写到 <outputDir>/<slug>/<uuid>.jsonl。',
+      },
+      dryRun: {
+        type: 'boolean',
+        description: '可选：true 时不写盘，只序列化并返回目标路径与统计。',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          mode: { type: 'string', enum: ['single'], required: true },
+          sessionId: { type: 'string', required: true },
+          sourceSessionId: { type: 'string', required: true },
+          filePath: { type: 'string', required: true },
+          slug: { type: 'string', required: true },
+          cwd: { type: 'string', required: true },
+          recordCount: { type: 'integer', required: true },
+          title: { type: 'string' },
+          dryRun: { type: 'boolean', required: true },
+          mapping: {
+            type: 'object',
+            additionalProperties: false,
+            required: true,
+            properties: {
+              sourceSessionId: { type: 'string', required: true },
+              sessionUuid: { type: 'string', required: true },
+              slug: { type: 'string', required: true },
+              filePath: { type: 'string', required: true },
+              turns: { type: 'integer', required: true },
+              messages: { type: 'integer', required: true },
+              toolCalls: { type: 'integer', required: true },
+              toolResults: { type: 'integer', required: true },
+              droppedToolResults: { type: 'integer', required: true },
+              skippedInjections: { type: 'integer', required: true },
+            },
+          },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: (value.dryRun ? '导出预览（dryRun，未写盘）：' : '已导出：')
+          + '会话 ' + value.sourceSessionId + ' → ' + value.filePath
+          + '（' + value.recordCount + ' 条记录、' + value.mapping.toolCalls + ' 次工具调用）',
+      }],
+    },
+    async execute(args) {
+      return exportClaudeSession(ctx, args)
+    },
+  }))
 }
 
-export { apply, inject, name, readOpencodeDb }
+export { apply, inject, name, readOpencodeDb, exportClaudeSession }

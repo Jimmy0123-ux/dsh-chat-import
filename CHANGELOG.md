@@ -47,6 +47,23 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   `appendedSkipped`, `sourceShrunk`, `changedInPlace`, `argsChanged`,
   `backfilled`, `forceImported` and `droppedBoundaryResults`; batch mode gains
   an `appended` counter, `appended` result status and `missingFromSource`.
+- **Reverse export — `export_claude`** (REQ-16) — serializes an existing DSH
+  session (imported or native, read-only via `sessionPersistence.list` +
+  `readFrom`, never `load`/`prepare`, never rewritten) into a Claude Code
+  JSONL transcript at `<outputDir>/<slug>/<uuid>.jsonl` (fresh UUID v4 file
+  name plus a `createIfAbsent` write guard so an existing file is never
+  overwritten; `dryRun` support). The pure serializer lives in the new
+  `export.mjs` (zero DSH deps, injectable uuid for deterministic tests):
+  user / assistant / `tool_result` records in `seq` order, tool results
+  chained to the declaring assistant (`parentUuid` /
+  `sourceToolAssistantUUID`, parallel results fan out to the same assistant),
+  `thinking` from `reasoning` (empty `signature`), `ai-title` from the session
+  title, trailing empty `tool_result` for interrupted calls, orphan results
+  dropped and counted (`droppedToolResults`), non-human injections skipped and
+  counted (`skippedInjections`), non-text blocks skipped and counted
+  (`skippedBlocks`). The tool return carries a `mapping` shape
+  (sourceSessionId → new UUID, file path, record counts) reserved for the
+  reverse-sync registry (REQ-24/36).
 
 ### Changed
 

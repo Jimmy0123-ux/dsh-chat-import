@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { apply, readOpencodeDb } from '../index.mjs'
+import { apply, readOpencodeDb, exportClaudeSession } from '../index.mjs'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { resolveRegistryDir, loadImports } from '../lib/imports.mjs'
 
@@ -90,6 +90,12 @@ function makePersistence() {
       if (!s) throw new Error('unknown session ' + id)
       return { meta: s.meta, events: s.events }
     },
+    // REQ-16 导出只读面：readFrom(id, fromSeq) 返回 { meta, events }（不 load/prepare）
+    async readFrom(id, fromSeq = 0) {
+      const s = sessions.get(id)
+      if (!s) throw new Error('unknown session ' + id)
+      return { meta: s.meta, events: s.events.slice(fromSeq) }
+    },
   }
 }
 
@@ -101,9 +107,21 @@ function makeCtx(tree) {
   const registered = []
   const entriesCache = new Map()
   const reads = { count: 0 }
+  const writes = [] // export_claude 的写盘记录（{ path, content, options }）
 
   const fs = {
     async resolve(path) { return { targetKey: path, displayPath: path } },
+    // REQ-16 导出写面：createIfAbsent 对已存在（tree 已 seed 或已写过）路径抛 EEXIST，
+    // 模拟「新 uuid + createIfAbsent 不覆盖」双保险的第二道闸
+    async writeText(target, content, options) {
+      const path = target.targetKey
+      if (options && options.kind === 'createIfAbsent' && tree[path] !== undefined) {
+        throw Object.assign(new Error('EEXIST ' + path), { code: 'EEXIST' })
+      }
+      tree[path] = content
+      writes.push({ path, content, options })
+      return { path }
+    },
     async stat(target) {
       const v = tree[target.targetKey]
       if (v !== undefined) {
@@ -168,7 +186,7 @@ function makeCtx(tree) {
   }
   // 测试辅助：按名字取出注册的工具定义
   ctx.tools.registered = (toolName) => registered.find((d) => d.name === toolName)
-  return { ctx, persistence, attached, registered, reads }
+  return { ctx, persistence, attached, registered, reads, writes }
 }
 
 // REQ-32：导入会话日志首事件为 session/imported 标记（seq 0、ignorable），
@@ -185,16 +203,22 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册七个导入工具（single + batch 输出 schema）', () => {
+test('apply 注册八个工具（7 导入 + export_claude）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 7)
+  assert.equal(registered.length, 8)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_opencode', 'import_reasonix'])
+  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_opencode', 'import_reasonix'])
   for (const def of registered) {
-    // 输出 schema 是 oneOf（单文件 / 批量）
-    assert.ok(Array.isArray(def.output.schema.oneOf))
-    assert.equal(def.output.schema.oneOf.length, 2)
+    if (def.name === 'export_claude') {
+      // 导出工具：单对象输出 schema（非 oneOf）
+      assert.equal(def.output.schema.type, 'object')
+      assert.ok(!Array.isArray(def.output.schema.oneOf))
+    } else {
+      // 导入工具：输出 schema 是 oneOf（单文件 / 批量）
+      assert.ok(Array.isArray(def.output.schema.oneOf))
+      assert.equal(def.output.schema.oneOf.length, 2)
+    }
   }
 })
 
@@ -1354,6 +1378,234 @@ test('REQ-24 opencode 未变 DB：短路径跳过（version/size 不变）', asy
   assert.equal(second.imported, 0)
   assert.equal(second.alreadyImported, 2)
   assert.equal(persistence.sessions.size, 2)
+})
+
+// ---- export_claude 集成（REQ-16 反向导出） ----
+
+// 直接在 mock persistence 里 seed 合成会话（精确控制事件形状，绕过导入转换）。
+async function seedSession(persistence, id, meta, events) {
+  await persistence.create(meta)
+  await persistence.append(id, events)
+}
+
+// 合成 DSH 事件（形状对齐真实日志：surface 事件带 surfaceOp:'append'）。
+function mkEvent(type, seq, time, data, extra = {}) {
+  return { type, seq, time, data, ...extra }
+}
+
+const OUT = join('C:', 'Users', 'test', '.claude', 'projects') // 跨平台 join，避免分隔符断言
+
+test('export_claude 落盘：import → export 闭环、路径 <outputDir>/<slug>/<uuid>.jsonl、schema 校验', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-simple-001.jsonl': load('sess-simple-001.jsonl') }
+  const { ctx, persistence, writes } = makeCtx(tree)
+  apply(ctx)
+  await registeredDef(ctx, 'import_claude').execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(persistence.sessions.size, 1)
+
+  const def = registeredDef(ctx, 'export_claude')
+  const value = await def.execute({ sessionId: 'import-sess-simple-001', outputDir: OUT })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sourceSessionId, 'import-sess-simple-001')
+  assert.equal(value.slug, 'D--demo-proj') // D:\demo\proj → ':'、'\'、'\' 各一个 '-'
+  assert.equal(value.cwd, 'D:\\demo\\proj')
+  assert.match(value.sessionId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  assert.equal(value.recordCount, 4) // mode + permission-mode + user + assistant
+  assert.equal(value.mapping.turns, 1)
+  assert.equal(value.mapping.messages, 2)
+  assert.equal(value.mapping.toolCalls, 0)
+  assert.equal(value.mapping.toolResults, 0)
+  assert.equal(value.dryRun, false)
+  assert.equal(value.filePath, join(OUT, 'D--demo-proj', value.sessionId + '.jsonl'))
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  // 落盘：createIfAbsent + 内容可解析、布局正确（每行一记录、恰一个结尾换行）
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].path, value.filePath)
+  assert.equal(writes[0].options.kind, 'createIfAbsent')
+  const body = writes[0].content.slice(0, -1)
+  assert.equal(writes[0].content.endsWith('\n'), true)
+  const lines = body.split('\n').map((l) => JSON.parse(l))
+  assert.equal(lines.length, 4)
+  assert.equal(lines[0].type, 'mode')
+  const pm = lines[1]
+  assert.deepEqual(Object.keys(pm).sort(), ['permissionMode', 'sessionId', 'type'])
+  const user = lines[2]
+  assert.equal(user.type, 'user')
+  assert.equal(user.parentUuid, null)
+  assert.equal(typeof user.message.content, 'string')
+  assert.equal(user.cwd, 'D:\\demo\\proj')
+  const asst = lines[3]
+  assert.equal(asst.type, 'assistant')
+  assert.equal(asst.parentUuid, user.uuid)
+  assert.equal(asst.message.stop_reason, 'end_turn')
+})
+
+test('export_claude 带标题会话：ai-title 放首个 user 后、assistant 前；返回 title', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-title-001.jsonl': load('sess-title-001.jsonl') }
+  const { ctx, writes } = makeCtx(tree)
+  apply(ctx)
+  await registeredDef(ctx, 'import_claude').execute({ path: 'D:\\demo\\proj\\sess-title-001.jsonl' })
+
+  const def = registeredDef(ctx, 'export_claude')
+  const value = await def.execute({ sessionId: 'import-sess-title-001', outputDir: OUT })
+  assert.equal(value.recordCount, 5) // mode + permission-mode + user + ai-title + assistant
+  assert.equal(typeof value.title, 'string')
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const lines = writes[0].content.slice(0, -1).split('\n').map((l) => JSON.parse(l))
+  const user = lines[2]
+  const ai = lines[3]
+  assert.equal(ai.type, 'ai-title')
+  assert.equal(ai.aiTitle, value.title)
+  assert.equal(Object.hasOwn(ai, 'uuid'), false)
+  assert.equal(Object.hasOwn(ai, 'parentUuid'), false)
+  assert.equal(lines[4].parentUuid, user.uuid) // assistant 链越过 ai-title
+})
+
+test('export_claude 工具会话：tool_use/tool_result 配对、sourceToolAssistantUUID、stop_reason', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-tool-001.jsonl': load('sess-tool-001.jsonl') }
+  const { ctx, writes } = makeCtx(tree)
+  apply(ctx)
+  await registeredDef(ctx, 'import_claude').execute({ path: 'D:\\demo\\proj\\sess-tool-001.jsonl' })
+
+  const def = registeredDef(ctx, 'export_claude')
+  const value = await def.execute({ sessionId: 'import-sess-tool-001', outputDir: OUT })
+  assert.equal(value.recordCount, 6) // mode + permission-mode + user + assistant + tool_result + assistant
+  assert.equal(value.mapping.toolCalls, 1)
+  assert.equal(value.mapping.toolResults, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const lines = writes[0].content.slice(0, -1).split('\n').map((l) => JSON.parse(l))
+  const asst1 = lines[3]
+  const thinking = asst1.message.content.find((b) => b.type === 'thinking')
+  assert.deepEqual(thinking, { type: 'thinking', thinking: thinking.thinking, signature: '' })
+  const toolUse = asst1.message.content.find((b) => b.type === 'tool_use')
+  assert.ok(toolUse)
+  assert.equal(toolUse.name, 'Bash')
+  assert.deepEqual(toolUse.input, { command: 'ls -la' })
+  assert.equal(asst1.message.stop_reason, 'tool_use')
+
+  const tr = lines[4]
+  assert.equal(tr.type, 'user')
+  assert.equal(tr.parentUuid, asst1.uuid)
+  assert.equal(tr.sourceToolAssistantUUID, asst1.uuid)
+  assert.equal(tr.message.content[0].type, 'tool_result')
+  assert.equal(tr.message.content[0].tool_use_id, 'toolu_01')
+  assert.equal(tr.message.content[0].content, 'README.md\nsrc\n')
+  assert.equal(Object.hasOwn(tr.message.content[0], 'is_error'), false) // fixture is_error:false → 不写
+  assert.equal(lines[5].message.stop_reason, 'end_turn')
+})
+
+test('export_claude dryRun：不写盘、返回目标路径与统计', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-simple-001.jsonl': load('sess-simple-001.jsonl') }
+  const { ctx, writes } = makeCtx(tree)
+  apply(ctx)
+  await registeredDef(ctx, 'import_claude').execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+
+  const def = registeredDef(ctx, 'export_claude')
+  const value = await def.execute({ sessionId: 'import-sess-simple-001', outputDir: OUT, dryRun: true })
+  assert.equal(value.dryRun, true)
+  assert.equal(writes.length, 0) // 不写盘
+  assert.equal(typeof value.filePath, 'string')
+  assert.equal(value.recordCount, 4)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('export_claude cwd 覆盖：slug/记录 cwd 用入参而非 header', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-simple-001.jsonl': load('sess-simple-001.jsonl') }
+  const { ctx, writes } = makeCtx(tree)
+  apply(ctx)
+  await registeredDef(ctx, 'import_claude').execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+
+  const value = await registeredDef(ctx, 'export_claude').execute({
+    sessionId: 'import-sess-simple-001',
+    outputDir: OUT,
+    cwd: "C:\\Users\\Meier's\\work", // 含非字母数字：验证 slug 替换
+  })
+  assert.equal(value.cwd, "C:\\Users\\Meier's\\work")
+  assert.equal(value.slug, 'C--Users-Meier-s-work')
+  assert.equal(value.filePath, join(OUT, 'C--Users-Meier-s-work', value.sessionId + '.jsonl'))
+  const lines = writes[0].content.slice(0, -1).split('\n').map((l) => JSON.parse(l))
+  assert.equal(lines[2].cwd, "C:\\Users\\Meier's\\work")
+})
+
+test('export_claude 会话不存在：抛错', async () => {
+  const { ctx } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'export_claude')
+  await assert.rejects(() => def.execute({ sessionId: 'no-such-session' }), /会话不存在/)
+})
+
+test('export_claude 无 cwd（header 无且未提供）：抛错', async () => {
+  const { ctx, persistence } = makeCtx({})
+  await seedSession(persistence, 'sess-nocwd', { version: 0, id: 'sess-nocwd', createdAt: 1786000000000 }, [
+    mkEvent('user/message', 0, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }, { surfaceOp: 'append' }),
+    mkEvent('assistant/message', 1, 1786000000000, { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'hello' }], source: { kind: 'model', provider: 'dsh' } }, { surfaceOp: 'append' }),
+  ])
+  apply(ctx)
+  const def = registeredDef(ctx, 'export_claude')
+  await assert.rejects(() => def.execute({ sessionId: 'sess-nocwd' }), /cwd/)
+})
+
+test('export_claude createIfAbsent：目标已存在（uuid 碰撞模拟）时不覆盖', async () => {
+  const tree = { 'D:\\demo\\proj\\sess-simple-001.jsonl': load('sess-simple-001.jsonl') }
+  const { ctx } = makeCtx(tree)
+  apply(ctx)
+  await registeredDef(ctx, 'import_claude').execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+
+  const fixed = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+  const target = join(OUT, 'D--demo-proj', fixed + '.jsonl')
+  tree[target] = 'preexisting' // 目标文件已存在
+  await assert.rejects(
+    () => exportClaudeSession(ctx, { sessionId: 'import-sess-simple-001', outputDir: OUT }, { uuid: () => fixed }),
+    /EEXIST/,
+  )
+  assert.equal(tree[target], 'preexisting') // 未被覆盖
+})
+
+test('export_claude 注入会话：非人类 user/message 跳过并计数', async () => {
+  const { ctx, persistence, writes } = makeCtx({})
+  await seedSession(persistence, 'sess-inject', { version: 0, id: 'sess-inject', createdAt: 1786000000000, cwd: 'D:\\demo\\proj' }, [
+    mkEvent('user/message', 0, 1786000000000, { id: 'i1', role: 'user', content: [{ type: 'text', text: '系统注入' }], source: { kind: 'system' } }, { surfaceOp: 'append' }),
+    mkEvent('user/message', 1, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: '真实提问' }], source: { kind: 'user' } }, { surfaceOp: 'append' }),
+    mkEvent('assistant/message', 2, 1786000000000, { id: 'a1', role: 'assistant', content: [{ type: 'text', text: '回答' }], source: { kind: 'model', provider: 'dsh' } }, { surfaceOp: 'append' }),
+  ])
+  apply(ctx)
+  const def = registeredDef(ctx, 'export_claude')
+  const value = await def.execute({ sessionId: 'sess-inject', outputDir: OUT })
+  assert.equal(value.mapping.skippedInjections, 1)
+  assert.equal(value.recordCount, 4) // 注入不落记录
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  const lines = writes[0].content.slice(0, -1).split('\n').map((l) => JSON.parse(l))
+  assert.equal(lines[2].message.content, '真实提问')
+  assert.equal(lines[2].parentUuid, null) // 首个真实 user 成为链头
+})
+
+test('export_claude 中断会话：末尾补发空 tool_result，会话日志只读不被触碰', async () => {
+  const { ctx, persistence, writes } = makeCtx({})
+  const events = [
+    mkEvent('user/message', 0, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: '提问' }], source: { kind: 'user' } }, { surfaceOp: 'append' }),
+    mkEvent('assistant/message', 1, 1786000000000, { turn: 1, step: 1, id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'callZ', name: 'Bash', arguments: '{}' }], source: { kind: 'model', provider: 'dsh' } }, { surfaceOp: 'append' }),
+    mkEvent('tool/call', 2, 1786000000000, { turn: 1, step: 1, callId: 'callZ', name: 'Bash', arguments: '{}' }),
+  ]
+  await seedSession(persistence, 'sess-interrupted', { version: 0, id: 'sess-interrupted', createdAt: 1786000000000, cwd: 'D:\\demo\\proj' }, events)
+  apply(ctx)
+  const def = registeredDef(ctx, 'export_claude')
+  const value = await def.execute({ sessionId: 'sess-interrupted', outputDir: OUT })
+  assert.equal(value.recordCount, 5) // 末尾补发 1 条
+  assert.equal(value.mapping.toolResults, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const lines = writes[0].content.slice(0, -1).split('\n').map((l) => JSON.parse(l))
+  const last = lines[4]
+  assert.equal(last.message.content[0].type, 'tool_result')
+  assert.deepEqual(last.message.content[0].content, [])
+  assert.equal(last.parentUuid, lines[3].uuid)
+  // 会话日志未被触碰（只读来源）
+  const saved = persistence.sessions.get('sess-interrupted')
+  assert.equal(saved.events.length, events.length)
+  assert.equal(saved.events.filter((e) => e.type === 'tool/result').length, 0)
 })
 
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）
