@@ -303,6 +303,7 @@ function makeMinCtx(tree) {
       register(def) { registered.push(def); return () => {} },
       registered: (name) => registered.find((d) => d.name === name),
     },
+    on() { return () => {} }, // REQ-53：apply 监听 agent/session-start（本测试不模拟事件）
   }
   return { ctx, registered, persistence }
 }

@@ -28,6 +28,8 @@ import { resolveRegistryDir } from './lib/imports.mjs'
 import { registerTools } from './lib/tools.mjs'
 import { registerPanelRoutes } from './lib/panel.mjs'
 import { registerImportCommand } from './lib/command.mjs'
+import { registerSessionHint } from './lib/prompt-hint.mjs'
+import { registerContextBridge } from './lib/context-bridge.mjs'
 import { exportClaudeSession } from './lib/export-tool.mjs'
 import { readOpencodeDb } from './lib/opencode.mjs'
 import { readZcodeDb } from './lib/zcode.mjs'
@@ -53,6 +55,12 @@ function apply(ctx) {
   // REQ-42 /import 命令面：commands 同样可选（headless / CLI 会话可能不挂载），
   // 服务可用时注册（不阻塞插件激活）。
   registerImportCommand(ctx)
+  // REQ-53 新会话开始迁移提示：监听 agent/session-start（host 核心事件，非可选服务），
+  // cwd 有可导入/已导入历史时注入提示（per-project 记忆 + env 开关）。
+  registerSessionHint(ctx, registryDir)
+  // REQ-28 上下文桥接（默认关闭，env DSH_IMPORT_CONTEXT_BRIDGE=1 开启）：Claude 的
+  // memory / CLAUDE.md / skills 桥进 agent 的 scoped systemPrompt / skills 注册。
+  registerContextBridge(ctx)
 }
 
 export { apply, inject, name, readOpencodeDb, readZcodeDb, exportClaudeSession }

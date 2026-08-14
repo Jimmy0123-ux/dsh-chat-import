@@ -121,6 +121,7 @@ function makeCtx(tree = {}) {
     tools: {
       register(def) { registered.push(def); return () => {} },
     },
+    on() { return () => {} }, // REQ-53：apply 监听 agent/session-start（本测试不模拟事件）
   }
   ctx.tools.registered = (toolName) => registered.find((d) => d.name === toolName)
   return { ctx, persistence, attached, registered }
