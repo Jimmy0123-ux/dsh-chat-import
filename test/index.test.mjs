@@ -225,15 +225,15 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册十四个工具（11 导入 + scan_discover + export_claude + sync_to_claude）', () => {
+test('apply 注册十六个工具（11 导入 + scan_discover + export_claude + sync_to_claude + REQ-33 识别/撤回）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 14)
+  assert.equal(registered.length, 16)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_openclaw', 'import_opencode', 'import_reasonix', 'import_zcode', 'scan_discover', 'sync_to_claude'])
+  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_openclaw', 'import_opencode', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'retract_import', 'scan_discover', 'sync_to_claude'])
   for (const def of registered) {
-    if (def.name === 'export_claude' || def.name === 'sync_to_claude' || def.name === 'scan_discover') {
-      // 导出 / 写回 / 发现工具：单对象输出 schema（非 oneOf）
+    if (['export_claude', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import'].includes(def.name)) {
+      // 导出 / 写回 / 发现 / 识别 / 撤回工具：单对象输出 schema（非 oneOf）
       assert.equal(def.output.schema.type, 'object')
       assert.ok(!Array.isArray(def.output.schema.oneOf))
     } else {
