@@ -65,22 +65,40 @@ function assertMessageOrderLegal(events) {
   return msgs
 }
 
+// 内部标记事件契约（REQ-32）：导入会话日志首事件（seq 0）为 session/imported，
+// 顶层 ignorable: true，data 四字段（tool / sourceId / sourcePath / importedAt）。
+function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
+  const ev = events[0]
+  assert.equal(ev.type, 'session/imported')
+  assert.equal(ev.seq, 0)
+  assert.equal(ev.ignorable, true)
+  assert.equal(ev.data.tool, tool)
+  assert.equal(ev.data.sourceId, sourceId)
+  assert.equal(ev.data.sourcePath, sourcePath)
+  assert.equal(typeof ev.data.importedAt, 'number')
+  assert.ok(ev.data.importedAt > 0)
+  // 标记之后才进入回合事件
+  assert.equal(events[1].type, 'turn/start')
+}
+
 test('convertClaudeJsonl: 简单问答合成平衡回合', () => {
-  const out = convertClaudeJsonl(load('sess-simple-001.jsonl'))
+  const out = convertClaudeJsonl(load('sess-simple-001.jsonl'), { sourcePath: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
   assert.equal(out.turns.length, 1)
   assert.equal(out.messages, 2)
   assert.equal(out.toolCalls, 0)
   assert.equal(out.meta.id, 'import-sess-simple-001')
+  assert.equal(out.meta.sourceId, 'sess-simple-001')
   assert.equal(out.meta.version, SESSION_FORMAT_VERSION)
   assert.equal(out.meta.cwd, 'D:\\demo\\proj')
   assert.ok(out.meta.createdAt)
 
   const types = out.events.map((e) => e.type)
   assert.deepEqual(types, [
-    'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end',
+    'session/imported', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end',
   ])
-  // seq 连续从 0 开始
+  // seq 连续从 0 开始；首事件是内部标记
   out.events.forEach((e, i) => assert.equal(e.seq, i))
+  assertImportedMarker(out.events, { tool: 'claude-code', sourceId: 'sess-simple-001', sourcePath: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
   // surface 事件带 surfaceOp
   const surface = out.events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message')
   for (const e of surface) assert.equal(e.surfaceOp, 'append')
@@ -155,16 +173,19 @@ test('convertClaudeJsonl: 畸形行计数', () => {
 })
 
 test('convertClaudeJsonl: 未回答的提问也成回合', () => {
-  const out = convertClaudeJsonl(load('sess-empty-001.jsonl'))
+  const out = convertClaudeJsonl(load('sess-empty-001.jsonl'), { sourcePath: 'D:\\demo\\proj\\sess-empty-001.jsonl' })
   assert.equal(out.turns.length, 1)
   assert.equal(out.messages, 1)
   const types = out.events.map((e) => e.type)
-  assert.deepEqual(types, ['turn/start', 'user/message', 'turn/end'])
+  assert.deepEqual(types, ['session/imported', 'turn/start', 'user/message', 'turn/end'])
 })
 
 test('convertClaudeJsonl: sessionId 覆盖参数生效', () => {
-  const out = convertClaudeJsonl(load('sess-simple-001.jsonl'), { sessionId: 'custom-id' })
+  const out = convertClaudeJsonl(load('sess-simple-001.jsonl'), { sessionId: 'custom-id', sourcePath: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
   assert.equal(out.meta.id, 'custom-id')
+  // sourceId 显式取自源记录，不因 DSH 会话 id 覆盖/前缀解析而改变（REQ-32）
+  assert.equal(out.meta.sourceId, 'sess-simple-001')
+  assert.equal(out.events[0].data.sourceId, 'sess-simple-001')
   const ids = out.events.filter((e) => e.type === 'user/message').map((e) => e.data.id)
   assert.ok(ids[0].startsWith('import:custom-id:u1'))
 })
@@ -173,6 +194,22 @@ test('convertClaudeJsonl: 空输入不产生事件', () => {
   const out = convertClaudeJsonl('')
   assert.equal(out.events.length, 0)
   assert.equal(out.turns.length, 0)
+})
+
+test('turns=0 时不写 session/imported 标记（无可导入内容）', () => {
+  // 有记录但无用户回合（纯 info 通知）：不产生空会话，也不加标记
+  const info = convertGeminiJson(JSON.stringify({
+    sessionId: 'gemini-info-only',
+    startTime: '2026-04-17T18:09:18.567Z',
+    messages: [{ id: 'i1', type: 'info', content: 'notice' }],
+  }), { sourcePath: 'D:\\demo\\gemini\\info.json' })
+  assert.equal(info.turns.length, 0)
+  assert.equal(info.events.length, 0)
+  assert.equal(info.events.some((e) => e.type === 'session/imported'), false)
+  // 空输入同理（Claude）
+  const empty = convertClaudeJsonl('', { sourcePath: 'D:\\demo\\proj\\empty.jsonl' })
+  assert.equal(empty.turns.length, 0)
+  assert.equal(empty.events.length, 0)
 })
 
 test('convertClaudeJsonl: 主 transcript（fileStem 与 sessionId 一致）正常导入', () => {
@@ -337,22 +374,24 @@ test('parseTime: 解析 ISO 时间戳', () => {
 // ---- Codex / ChatGPT CLI rollout ----
 
 test('convertCodexJsonl: 简单问答合成平衡回合（元数据来自 session_meta/turn_context）', () => {
-  const out = convertCodexJsonl(load('codex-simple.jsonl'))
+  const out = convertCodexJsonl(load('codex-simple.jsonl'), { sourcePath: 'D:\\demo\\codex\\simple.jsonl' })
   assert.equal(out.turns.length, 1)
   assert.equal(out.messages, 2)
   assert.equal(out.toolCalls, 0)
   assert.equal(out.meta.id, 'import-019e3b3f-636d-7cb3-aaab-0255eb45ad4f')
+  assert.equal(out.meta.sourceId, '019e3b3f-636d-7cb3-aaab-0255eb45ad4f')
   assert.equal(out.meta.version, SESSION_FORMAT_VERSION)
   assert.equal(out.meta.cwd, 'D:\\demo\\codex-proj')
   assert.ok(out.meta.createdAt)
 
   const types = out.events.map((e) => e.type)
   assert.deepEqual(types, [
-    'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end',
+    'session/imported', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end',
   ])
   // seq 连续从 0 开始；最后一个事件是 turn/end（平衡）
   out.events.forEach((e, i) => assert.equal(e.seq, i))
   assert.equal(types.at(-1), 'turn/end')
+  assertImportedMarker(out.events, { tool: 'codex', sourceId: '019e3b3f-636d-7cb3-aaab-0255eb45ad4f', sourcePath: 'D:\\demo\\codex\\simple.jsonl' })
   // surface 事件带 surfaceOp
   for (const e of out.events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message')) {
     assert.equal(e.surfaceOp, 'append')
@@ -458,7 +497,7 @@ test('convertCodexJsonl: 空输入不产生事件', () => {
 // ---- ChatGPT 网页导出 conversations.json ----
 
 test('convertChatgptJson: 一文件多会话、多轮、mapping 主线程', () => {
-  const out = convertChatgptJson(load('chatgpt-export.json'))
+  const out = convertChatgptJson(load('chatgpt-export.json'), { sourcePath: 'D:\\demo\\chatgpt\\conversations.json' })
   assert.equal(out.records, 3)
   assert.equal(out.conversations.length, 2) // conv-003 只有 system，被跳过
   assert.equal(out.skipped, 1)
@@ -470,6 +509,7 @@ test('convertChatgptJson: 一文件多会话、多轮、mapping 主线程', () =
   assert.equal(c1.turns.length, 2)
   assert.equal(c1.messages, 3)
   assert.equal(c1.toolCalls, 0)
+  assertImportedMarker(c1.events, { tool: 'chatgpt', sourceId: 'conv-001', sourcePath: 'D:\\demo\\chatgpt\\conversations.json' })
   const types1 = c1.events.map((e) => e.type)
   // 事件以 turn/end 平衡收尾（session/title 钉在最后，不破坏回合平衡）
   assert.equal(types1.filter((t) => t === 'turn/end').length, 2)
@@ -485,6 +525,7 @@ test('convertChatgptJson: 一文件多会话、多轮、mapping 主线程', () =
   const c2 = out.conversations.find((c) => c.meta.id === 'import-conv-002')
   assert.ok(c2)
   assert.equal(c2.turns.length, 1)
+  assertImportedMarker(c2.events, { tool: 'chatgpt', sourceId: 'conv-002', sourcePath: 'D:\\demo\\chatgpt\\conversations.json' })
   const asst2 = c2.events.filter((e) => e.type === 'assistant/message').map((e) => e.data.message.content[0].text)
   assert.deepEqual(asst2, ['Here is a simple aglio e olio recipe.', 'Actually, use cacio e pepe instead.'])
 })
@@ -550,11 +591,13 @@ test('convertChatgptJson: tool 节点降级为文本块，不再产生孤儿 too
 // ---- Cursor agent transcript ----
 
 test('convertCursorJsonl: 简单问答、user_query 剥离、平衡回合', () => {
-  const out = convertCursorJsonl(load('cursor-simple.jsonl'), { cursorId: 'abc123' })
+  const out = convertCursorJsonl(load('cursor-simple.jsonl'), { cursorId: 'abc123', sourcePath: 'D:\\demo\\cursor\\composer-abc.jsonl' })
   assert.equal(out.turns.length, 1)
   assert.equal(out.messages, 3) // user + assistant×2
   assert.equal(out.toolCalls, 0)
   assert.equal(out.meta.id, 'import-abc123') // cursorId 传入
+  assert.equal(out.meta.sourceId, 'abc123')
+  assertImportedMarker(out.events, { tool: 'cursor', sourceId: 'abc123', sourcePath: 'D:\\demo\\cursor\\composer-abc.jsonl' })
   const types = out.events.map((e) => e.type)
   assert.equal(types.filter((t) => t === 'turn/end').length, 1)
   out.events.forEach((e, i) => assert.equal(e.seq, i))
@@ -608,13 +651,15 @@ test('convertCursorJsonl: 多轮切分、畸形行计数、无 cursorId 回退�
 // ---- Gemini CLI 会话 ----
 
 test('convertGeminiJson: 简单会话、元数据、平衡回合', () => {
-  const out = convertGeminiJson(load('gemini-simple.json'))
+  const out = convertGeminiJson(load('gemini-simple.json'), { sourcePath: 'D:\\demo\\gemini\\session-abc.json' })
   assert.equal(out.turns.length, 1)
   assert.equal(out.messages, 2)
   assert.equal(out.toolCalls, 0)
   assert.equal(out.meta.id, 'import-b26d7f99-0116-4d1d-b125-98c228a4b933')
+  assert.equal(out.meta.sourceId, 'b26d7f99-0116-4d1d-b125-98c228a4b933')
   assert.equal(out.meta.cwd, 'D:\\demo\\gemini-proj') // directories[0] → cwd
   assert.ok(out.meta.createdAt) // startTime ISO → ms
+  assertImportedMarker(out.events, { tool: 'gemini', sourceId: 'b26d7f99-0116-4d1d-b125-98c228a4b933', sourcePath: 'D:\\demo\\gemini\\session-abc.json' })
   const types = out.events.map((e) => e.type)
   assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
   out.events.forEach((e, i) => assert.equal(e.seq, i))
@@ -696,10 +741,12 @@ test('convertGeminiJson: 非法 JSON / 非会话结构返回空并 skipped', () 
 // ---- Reasonix ----
 
 test('convertReasonixJsonl: v1 嵌套 tool_calls + tool_call_id 配对 + reasoning', () => {
-  const out = convertReasonixJsonl(load('reasonix-v1.jsonl'), { reasonixId: 'desktop-202606020721-1' })
+  const out = convertReasonixJsonl(load('reasonix-v1.jsonl'), { reasonixId: 'desktop-202606020721-1', sourcePath: 'D:\\demo\\reasonix\\desktop-a.jsonl' })
   assert.equal(out.turns.length, 1)
   assert.equal(out.toolCalls, 1)
   assert.equal(out.meta.id, 'import-desktop-202606020721-1')
+  assert.equal(out.meta.sourceId, 'desktop-202606020721-1')
+  assertImportedMarker(out.events, { tool: 'reasonix', sourceId: 'desktop-202606020721-1', sourcePath: 'D:\\demo\\reasonix\\desktop-a.jsonl' })
   const types = out.events.map((e) => e.type)
   assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
   out.events.forEach((e, i) => assert.equal(e.seq, i))
@@ -774,15 +821,17 @@ test('reasonixStemTime: desktop/subagent 命名解析、无或非法时间戳回
 // ---- opencode 会话（SQLite → 中间 JSON） ----
 
 test('convertOpencodeJson: 简单问答、元数据、平衡回合', () => {
-  const out = convertOpencodeJson(load('opencode-simple.json'))
+  const out = convertOpencodeJson(load('opencode-simple.json'), { sourcePath: 'E:/demo/opencode/opencode.db' })
   assert.equal(out.turns.length, 1)
   assert.equal(out.messages, 2)
   assert.equal(out.toolCalls, 0)
   assert.equal(out.meta.id, 'import-ses_simple001')
+  assert.equal(out.meta.sourceId, 'ses_simple001')
   assert.equal(out.meta.version, SESSION_FORMAT_VERSION)
   assert.equal(out.meta.cwd, 'E:/demo/opencode-proj')
   assert.equal(out.meta.createdAt, 1786000000000)
   assert.equal(out.title, 'Fix the build')
+  assertImportedMarker(out.events, { tool: 'opencode', sourceId: 'ses_simple001', sourcePath: 'E:/demo/opencode/opencode.db' })
   const types = out.events.map((e) => e.type)
   // 回合平衡：最后一个（非 title）事件是 turn/end；seq 连续
   assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')

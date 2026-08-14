@@ -96,6 +96,8 @@ turn/start → step/start → user/message → assistant/message → (tool/call 
 
 消息体带稳定 id 与 `surfaceOp: 'append'`；`tool/result` 通过 `sourceEventSeqs` 关联回对应的 `tool/call`。assistant 的 `source` 为 `{ kind: 'model', provider: 'claude-code', model: <源模型> }`；`tool/result` 的 source 为 `{ kind: 'tool', callId }`。`SessionHeader` 保留 `version: 0`、`id: import-<源sessionId>`、源 `createdAt` 与 `cwd`。
 
+**导入标记（`session/imported`）：** 每个导入会话的事件日志都以 `seq: 0` 的标记事件开头（在首个 `turn/start` 之前）。它带 `ignorable: true`，读侧全链路放行（`KNOWN_SESSION_EVENT_TYPES || ignorable`），不会被当作未知事件。`data` 记录来源信息——`{ tool, sourceId, sourcePath, importedAt }`：`tool` 是源标识（`claude-code` / `codex` / `chatgpt` / `cursor` / `gemini` / `reasonix` / `opencode`），`sourceId` 是源会话 id，`sourcePath` 是导入所依据的 transcript / 数据库绝对路径（即 imports registry 的幂等键），`importedAt` 是导入时刻。仅当 transcript 产出至少一轮对话时才写标记——无可导入内容不落空会话、也不加标记。
+
 **call/result 配对不变量：** 每个 `tool/call` 必有对应 `tool/result`（`sourceEventSeqs` 指回其 call），且每个结果挂在**声明该调用所在的 step**——保证投影出的消息顺序合法（每条 `role: 'tool'` 消息紧跟在它应答的 `tool_calls` assistant 消息之后，中间绝不插入另一条 assistant）。当 transcript 对某个调用从未记录结果（会话中断、Cursor transcript 本身无结果）时，导入器在**该调用自己的 step** 补发一个空 `tool/result`（`content: []`），保证会话仍可续聊——模型 API 会拒绝「assistant 带 `tool_calls` 但缺对应 tool 消息」的历史。空内容不是虚构文本；wire 适配器会把空内容归一为 `"(no output)"`。
 
 ### Claude Code JSONL

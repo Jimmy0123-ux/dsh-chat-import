@@ -32,9 +32,11 @@ async function attachToWorkspace(ctx, meta) {
 }
 
 // 解析单个 transcript：读取 → 转换 → 幂等落盘 → 归组。返回单文件统计。
+// sourcePath 取 fs 服务归一化后的路径（REQ-32 标记事件的数据来源，亦为 REQ-24 幂等键）。
 async function importTranscript(ctx, target, args, convert) {
   const raw = await ctx.fs.readText(target)
-  const out = convert(raw, args)
+  const sourcePath = target.displayPath || ctx.fs.processPath(target)
+  const out = convert(raw, { ...args, sourcePath })
   // 无可导入内容（空文件 / 非目标格式 / 辅助 transcript）：计入 skipped，不落盘空会话
   if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
     const res = { sessionId: 'none', turns: 0, messages: 0, toolCalls: 0, skipped: 1, alreadyImported: false }
@@ -110,7 +112,7 @@ async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel, 
     try {
       const raw = await ctx.fs.readText(target)
       const derived = deriveArgs ? await deriveArgs(target) : {}
-      const { meta, events, turns, messages, toolCalls, skipped: badLines, skipReason } = convert(raw, derived)
+      const { meta, events, turns, messages, toolCalls, skipped: badLines, skipReason } = convert(raw, { ...derived, sourcePath: path })
       if (turns.length === 0 && events.length === 0) {
         // 非对应源格式 / 辅助 transcript（无用户回合）：跳过并说明原因，不落盘空会话
         skipped++
@@ -141,7 +143,7 @@ async function importDirectory(ctx, dirTarget, recursive, convert, sourceLabel, 
 async function importChatgptFile(ctx, target) {
   const path = target.displayPath || ctx.fs.processPath(target)
   const raw = await ctx.fs.readText(target)
-  const { conversations, skipped: skippedFiles } = convertChatgptJson(raw, {})
+  const { conversations, skipped: skippedFiles } = convertChatgptJson(raw, { sourcePath: path })
   const results = []
   let imported = 0
   let alreadyImported = 0
@@ -287,8 +289,10 @@ function parseOpencodeSessionModel(raw) {
 }
 
 // opencode 单库导入：DB 内每个会话独立落盘（可 sessionIds 过滤），恒返回批量形态。
+// sourcePath 为 opencode.db 路径（目录模式定位后同样落到 db 文件）。
 async function importOpencodeFile(ctx, target, args = {}) {
   const path = target.displayPath || ctx.fs.processPath(target)
+  const sourcePath = path
   const sessions = readOpencodeDb(path, { fullHistory: args.fullHistory === true })
   const wanted = Array.isArray(args.sessionIds) && args.sessionIds.length > 0 ? new Set(args.sessionIds) : null
   const results = []
@@ -299,7 +303,7 @@ async function importOpencodeFile(ctx, target, args = {}) {
   for (const s of sessions) {
     if (wanted && !wanted.has(s.id)) continue
     try {
-      const out = convertOpencodeJson(JSON.stringify(s), args)
+      const out = convertOpencodeJson(JSON.stringify(s), { ...args, sourcePath })
       if (!out.meta || (out.turns.length === 0 && out.events.length === 0)) {
         skipped++
         results.push({ path, status: 'skipped', reason: 'no user turns (session ' + s.id + ')' })

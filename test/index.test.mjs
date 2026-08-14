@@ -96,6 +96,20 @@ function makeCtx(tree) {
   return { ctx, persistence, attached, registered }
 }
 
+// REQ-32：导入会话日志首事件为 session/imported 标记（seq 0、ignorable），
+// sourcePath 来自工具入参（fs 服务归一化路径）。
+function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
+  const ev = events[0]
+  assert.equal(ev.type, 'session/imported')
+  assert.equal(ev.seq, 0)
+  assert.equal(ev.ignorable, true)
+  assert.equal(ev.data.tool, tool)
+  assert.equal(ev.data.sourceId, sourceId)
+  assert.equal(ev.data.sourcePath, sourcePath)
+  assert.equal(typeof ev.data.importedAt, 'number')
+  assert.ok(ev.data.importedAt > 0)
+}
+
 test('apply 注册七个导入工具（single + batch 输出 schema）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
@@ -127,12 +141,13 @@ test('单文件导入：落盘、归组、返回值符合 schema', async () => {
   const violations = validateJsonSchemaValue(def.output.schema, value)
   assert.deepEqual(violations, [])
 
-  // 落盘：meta + 平衡事件
+  // 落盘：meta + 平衡事件；首事件为 session/imported 标记（sourcePath = 工具入参）
   const saved = persistence.sessions.get('import-sess-simple-001')
   assert.ok(saved)
   assert.equal(saved.meta.cwd, 'D:\\demo\\proj')
   assert.equal(saved.events.at(-1).type, 'turn/end')
   assert.ok(saved.events.every((e, i) => e.seq === i))
+  assertImportedMarker(saved.events, { tool: 'claude-code', sourceId: 'sess-simple-001', sourcePath: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
 
   // 归组
   assert.equal(attached.length, 1)
@@ -187,6 +202,11 @@ test('目录批量导入：扫描 .jsonl、逐文件独立会话、跳过非 tra
   // 每个会话独立落盘 + 归组
   assert.equal(persistence.sessions.size, 3)
   assert.equal(attached.length, 3)
+
+  // 逐文件的 sourcePath 是各自 transcript 路径（目录模式每个文件一个源路径）
+  assertImportedMarker(persistence.sessions.get('import-sess-simple-001').events, { tool: 'claude-code', sourceId: 'sess-simple-001', sourcePath: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assertImportedMarker(persistence.sessions.get('import-sess-tool-001').events, { tool: 'claude-code', sourceId: 'sess-tool-001', sourcePath: 'D:\\demo\\proj\\sess-tool-001.jsonl' })
+  assertImportedMarker(persistence.sessions.get('import-sess-title-001').events, { tool: 'claude-code', sourceId: 'sess-title-001', sourcePath: 'D:\\demo\\proj\\sub\\sess-title-001.jsonl' })
 
   // 输出 schema 校验
   assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
@@ -310,6 +330,7 @@ test('import_codex 单文件导入：落盘、归组、返回值符合 schema', 
   assert.equal(saved.meta.cwd, 'D:\\demo\\codex-proj')
   assert.equal(saved.events.at(-1).type, 'turn/end')
   assert.ok(saved.events.every((e, i) => e.seq === i))
+  assertImportedMarker(saved.events, { tool: 'codex', sourceId: '019e3b3f-636d-7cb3-aaab-0255eb45ad4f', sourcePath: 'D:\\demo\\codex\\simple.jsonl' })
   assert.equal(attached.length, 1)
   assert.equal(attached[0].id, 'import-019e3b3f-636d-7cb3-aaab-0255eb45ad4f')
 })
@@ -383,6 +404,9 @@ test('import_chatgpt 单文件：一文件多会话、恒返回 batch、schema �
   assert.ok(saved2)
   assert.equal(saved1.events.at(-1).type, 'session/title')
   assert.ok(saved1.events.every((e, i) => e.seq === i))
+  // 同一文件里的每个会话都带标记，sourcePath 都是 conversations.json（REQ-32）
+  assertImportedMarker(saved1.events, { tool: 'chatgpt', sourceId: 'conv-001', sourcePath: 'D:\\demo\\chatgpt\\conversations.json' })
+  assertImportedMarker(saved2.events, { tool: 'chatgpt', sourceId: 'conv-002', sourcePath: 'D:\\demo\\chatgpt\\conversations.json' })
   // ChatGPT 无 cwd → 不归组
   assert.equal(attached.length, 0)
 })
@@ -450,6 +474,7 @@ test('import_cursor 单文件：composer id 从文件名派生、落盘、schema
   assert.ok(saved)
   assert.equal(saved.events.at(-1).type, 'turn/end') // Cursor 无 title，事件以 turn/end 收尾
   assert.ok(saved.events.every((e, i) => e.seq === i))
+  assertImportedMarker(saved.events, { tool: 'cursor', sourceId: 'composer-abc', sourcePath: 'D:\\demo\\cursor\\composer-abc.jsonl' })
 })
 
 test('import_cursor 幂等：同名 composer 文件不重复落盘', async () => {
@@ -502,6 +527,7 @@ test('import_gemini 单文件：落盘、归组、schema 校验', async () => {
   assert.equal(saved.meta.cwd, 'D:\\demo\\gemini-proj')
   assert.equal(saved.events.at(-1).type, 'turn/end')
   assert.ok(saved.events.every((e, i) => e.seq === i))
+  assertImportedMarker(saved.events, { tool: 'gemini', sourceId: 'b26d7f99-0116-4d1d-b125-98c228a4b933', sourcePath: 'D:\\demo\\gemini\\session-abc.json' })
   // Gemini 有 cwd → 归组
   assert.equal(attached.length, 1)
 })
@@ -574,6 +600,7 @@ test('import_reasonix 单文件：meta 派生 cwd/标题、落盘、schema 校�
   assert.equal(saved.meta.cwd, 'D:\\Reasonix') // meta.workspace → cwd
   assert.equal(saved.events.at(-1).type, 'session/title') // meta.summary → 标题
   assert.ok(saved.events.every((e, i) => e.seq === i))
+  assertImportedMarker(saved.events, { tool: 'reasonix', sourceId: 'desktop-v2', sourcePath: 'D:\\demo\\reasonix\\desktop-v2.jsonl' })
   // cwd → 归组
   assert.equal(attached.length, 1)
   assert.equal(attached[0].id, 'import-desktop-v2')
@@ -729,6 +756,8 @@ test('import_opencode 单库文件：批量形态、逐会话落盘、schema 校
   assert.equal(savedA.meta.createdAt, 1786000000000)
   assert.equal(savedA.events.at(-1).type, 'session/title')
   assert.ok(savedA.events.every((e, i) => e.seq === i))
+  // 标记：tool=opencode、sourceId=源会话 id、sourcePath=opencode.db 路径（工具入参）
+  assertImportedMarker(savedA.events, { tool: 'opencode', sourceId: 'ses-a', sourcePath: dbPath })
   // tool/call + tool/result 关联落盘
   const call = savedA.events.find((e) => e.type === 'tool/call')
   const result = savedA.events.find((e) => e.type === 'tool/result')

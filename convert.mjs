@@ -42,7 +42,8 @@ export function mapContentBlock(block) {
 // 把「回合中间结构」合成平衡的 DSH 事件日志（seq 从 0 连续；surface 事件带
 // surfaceOp:'append'；tool/result 用 sourceEventSeqs 关联其 tool/call）。
 // turns: [{ prompt, steps: [{ content, toolCalls, toolResults }] }]
-function synthesizeSession({ meta, turns, title, provider, model, skipped, records }) {
+// imported: 可选 { sourcePath }——index 层从工具入参 path 归一化后传入（REQ-32）。
+function synthesizeSession({ meta, turns, title, provider, model, skipped, records, imported }) {
   const events = []
   let seq = 0
   let turn = 0
@@ -67,6 +68,26 @@ function synthesizeSession({ meta, turns, title, provider, model, skipped, recor
     for (const s of t.steps) {
       for (const tr of s.toolResults) coveredCallIds.add(tr.toolCallId)
     }
+  }
+
+  // 内部标记（REQ-32）：本会话由哪个工具从哪个源文件导入。seq 0 钉在日志开头
+  //（首个 turn/start 之前）；ignorable: true 让读侧全链路放行（KNOWN_SESSION_EVENT_TYPES
+  // || ignorable），不依赖 SessionHeader——jsonl 后端会静默丢弃 header 附加字段。
+  // 仅 turns > 0 时写：无可导入内容不落空会话、不加标记。sourceId 用源会话 id
+  //（各源显式写入 meta.sourceId，不从 import- 前缀反解），sourcePath 由 index 层传入。
+  if (turns.length > 0) {
+    events.push({
+      type: 'session/imported',
+      seq: seq++,
+      time: meta.createdAt,
+      ignorable: true,
+      data: {
+        tool: provider,
+        sourceId: meta.sourceId ?? meta.id,
+        sourcePath: imported?.sourcePath,
+        importedAt: Date.now(),
+      },
+    })
   }
 
   for (const t of turns) {
@@ -292,9 +313,10 @@ export function convertClaudeJsonl(raw, args = {}) {
 
   const sessionId = args.sessionId || mintSessionId(sourceId)
   const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: createdAt ?? Date.now() }
+  if (sourceId) meta.sourceId = sourceId
   if (cwd) meta.cwd = cwd
 
-  const syn = synthesizeSession({ meta, turns, title, provider: 'claude-code', model, skipped, records: recs.length })
+  const syn = synthesizeSession({ meta, turns, title, provider: 'claude-code', model, skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
   return { ...syn, droppedToolResults }
 }
 
@@ -427,9 +449,10 @@ export function convertCodexJsonl(raw, args = {}) {
 
   const sessionId = args.sessionId || mintSessionId(sourceId)
   const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: createdAt ?? Date.now() }
+  if (sourceId) meta.sourceId = sourceId
   if (cwd) meta.cwd = cwd
 
-  return synthesizeSession({ meta, turns, title, provider: 'codex', model, skipped, records: recs.length })
+  return synthesizeSession({ meta, turns, title, provider: 'codex', model, skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
 }
 
 // ChatGPT 网页导出 conversations.json → 每个会话一个 DSH 会话。
@@ -519,9 +542,10 @@ function convertChatgptConversation(conv, args) {
 
   const sessionId = args.sessionId || mintSessionId(conv.id)
   const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt }
+  if (conv.id) meta.sourceId = conv.id
   // 无用户回合（如只有 system 注入的会话）不产生空会话
   if (turns.length === 0) return null
-  return synthesizeSession({ meta, turns, title, provider: 'chatgpt', model: 'chatgpt', skipped: 0, records: thread.length })
+  return synthesizeSession({ meta, turns, title, provider: 'chatgpt', model: 'chatgpt', skipped: 0, records: thread.length, imported: { sourcePath: args.sourcePath } })
 }
 
 // 提取 ChatGPT 消息正文：content.parts 数组（字符串或 {text} 对象）。
@@ -601,10 +625,11 @@ export function convertCursorJsonl(raw, args = {}) {
   }
 
   // Cursor 无时间戳 / 会话内 id：会话 id 由 index 层从文件名（composer uuid）传入 args.cursorId，
-  // 保证幂等；未传入时退化为时间戳（单文件手工导入仍可用）。
+  // 保证幂等；未传入时退化为时间戳（单文件手工导入仍可用）。sourceId 即 composer id。
   const finalId = args.sessionId || mintSessionId(args.cursorId)
   const meta = { version: SESSION_FORMAT_VERSION, id: finalId, createdAt: Date.now() }
-  return synthesizeSession({ meta, turns, title: undefined, provider: 'cursor', model: 'cursor', skipped, records: recs.length })
+  if (args.cursorId) meta.sourceId = args.cursorId
+  return synthesizeSession({ meta, turns, title: undefined, provider: 'cursor', model: 'cursor', skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
 }
 
 // 过滤 Cursor 的 "[REDACTED]" 哨兵文本；整段被剥离后返回空串。
@@ -705,8 +730,9 @@ export function convertGeminiJson(raw, args = {}) {
 
   const sessionId = args.sessionId || mintSessionId(chat.sessionId)
   const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: parseTime(chat.startTime) }
+  if (chat.sessionId) meta.sourceId = chat.sessionId
   if (Array.isArray(chat.directories) && chat.directories[0]) meta.cwd = chat.directories[0]
-  return synthesizeSession({ meta, turns, title: undefined, provider: 'gemini', model, skipped: 0, records: chat.messages.length })
+  return synthesizeSession({ meta, turns, title: undefined, provider: 'gemini', model, skipped: 0, records: chat.messages.length, imported: { sourcePath: args.sourcePath } })
 }
 
 // 提取 Gemini 内联工具结果文本；无结果返回 null。
@@ -826,8 +852,9 @@ export function convertReasonixJsonl(raw, args = {}) {
     id: finalId,
     createdAt: args.createdAt || firstCreatedAt || reasonixStemTime(args.reasonixId) || Date.now(),
   }
+  if (args.reasonixId) meta.sourceId = args.reasonixId
   if (args.cwd) meta.cwd = args.cwd
-  return synthesizeSession({ meta, turns, title: args.title, provider: 'reasonix', model: 'reasonix', skipped, records: recs.length })
+  return synthesizeSession({ meta, turns, title: args.title, provider: 'reasonix', model: 'reasonix', skipped, records: recs.length, imported: { sourcePath: args.sourcePath } })
 }
 // opencode 历史库会话（index 层从 SQLite 抽取的中间 JSON）→ DSH 会话。
 //
@@ -927,6 +954,7 @@ export function convertOpencodeJson(raw, args = {}) {
 
   const sessionId = args.sessionId || mintSessionId(chat.id)
   const meta = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: parseTime(chat.createdAt) }
+  if (chat.id) meta.sourceId = chat.id
   if (typeof chat.directory === 'string' && chat.directory) meta.cwd = chat.directory
   const title = typeof chat.title === 'string' ? chat.title.trim() : undefined
   return synthesizeSession({
@@ -937,6 +965,7 @@ export function convertOpencodeJson(raw, args = {}) {
     model: opencodeSessionModel(chat),
     skipped: 0,
     records: chat.messages.length,
+    imported: { sourcePath: args.sourcePath },
   })
 }
 
