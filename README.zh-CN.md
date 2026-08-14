@@ -8,7 +8,7 @@
 
 # DSH Chat Import
 
-> 把 Claude Code / Codex / ChatGPT / Cursor / Gemini / Reasonix / opencode 的聊天记录导入 DeepSeek Harness，成为可继续（resume）的会话。
+> 把 Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix 与 opencode 的聊天记录导入 DeepSeek Harness，并在上次停下的地方继续聊下去。
 
 [![npm version](https://img.shields.io/npm/v/dsh-chat-import)](https://www.npmjs.com/package/dsh-chat-import)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -16,43 +16,88 @@
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 **已收录于：** [Awesome DeepSeek Harness](https://github.com/0xsline/awesome-deepseek-harness) · [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [Awesome DSH Plugins](https://github.com/Dominic789654/awesome-deepseek-harness) · [npm](https://www.npmjs.com/package/dsh-chat-import)
 
-`Nwflower/dsh-chat-import` 为 DeepSeek Harness 补充「外部聊天记录导入」能力：把 Claude Code 的 JSONL transcript、Codex / ChatGPT CLI 的 rollout JSONL、ChatGPT 网页导出的 conversations.json、Cursor 的 agent transcript、Gemini CLI 的会话 JSON、Reasonix 的会话 JSONL 与 opencode 的 SQLite 历史库 **全保真**导入为**可继续（resume）**的 DSH 会话。插件不改写源文件，也不修改 DSH 引擎内部；每次导入都通过公开的 `sessionPersistence` 追加一条全新的、事件平衡的会话日志，并把会话挂接到其 `cwd` 对应的工作区。
+`dsh-chat-import` 把外部 Agent 的聊天记录变成 **全保真、可继续（resume）的 DeepSeek Harness 会话**——工具调用、思考过程一应俱全。它**只读**源文件（绝不改写你的原始记录）、不碰 DSH 引擎，每次导入都通过公开的 `sessionPersistence` 服务追加一条全新的、事件平衡的会话日志，并按源 `cwd` 挂接到对应工作区。
 
-## 功能
+`7 种来源` · `复制式、只读源` · `可无缝续聊` · `自动归组工作区`
 
-- **导入 Claude Code transcript**：读取 `~/.claude/projects/<slug>/<sessionId>.jsonl`，解析 user / assistant / tool / thinking 消息。只有主 transcript（文件名 = 记录中的 `sessionId`）会导入为会话：`<sessionId>/subagents/**` 下的辅助片段 transcript（如 `agent-*.jsonl`）记录携带父 `sessionId`，会被跳过并注明原因，绝不会顶替或并入主会话。
-- **导入 Codex / ChatGPT rollout**：读取 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`（OpenAI Codex CLI 已并入 ChatGPT，格式不变），解析 `response_item` 的 message / function_call / custom_tool_call / reasoning。
-- **导入 ChatGPT 网页导出**：读取导出 ZIP 解压出的 `conversations.json`（一个文件含全部会话），沿 mapping 主线程重建对话。
-- **导入 Cursor agent transcript**：读取 `~/.cursor/projects/<slug>/agent-transcripts/<composer-id>/<composer-id>.jsonl`，解析 text / tool_use，过滤 `[REDACTED]` 哨兵。
-- **导入 Gemini CLI 会话**：读取 `~/.gemini/history/<slot>/chats/session-*.json`（一文件一 JSON 对象），解析 user/gemini 消息、`thoughts` → `reasoning`、内联 `toolCalls`（结果与调用同对象）；`info` 系统通知跳过。
-- **导入 Reasonix 会话**：读取 `~/.reasonix/sessions/desktop-*.jsonl` 与 `subagent-sub-*.jsonl`，解析 user/assistant/tool 消息（兼容 v1 嵌套与 v2 扁平 `tool_calls`）、`reasoning_content` → `reasoning`、按 `tool_call_id` 配对工具结果；`cwd`/标题取自同目录 `<stem>.meta.json`；目录扫描排除 V2 WAL 伴生文件（`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`）。
-- **导入 opencode 会话**：读取 opencode 的 SQLite 历史库（`~/.local/share/opencode/opencode.db`），从 `session` / `message` / `part` 三表重建每个会话（`event` 表只是部分镜像、`session_message` / `session_input` 为空，均忽略）；文本 / reasoning / 工具调用（含错误标记）/ 图片附件 / 补丁 / 子任务完整保留，模型解析走「消息级 → 会话级」回退链。尊重 opencode 的**对话压缩（compaction）**——压缩过的会话按「最后一次摘要（前置 reasoning 块）+ 保留尾巴」导入，而非全量历史；用 `fullHistory: true` 可切回全量。
-- **全保真**：工具调用历史映射为 `tool/call` + `tool/result`（含错误标记、`sourceEventSeqs` 关联）、thinking 块映射为 `reasoning`、多步 assistant 消息完整保留。
-- **可继续（resume）**：合成 `turn/start`、`step/start`、`user/message`、`assistant/message`、`tool/call`、`tool/result`、`step/end`、`turn/end` 事件，落盘为平衡、可加载的会话，点开即可续聊。
-- **保留会话元数据**：源 `sessionId`、`cwd`、`ai-title`（Claude，钉为 `session/title`，不被自动标题覆盖）、真实 model 名（源有记录时）、创建时间。
-- **自动挂接工作区**：导入后按 `cwd` 解析/创建工作区并 `attachSession`，会话归组正确（不再「未分组」）；ChatGPT 导出与 Cursor transcript 无 `cwd` 字段，不归组。
-- **幂等导入**：目标会话已存在时跳过，不重复写入；畸形 JSONL 行计数上报，不中断。
-- **批量导入**：`path` 传目录时递归扫描 `.jsonl`（Claude / Codex / Cursor / Reasonix）或 `.json`（ChatGPT / Gemini），每个文件导入为独立会话（ChatGPT 文件内每个会话独立），返回逐文件/逐会话汇总。Claude 辅助 transcript（文件名 ≠ 记录中的 `sessionId`）跳过，不会并入主会话。opencode 则指向其数据目录（内含 `opencode.db`，或直接给 `.db` 文件），一次导入库内全部会话。
+## ✨ 功能特性
 
-## 设计
+- **📥 导入 7 种来源** — Claude Code JSONL、Codex / ChatGPT CLI rollout、ChatGPT 网页导出、Cursor agent transcript、Gemini CLI 会话、Reasonix 会话与 opencode SQLite 历史库。一个插件，每种来源一条命令。
+- **🔍 全保真** — 工具调用历史映射为真实的 `tool/call` + `tool/result`（含错误标记与 `sourceEventSeqs` 关联），思考块映射为 `reasoning`，多步 assistant 消息完整保留。
+- **▶️ 可无缝续聊** — 每次导入都合成一条平衡、可加载的会话（`turn/start` → `step/start` → `user/message` → `assistant/message` → `tool/call`/`tool/result` → `step/end` → `turn/end`）：点开即可继续对话。
+- **🗂 自动归组工作区** — 会话按源 `cwd` 挂进对应工作区（不再「未分组」）；源有记录时保留 sessionId、标题、模型与创建时间。
+- **🔁 幂等** — 重复导入自动跳过已存在的会话；畸形行计数上报、绝不中断导入。
+- **📦 批量导入** — 指向一个目录（或整个 opencode 数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。
 
-### 事件溯源映射
+## 🚀 快速开始
 
-插件把 Claude Code 的 transcript 记录按「直连人类提问」切轮：`type === 'user'` 且 `content` 为字符串时开新轮；其后每条 `assistant` 消息（含 `tool_use` / `thinking` 块）构成一步，`tool_result` 挂到最近一步。每轮合成一个闭合的 DSH 回合：
+```bash
+# 1. 安装（npm 包）
+dsh plugin --profile web add dsh-chat-import
 
-1. `turn/start` → `step/start` → `user/message` → `assistant/message` →（`tool/call` + `tool/result`）→ `step/end` → `turn/end`。
-2. 消息体带稳定 id（`import:<sessionId>:u<turn>` / `:a<turn>:<step>` / `:t<turn>:<step>:<callId>`），并带 `surfaceOp: 'append'`。
-3. assistant 的 `source` 为 `{ kind: 'model', provider: 'claude-code', model: <源模型> }`；`tool/result` 的 `source` 为 `{ kind: 'tool', callId }`，并通过 `sourceEventSeqs` 关联到对应 `tool/call`。
+# 或从本地源码安装
+dsh plugin --profile web add -w link:/path/to/dsh-chat-import
+```
 
-### 服务依赖
+2. 在任意 DSH 会话里导入单个文件或整个目录：
 
-- Host 只依赖公开服务：`sessionPersistence`（`create` + `append`）、`fs`（读源文件）、`tools`（注册工具）、`workspaceRegistry`（`resolveByPath` / `create` / `attachSession` 归组）。
-- 不发布任何服务，因此无需 isolate realm。
-- 无 Browser 侧，纯 Host 插件。
+```
+import_claude({ path: "~/.claude/projects" })
+```
 
-## 数据模型
+3. 刷新一次会话列表，打开导入的会话，继续对话——它会从源记录停下的地方无缝接上。
+
+## 🗂 能导入什么？
+
+| 来源 | 存储位置 | 导入工具 |
+| --- | --- | --- |
+| Claude Code | `~/.claude/projects/<slug>/<sessionId>.jsonl` | `import_claude` |
+| Codex / ChatGPT CLI | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `import_codex` |
+| ChatGPT（网页导出） | 导出 ZIP → `conversations.json` | `import_chatgpt` |
+| Cursor | `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` | `import_cursor` |
+| Gemini CLI | `~/.gemini/history/<slot>/chats/session-*.json` | `import_gemini` |
+| Reasonix | `~/.reasonix/sessions/desktop-*.jsonl` | `import_reasonix` |
+| opencode | `~/.local/share/opencode/opencode.db`（SQLite） | `import_opencode` |
+
+每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、创建时间、工具调用与结果、思考过程；数据较少的格式（Cursor transcript、ChatGPT 导出）导入其已有的内容，并明确报告缺失的部分。
+
+## 🛠 使用
+
+> **注意**：导入会即时落盘，但 DSH 的会话列表不会自动刷新——导入后请刷新页面（或会话列表）才能看到新会话。
+
+```
+import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl" })
+import_codex({ path: "C:\Users\<you>\.codex\sessions\2026\05\18\rollout-2026-05-18T21-14-16-xxxx.jsonl" })
+import_chatgpt({ path: "C:\Users\<you>\Downloads\chatgpt-export\conversations.json" })
+import_cursor({ path: "C:\Users\<you>\.cursor\projects\<slug>\agent-transcripts\<composer-id>\<composer-id>.jsonl" })
+import_gemini({ path: "C:\Users\<you>\.gemini\history\<slot>\chats\session-2026-04-17T18-09-b26d7f99.json" })
+import_reasonix({ path: "C:\Users\<you>\.reasonix\sessions\desktop-202606020721-1.jsonl" })
+import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
+```
+
+`import_claude` / `import_codex` / `import_cursor` / `import_gemini` / `import_reasonix` 行为一致：
+
+- `path` 可以是**单个文件或目录**（目录递归扫描，每个文件成为独立会话）。
+- 可选 `sessionId` 覆盖目标 DSH 会话 id（默认 `import-<源sessionId>`；Cursor 取文件名的 composer id，Reasonix 取文件名 stem）。
+- 返回 `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported }`。
+
+`import_chatgpt` 不同：一个 `conversations.json` 包含**全部**会话，所以即使单文件也返回批量形态 `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`（每个 `results` 项是一个会话）。ChatGPT 导出无 `cwd`，导入的会话不归组工作区。
+
+`import_opencode` 同样恒返回批量形态——一个 `opencode.db` 包含**全部**会话。`path` 可以是 `.db` 文件或其数据目录；可选 `sessionIds` 只导入指定会话；可选 `fullHistory: true` 导入全量消息历史、忽略 opencode 的对话压缩（默认 `false`——压缩会话按「最后一次摘要 + 保留尾巴」导入）。导入的会话保留 `directory` 作为 `cwd`，归组工作区。
+
+## 🧩 数据模型
+
+导入器按「直连人类提问」（`content` 为字符串的 `user` 记录）把每个 transcript 切成轮次，每轮合成一个闭合的 DSH 回合：
+
+```
+turn/start → step/start → user/message → assistant/message → (tool/call + tool/result) → step/end → turn/end
+```
+
+消息体带稳定 id 与 `surfaceOp: 'append'`；`tool/result` 通过 `sourceEventSeqs` 关联回对应的 `tool/call`。assistant 的 `source` 为 `{ kind: 'model', provider: 'claude-code', model: <源模型> }`；`tool/result` 的 source 为 `{ kind: 'tool', callId }`。`SessionHeader` 保留 `version: 0`、`id: import-<源sessionId>`、源 `createdAt` 与 `cwd`。
 
 ### Claude Code JSONL
+
+主 transcript 在 `~/.claude/projects/<slug>/<sessionId>.jsonl`；`<sessionId>/subagents/**` 下的辅助 subagent / workflow 片段复用父 `sessionId`，会被跳过（绝不会顶替或并入主会话）。
 
 | Claude Code JSONL | DSH SessionEvent |
 | --- | --- |
@@ -63,29 +108,27 @@
 | `{ type: "user", content: [{ type: "tool_result", … }] }` | `tool/result`（`sourceEventSeqs` 关联 `tool/call`） |
 | 轮次结束 | `step/end` + `turn/end` |
 
-存储：主 transcript 在 `~/.claude/projects/<slug>/<sessionId>.jsonl`；同级 `<sessionId>/subagents/**` 目录存放辅助片段 transcript（`agent-*.jsonl`、workflow journal），其记录复用父 `sessionId`。导入只把主 transcript（文件名 = 记录中的 `sessionId`）当作会话——辅助文件跳过并注明原因，而不是当作（或并入）主会话，否则先被扫描到的文件会顶掉完整主对话。
-
 ### Codex / ChatGPT CLI rollout
 
-行 envelope：`{ timestamp, type, payload }`。`event_msg` 的 `user_message` / `agent_message` 是 `response_item` 的重复，忽略避免重复计数；以 `<` 开头的用户消息块（`<environment_context>`、`<user_instructions>`、`<system-reminder>` 等）是 harness 注入，不进入 prompt。
+行 envelope：`{ timestamp, type, payload }`。`event_msg` 的 user/agent 消息是 `response_item` 的重复、被忽略；以 `<` 开头的用户消息块（`<environment_context>`、`<user_instructions>` 等）是 harness 注入，不进入 prompt。Codex `reasoning` 内容加密，跳过。
 
 | Codex rollout | DSH SessionEvent |
 | --- | --- |
 | `session_meta` / `turn_context` | `SessionHeader`（id / cwd / createdAt / model） |
 | `response_item message role=user`（`input_text`） | `turn/start` + `step/start` + `user/message` |
 | `response_item message role=assistant`（`output_text`） | `assistant/message` |
-| `response_item function_call` / `custom_tool_call` | `tool/call`（挂到最近 assistant 步骤） |
-| `response_item function_call_output` / `custom_tool_call_output` | `tool/result`（按 `call_id` 跨行配对，`sourceEventSeqs` 关联） |
-| `response_item reasoning` | 跳过（内容加密不可读） |
+| `response_item function_call` / `custom_tool_call` | `tool/call` |
+| `response_item function_call_output` / `custom_tool_call_output` | `tool/result`（按 `call_id` 配对，`sourceEventSeqs` 关联） |
+| `response_item reasoning` | 跳过（加密不可读） |
 | 轮次结束 | `step/end` + `turn/end` |
 
-### ChatGPT 网页导出 conversations.json
+### ChatGPT 网页导出（conversations.json）
 
-顶层是 JSON 数组（一个文件含全部会话），每个会话对象含 `mapping`（DAG：nodeId → `{ id, message, parent, children }`）。沿 active branch（`children` 最后一个）从 root 遍历得到主线程；`message: null` 的占位节点与 `author.role === 'system'` 跳过；时间戳是 Unix 秒（×1000 转 ms）。ChatGPT 是聊天，导出无 `cwd`，不归组工作区。
+顶层是 JSON 数组（一个文件、全部会话），每个会话含 `mapping` DAG。沿 active branch（最后一个 `children` 项）重建主线程；`message: null` 的占位节点与 `author.role === 'system'` 跳过；时间戳是 Unix 秒（×1000 转 ms）。导出无 `cwd`，会话不归组。
 
 | conversations.json | DSH SessionEvent |
 | --- | --- |
-| 会话对象（`id` / `title` / `create_time`） | `SessionHeader`（id / createdAt）+ `session/title` |
+| 会话对象（`id` / `title` / `create_time`） | `SessionHeader` + `session/title` |
 | `mapping` 中 `author.role: "user"` 节点 | `turn/start` + `step/start` + `user/message` |
 | `author.role: "assistant"` 节点 | `assistant/message` |
 | `author.role: "tool"` 节点 | `tool/result`（挂最近一步） |
@@ -94,19 +137,19 @@
 
 ### Cursor agent transcript
 
-行结构：`{ role: "user" | "assistant", message: { content: [...] } }`，无 envelope。content 只有 `text` / `tool_use` 两种块（`input` 已是对象）。用户首条消息包在 `<user_query>` 标签里（剥离）；assistant 文本常有 `"[REDACTED]"` 哨兵（客户端隐私剥离，过滤）；transcript **不含 `tool_result`**（工具结果只在 UI 的 bubble store）→ 只导入调用历史；无时间戳 / model，会话 id 取文件名（composer uuid），无 `cwd`。
+行结构：`{ role: "user" | "assistant", message: { content: [...] } }`。用户首条消息包在 `<user_query>` 里（剥离）；`[REDACTED]` 哨兵被过滤。transcript **不含 `tool_result`**（工具结果只在 UI 的 bubble store）、无时间戳 / model——会话 id 取文件名，无 `cwd`。
 
 | Cursor transcript | DSH SessionEvent |
 | --- | --- |
 | `role: "user"`（`<user_query>` 包裹的 text） | `turn/start` + `step/start` + `user/message` |
 | `role: "assistant"` 的 text 块 | `assistant/message` |
-| `role: "assistant"` 的 `tool_use` 块 | `tool/call`（无 `tool/result`，transcript 不含结果） |
+| `role: "assistant"` 的 `tool_use` 块 | `tool/call`（transcript 无结果） |
 | `[REDACTED]` 哨兵 | 过滤 |
 | 轮次结束 | `step/end` + `turn/end` |
 
 ### Gemini CLI 会话 JSON
 
-存储：`~/.gemini/history/<slot>/chats/session-*.json`（一文件一 JSON 对象，非 JSONL）。顶层：`{ sessionId, projectHash, startTime, directories, kind, messages: [...] }`。消息类型：`user`（content 是 parts 数组）开新轮；`gemini`（字符串 content，可带 `thoughts` 与 `toolCalls`）是一步 assistant；`info`（CLI 系统通知：错误横幅、取消等）跳过。工具结果**内联**在与调用同一对象上（不同于 Claude 拆分消息）。
+`~/.gemini/history/<slot>/chats/session-*.json`，一文件一 JSON 对象。消息类型：`user`（parts 数组）开新轮；`gemini`（字符串 content，可带 `thoughts` 与 `toolCalls`）是一步 assistant；`info`（CLI 通知）跳过。工具结果**内联**在与调用同一对象上。
 
 | Gemini 会话 JSON | DSH SessionEvent |
 | --- | --- |
@@ -114,13 +157,13 @@
 | `type: "user"`（parts 数组） | `turn/start` + `step/start` + `user/message` |
 | `type: "gemini"` 字符串 content | `assistant/message` |
 | `thoughts` 条目 | `reasoning` content block |
-| `toolCalls[].args` + 内联 `result` | `tool/call` + `tool/result`（同一步，`sourceEventSeqs` 关联；`status: "error"` → `isError`） |
+| `toolCalls[].args` + 内联 `result` | `tool/call` + `tool/result`（`status: "error"` → `isError`） |
 | `type: "info"` | 跳过 |
 | 轮次结束 | `step/end` + `turn/end` |
 
 ### Reasonix 会话 JSONL
 
-存储：`~/.reasonix/sessions/<stem>.jsonl`（`desktop-*` 桌面会话 / `subagent-sub-*` 子代理会话），每文件一个会话。行是 OpenAI 风格消息（无 envelope），兼容两代格式：v1 的 `tool_calls` 是嵌套 `{ id, type: "function", function: { name, arguments } }`，v2 是扁平 `{ id, name, arguments }` 且消息可带 `createdAt`（unix 毫秒）。工具结果（`role: "tool"` 带 `tool_call_id`）按 `tool_calls[].id` 配对。同目录 `<stem>.meta.json` 提供 `workspace` → `cwd` 与 `summary` → 钉住标题。转录与 meta 均无时间戳时，会话创建时间回退到文件名内嵌的时刻（`desktop-YYYYMMDDHHMM-*` / `subagent-sub-*-YYYYMMDDHHMM`）。V2 的 WAL 伴生文件（`<stem>.events.jsonl`、`.conflicts.jsonl`、`.guardian.jsonl`）是追加日志而非会话，目录扫描时排除。
+`~/.reasonix/sessions/<stem>.jsonl`，无 envelope 的 OpenAI 风格消息；兼容 v1（嵌套 `{ id, type: "function", function: { name, arguments } }`）与 v2（扁平 `{ id, name, arguments }`）两种 `tool_calls`。工具结果（`role: "tool"` 带 `tool_call_id`）按 `tool_calls[].id` 配对。同目录 `<stem>.meta.json` 提供 `workspace` → `cwd` 与 `summary` → 钉住标题；转录与 meta 均无时间戳时，创建时间回退到文件名内嵌时刻。V2 WAL 伴生文件（`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`）在目录扫描时排除。
 
 | Reasonix JSONL | DSH SessionEvent |
 | --- | --- |
@@ -128,116 +171,70 @@
 | `role: "assistant"` 字符串 content | `assistant/message` |
 | `reasoning_content` | `reasoning` content block |
 | `tool_calls[].function`（v1 嵌套 / v2 扁平） | `tool/call` |
-| `role: "tool"` 带 `tool_call_id` | `tool/result`（按 `tool_call_id` 配对，`sourceEventSeqs` 关联） |
+| `role: "tool"` 带 `tool_call_id` | `tool/result`（按 `tool_call_id` 配对） |
 | `<stem>.meta.json`（`workspace` / `summary`） | `cwd` / `session/title` |
 | 轮次结束 | `step/end` + `turn/end` |
 
 ### opencode 会话数据库（SQLite）
 
-存储：`~/.local/share/opencode/opencode.db`（SQLite，WAL）。导入器读取 `session` / `message` / `part` 三表——每行 `message`/`part` 的 `data` 是一份 JSON 文档；message 按 `time_created, id` 升序、part 同理。`event` 表只是部分会话镜像、`session_message` / `session_input` 为空，全部忽略。工具结果**内联**在 tool part 的 `state` 里（不同于 Claude 拆分消息），因此一个 part 同时产出 `tool/call` + `tool/result`；即使没有 output 的 tool part 也发空结果，保证 call/result 配对。opencode 会压缩长对话：`compaction` part 携带 `tail_start_id`，紧随其后的 `mode: "compaction"` 摘要消息保存摘要正文。默认只保留**最后一次**压缩的摘要（前置 reasoning 块）+ `tail_start_id` 之后的消息，匹配 opencode 的实际压缩上下文；`fullHistory: true` 则导入全部消息。
+读取 `~/.local/share/opencode/opencode.db` 的 `session` / `message` / `part` 三表（`event` 表只是部分镜像、`session_message` / `session_input` 为空，忽略）。工具结果**内联**在 tool part 的 `state` 里，因此一个 part 同时产出 `tool/call` + `tool/result`；没有 output 的 tool part 也发空结果，保证 call/result 配对。默认尊重 opencode 的**对话压缩**：只导入最后一次压缩摘要（前置 reasoning 块）+ `tail_start_id` 之后的消息；`fullHistory: true` 导入全量。
 
 | opencode DB | DSH SessionEvent |
 | --- | --- |
-| `session` 行（`id` / `title` / `directory` / `time_created` / `model`） | `SessionHeader`（id / createdAt / cwd）+ `session/title` |
+| `session` 行（`id` / `title` / `directory` / `time_created` / `model`） | `SessionHeader` + `session/title` |
 | `message` 为 `role: "user"`（text part） | `turn/start` + `step/start` + `user/message` |
-| `message` 为 `role: "assistant"` | `assistant/message`（一条消息一步） |
+| `message` 为 `role: "assistant"` | `assistant/message` |
 | part `type: "text"` | `text` content block |
 | part `type: "reasoning"` | `reasoning` content block |
-| part `type: "tool"` | `tool/call` + `tool/result`（同一步，`sourceEventSeqs` 关联；`state.status === "error"` → `isError`） |
+| part `type: "tool"` | `tool/call` + `tool/result`（`state.status === "error"` → `isError`） |
 | part `type: "file"` | `text` 块 `[image: <filename>]` |
 | part `type: "patch"` | `text` 块 `[patch: <N> files]` |
 | part `type: "subtask"` | `text` 块 `[subtask: <command> — <description>]` |
-| part `type: "step-start"` / `"step-finish"` | 跳过（结构性） |
-| part `type: "compaction"`（`tail_start_id`） | 丢弃 `tail_start_id` 之前的历史；其摘要消息成为前置 reasoning 块 |
+| part `type: "compaction"`（`tail_start_id`） | 丢弃 `tail_start_id` 之前的历史；摘要成为前置 reasoning |
 | 轮次结束 | `step/end` + `turn/end` |
 
-会话头 `SessionHeader`：`version: 0`、`id: import-<源sessionId>`、`createdAt`（源时间戳；Reasonix 回退文件名内嵌时刻，两者皆无如 Cursor 才取导入时刻）、`cwd`（源工作目录，ChatGPT 导出与 Cursor transcript 无）。
+## ⚙️ 兼容性
 
-## 构建
+- 只消费 host 公开插件 API（`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`）与 `@deepseek-ai/dsh-tools`（声明为 `peerDependencies`，实测版本 `0.1.0-rc.6`）。
 
-纯 ESM，无编译步骤：`index.mjs` 即 Host 插件入口（转换核心在无依赖的 `convert.mjs`，可独立单测），无需 `tsc` / 打包。
+| 源格式 | 导入工具 | 实测 |
+| --- | --- | --- |
+| Claude Code | `import_claude` | ✅ 44 tool/call + 44 tool/result 落盘、`load OK` |
+| Codex / ChatGPT CLI | `import_codex` | ✅ 单测 + mock 集成（`npm test`） |
+| ChatGPT 网页导出 | `import_chatgpt` | ✅ 单测 + mock 集成（`npm test`） |
+| Cursor | `import_cursor` | ✅ 单测 + mock 集成（`npm test`） |
+| Gemini CLI | `import_gemini` | ✅ 单测 + mock 集成（`npm test`） |
+| Reasonix | `import_reasonix` | ✅ 单测 + mock 集成（`npm test`）；55 个真实会话 dry-run |
+| opencode | `import_opencode` | ✅ 单测 + mock 集成（`npm test`） |
 
-## 安装
+- **实测**：2026-08 于 `dsh 0.1.0-rc.6`（web profile）验证「导入 → resume → 工作区归组」全链路；`npm test`（79 个用例）覆盖七种源格式的转换纯函数与 mock 集成路径。
 
-```bash
-dsh plugin --profile web add -w link:/path/to/dsh-chat-import
-```
+## 🔒 安全与边界
 
-或（已发布 npm 后）：
+- 源 transcript 只读、绝不原地改写；DSH 历史事件 append-only（deep-frozen）——只新增、绝不修改既有事件。
+- 插件不修改 DSH 引擎、apiproxy 或官方 UI 包；不发布任何服务，无需 isolate realm。
+- 读取工作区之外的 transcript 需要会话沙箱允许访问该路径。
+- 已知边界：不导入 `permission` / `summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃 `message.content` 之外的附加字段；Claude subagent / workflow 片段 transcript 跳过（只有主 `<sessionId>.jsonl` 成为会话）；Codex `reasoning` 加密跳过；ChatGPT 导出只重建主线程（分支取最后 child）、工具消息按文本挂最近一步；Cursor transcript 无 `tool_result`、`[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方无稳定 schema）；Reasonix 读取 JSONL checkpoint（V2 WAL 排除）；opencode `patch` part 无 diff（只发 `[patch: <N> files]` 占位）、工具输出可能原样保留 ANSI 转义。
 
-```bash
-dsh plugin --profile web add dsh-chat-import
-```
-
-`dsh plugin` 是 pnpm 转发器：`add` 后识别 `dsh.bundle` 声明，把 `cordis.patch.yml` 的 `insert` 行收编进 profile 的 bundles，重启 dsh 即生效。本地开发建议用 `link:`（符号链接）。
-
-## 兼容性
-
-- **依赖面**：仅消费 host 公开插件 API（`sessionPersistence` / `fs` / `tools` / `workspaceRegistry`）与 `@deepseek-ai/dsh-tools`（已声明为 `peerDependencies`，实测版本 `0.1.0-rc.6`）。
-
-| 源格式 | 存储位置 | 导入工具 | 实测 |
-| --- | --- | --- | --- |
-| Claude Code | `~/.claude/projects/<slug>/<sessionId>.jsonl` | `import_claude` | ✅ 44 tool/call + 44 tool/result 落盘、`load OK` |
-| Codex / ChatGPT CLI | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `import_codex` | ✅ 单测 + mock 集成（`npm test`） |
-| ChatGPT 网页导出 | 导出 ZIP → `conversations.json` | `import_chatgpt` | ✅ 单测 + mock 集成（`npm test`） |
-| Cursor | `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` | `import_cursor` | ✅ 单测 + mock 集成（`npm test`） |
-| Gemini CLI | `~/.gemini/history/<slot>/chats/session-*.json` | `import_gemini` | ✅ 单测 + mock 集成（`npm test`） |
-| Reasonix | `~/.reasonix/sessions/desktop-*.jsonl`（及 `subagent-sub-*.jsonl`） | `import_reasonix` | ✅ 单测 + mock 集成（`npm test`）；55 个真实会话 dry-run |
-| opencode | `~/.local/share/opencode/opencode.db`（SQLite） | `import_opencode` | ✅ 单测 + mock 集成（`npm test`） |
-
-- **实测**：2026-08 于 `dsh 0.1.0-rc.6` 的 web profile 验证「导入 → resume → 工作区归组」全链路；`npm test`（68 个用例）覆盖七种源格式的转换纯函数与 mock 集成路径。
-
-## 卸载
-
-从 profile 的 bundles 中移除 `import-claude`（即 `cordis.patch.yml` 的 `insert` 行），重启 dsh 后插件不再加载。已导入的会话保留在 DSH 数据目录，不受卸载影响。
-
-## 使用
-
-> **注意**：导入会即时落盘，但 DSH 的会话列表不会自动刷新——导入后请刷新页面（或会话列表）才能看到新会话。
-
-在挂载了本插件的会话里调用工具：
-
-```
-import_claude({ path: "C:\\Users\\<you>\\.claude\\projects\\<slug>\\<sessionId>.jsonl" })
-import_codex({ path: "C:\\Users\\<you>\\.codex\\sessions\\2026\\05\\18\\rollout-2026-05-18T21-14-16-xxxx.jsonl" })
-import_chatgpt({ path: "C:\\Users\\<you>\\Downloads\\chatgpt-export\\conversations.json" })
-import_cursor({ path: "C:\\Users\\<you>\\.cursor\\projects\\<slug>\\agent-transcripts\\<composer-id>\\<composer-id>.jsonl" })
-import_gemini({ path: "C:\\Users\\<you>\\.gemini\\history\\<slot>\\chats\\session-2026-04-17T18-09-b26d7f99.json" })
-import_reasonix({ path: "C:\\Users\\<you>\\.reasonix\\sessions\\desktop-202606020721-1.jsonl" })
-import_opencode({ path: "C:\\Users\\<you>\\.local\\share\\opencode\\opencode.db" })
-```
-
-`import_claude` / `import_codex` / `import_cursor` / `import_gemini` / `import_reasonix` 行为一致：`path` 可以是单个文件，也可以是目录；可选 `sessionId` 覆盖目标 DSH 会话 id（默认 `import-<源sessionId>`，Cursor 取文件名 composer id，Reasonix 取文件名 stem）。返回 `{ mode: 'single', sessionId, turns, messages, toolCalls, skipped, alreadyImported }`；导入后刷新会话列表即可看到新会话，且已挂接到其工作目录。
-
-`import_chatgpt` 不同：conversations.json 一个文件含**全部**会话，单文件也返回批量形态 `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`（`total` 是会话数，`results` 每项是一个会话）；ChatGPT 导出无 `cwd`，导入的会话不归组工作区。
-
-`import_opencode` 同样恒返回批量形态：一个 `opencode.db` 含**全部**会话，`total` 是会话数，`results` 每项是一个会话。`path` 可以是 `.db` 文件，也可以是包含它的数据目录；可选 `sessionIds`（源会话 id 数组）只导指定会话；可选 `fullHistory: true` 导入全量消息历史、忽略 opencode 的压缩（默认 `false`——压缩会话按「最后一次摘要 + 保留尾巴」导入）。导入的会话保留 `directory` 作为 `cwd`，归组工作区。
-
-### 批量导入（目录）
-
-```js
-import_claude({ path: "C:\\Users\\<you>\\.claude\\projects" })
-import_codex({ path: "C:\\Users\\<you>\\.codex\\sessions" })
-import_chatgpt({ path: "C:\\Users\\<you>\\Downloads\\chatgpt-export" })
-import_cursor({ path: "C:\\Users\\<you>\\.cursor\\projects" })
-import_gemini({ path: "C:\\Users\\<you>\\.gemini\\history" })
-import_reasonix({ path: "C:\\Users\\<you>\\.reasonix\\sessions" })
-import_opencode({ path: "C:\\Users\\<you>\\.local\\share\\opencode" })
-```
-
-目录模式递归扫描（`recursive: false` 可只扫顶层）所有 `.jsonl`（Claude / Codex / Cursor / Reasonix）或 `.json`（ChatGPT / Gemini）；每个文件独立导入为一个会话（ChatGPT 文件内每个会话独立导入）；非 transcript / 空文件跳过，Claude 辅助 transcript（文件名 ≠ 记录中的 `sessionId`）跳过并注明原因，Reasonix V2 WAL 伴生文件（`.events.jsonl` / `.conflicts.jsonl` / `.guardian.jsonl`）排除。`import_opencode` 的目录模式只在给定目录里定位 `opencode.db`（无递归），导入其中全部会话。返回 `{ mode: 'batch', total, imported, alreadyImported, skipped, failed, results: [...] }`，`results` 每项含 `path`、`status`（`imported` / `already-imported` / `skipped` / `failed`）及会话统计。
-
-## 范围边界
-
-- 源 transcript 只读，绝不原地改写；DSH 历史事件同样 append-only（deep-frozen），只新增、不改写。
-- 不修改 DSH 引擎、apiproxy 或官方 UI 包；不发布任何服务，无需 isolate realm。
-- 读取工作区之外的 transcript 路径时，要求会话沙箱允许访问该路径。
-- 已知边界：不导入 `permission`、`summary` 等辅助记录；`is_error` 的 `tool_result` 保留错误标记但丢弃其 `message.content` 之外的附加字段；Claude 的 subagent / workflow 片段 transcript（文件名 ≠ 记录中的 `sessionId`）跳过，只有主 `<sessionId>.jsonl` 会成为会话；Codex 的 `reasoning` 内容加密不可读，跳过（计划 v1.2 补全）；ChatGPT 导出只重建主线程（分支取最后 child），工具消息按文本挂最近一步、不还原工具参数结构；Cursor transcript 不含 `tool_result`（工具结果只在 UI bubble store），仅导入 `tool/call` 历史，且 `[REDACTED]` 文本被过滤；Gemini 按 2026-04 观测格式导入（官方未发布稳定 schema），`thoughts` 映射 `reasoning`、内联工具结果有则导入；Reasonix 读取 `.jsonl` 转录 checkpoint（V2 的 `.events.jsonl` WAL 被排除——晚于 checkpoint 的仅事件日志会话不在覆盖范围）；opencode 读取 `message` + `part` 表（`event` 表只是部分镜像、`session_message` / `session_input` 为空，忽略），`patch` part 不含 diff 内容，只发 `[patch: <N> files]` 占位块，工具输出可能含 ANSI 转义、原样保留；opencode 的对话压缩默认被尊重——`tail_start_id` 之前的历史折叠进最后一次摘要（前置 reasoning 块），`fullHistory: true` 改为导入全量历史；目前支持 Claude Code JSONL、Codex/ChatGPT rollout、ChatGPT 网页导出、Cursor agent transcript、Gemini CLI 会话、Reasonix 会话与 opencode 七种源格式。
-
-## 测试
+## 🧪 测试
 
 ```bash
 npm test
 ```
 
-`test/convert.test.mjs` 覆盖七种源格式的纯转换逻辑（回合平衡、工具关联、标题、畸形行、注入过滤、重复消息去重、mapping 分支/占位节点、REDACTED 过滤、内联工具结果、v1/v2 工具调用形状、opencode part 映射与模型回退）；`test/index.test.mjs` 用 mock 的 `fs` / `sessionPersistence` / `tools` / `workspaceRegistry`（`import_opencode` 另用真实 SQLite 临时库）走完整 `apply → execute` 路径，并校验返回值符合输出 schema。
+`test/convert.test.mjs` 覆盖七种源格式的纯转换逻辑（回合平衡、工具关联、标题、畸形行、注入过滤、去重、mapping 分支、REDACTED 过滤、内联工具结果、v1/v2 工具调用形状、opencode part 映射与模型回退）；`test/index.test.mjs` 用 mock 的 `fs` / `sessionPersistence` / `tools` / `workspaceRegistry`（`import_opencode` 另用真实 SQLite 临时库）走完整 `apply → execute` 路径，并校验返回值符合输出 schema。
+
+## 📦 安装与卸载
+
+```bash
+dsh plugin --profile web add dsh-chat-import        # npm 包
+dsh plugin --profile web add -w link:/path/to/dsh-chat-import   # 本地源码（符号链接，开发推荐）
+```
+
+`dsh plugin` 是 pnpm 转发器：`add` 后识别 `dsh.bundle` 声明，把 `cordis.patch.yml` 的 `insert` 行收编进 profile 的 bundles，重启 dsh 即生效。
+
+卸载：从 profile 的 bundles 移除 `import-claude` insert 行并重启 dsh。已导入的会话保留在 DSH 数据目录，不受影响。
+
+## 📄 许可证
+
+MIT — 见 [LICENSE](LICENSE)。
