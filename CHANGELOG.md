@@ -9,7 +9,13 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-08-14
+
+Third minor release — shipped 2026-08-14 with three new import sources (Grok
+Build, OpenClaw, Hermes — the 9th–11th), automatic session discovery with
+persistent scan bookmarks, import identification / retraction, zero-side-effect
+import preview, and the reverse export + incremental write-back bridge
+(`export_claude` / `sync_to_claude`). Release tag `v0.3.0` pending publish.
 
 ### Added
 
@@ -121,6 +127,15 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   a `session/title` event; a pure first-question fallback only fills the title
   field without writing an event (DSH auto-falls back to the first user text
   for untitled sessions), and blank titles never emit a title event.
+- **Codex `custom_tool_call` JS arguments → standard JSON** (REQ-44) — 2026+
+  Codex writes `custom_tool_call.input` as JS code (e.g.
+  `tools.exec_command({cmd: "...", workdir: "..."})`); the importer now
+  recognizes the object-literal call shape and converts it to standard JSON
+  arguments so the model never learns a JS/XML hybrid call format.
+  Unconvertible shapes (`apply_patch`, `ALL_TOOLS` dynamic calls) degrade to a
+  descriptive note text instead of passing JS code through as `arguments`;
+  conversion failures are counted (`droppedMalformedArgs`) and never break the
+  message stream.
 
 - **Incremental re-import** (REQ-24) — re-importing the same source path no
   longer just skips: a grown source file appends only its **new turns** to the
@@ -140,6 +155,14 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   avoidance) instead of one silently shadowing the other; sessions imported
   before the registry existed are detected via the `session/imported` marker
   and back-filled (`backfilled`).
+- **Projection-cache warm-up on import** (external PR #1) — after a session is
+  created, its projection cache is cold-read and written back so the sidebar
+  shows the real title / model metadata immediately instead of the `cwd`
+  directory name until the session is opened; a warm-up failure never affects
+  the import result.
+- **eslint flat config + CI lint** (REQ-10) — `eslint.config.mjs` added
+  (dev-only, not shipped), `npm run lint` wired into CI, and existing
+  violations fixed in the same commit.
 - **`tailSessionEvents`** — pure event-level tail extraction in `convert.mjs`
   (slice by `turn/start` boundaries, renumber `seq` from `fromSeq`, remap
   in-tail `sourceEventSeqs`, keep out-of-tail references with a
@@ -150,7 +173,7 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   `sessions` sub-records: DB-level version/size fingerprinting, compaction
   shrinking turns → `sourceShrunk`, `fullHistory` in the args fingerprint →
   `argsChanged`).
-- **Shared `force: boolean` parameter** on all seven import tools, and extended
+- **Shared `force: boolean` parameter** on all eleven import tools, and extended
   return shapes: single-mode `status` (`imported` / `already-imported` /
   `appended` / `skipped`) plus optional `appendedTurns`, `appendedEvents`,
   `appendedSkipped`, `sourceShrunk`, `changedInPlace`, `argsChanged`,
@@ -213,7 +236,7 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   budget are left intact except for L1 single-block cropping. The pure core
   lives in `convert.mjs` (`estimateTokens` — CJK 1 token/char, ASCII 1
   token/4 chars — plus `cropContentBlocks`, `trimTurns`, `applyBudgetTrim`) and
-  is wired into all seven sources before `synthesizeSession`; trimming reports
+  is wired into all eleven sources before `synthesizeSession`; trimming reports
   `trimmed: null` when nothing was actually cut.
 - **Adaptive import budget + explicit trim reporting** (REQ-37) —
   `resolveImportBudget` in `index.mjs` resolves the per-import context budget as
@@ -246,6 +269,14 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   turns if grown" — re-importing a live session now follows the source file.
 - Append discipline: appended events keep `surfaceOp: 'append'`, never re-attach
   workspaces, and never re-emit the import marker or session title.
+- **Conversion core split per source** (REQ-08) — `convert.mjs` became a
+  re-export shim over `lib/convert/*.mjs` (a shared `core` plus one converter
+  per source; pure functions, zero DSH deps), and opencode SQLite reading moved
+  into `lib/opencode.mjs`. No tool names, schemas or return shapes changed; the
+  npm `files` whitelist was extended for the new modules.
+- **README slimmed to a user-facing document** — technical / engineering detail
+  moved to the local, never-published `dev/REQUIREMENTS.md`; the tagline and
+  badge area reworked for the 11-source line-up.
 
 
 ## [0.2.0] - 2026-08-14
