@@ -138,6 +138,19 @@ import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl"
 
 Every import result reports its `status` and any anomalies — malformed lines, suspected secrets, per-source drops — nothing is silently swallowed.
 
+### import_agents — convert pi/opencode agents & prompts into DSH skills
+
+`import_agents` converts custom agents, mode prompts and skills from **pi** (`~/.pi/agent/{agents,prompts}/*.md`) and **opencode** (`~/.config/opencode/{agents,skill}/*.md`) into **persistent DSH skill assets** — `$DSH_AGENTS_HOME/skills/<name>/SKILL.md` (`$DSH_AGENTS_HOME` defaults to `~/.agents`), so they become discoverable skills in any session. This complements the runtime-only Claude bridge (`context-bridge`, off by default): that one injects Claude memory/CLAUDE.md/skills transiently; this one persists pi/opencode assets.
+
+By default it **dry-runs** (returns the write/complete/skip plan with zero side effects); pass `apply: true` to actually write:
+
+```
+import_agents()                    // dry-run: plan only
+import_agents({ apply: true })     // write $DSH_AGENTS_HOME/skills/<name>/SKILL.md
+```
+
+Semantics: same-name conflicts across sources get a `-pi` / `-opencode` suffix; identical content is skipped (idempotent); sources already carrying `kind: dsh`/`kind: skill` frontmatter are not re-imported; a bundle directory that lacks `SKILL.md` is completed in place (preserving existing `scripts/` etc.); nested YAML (e.g. `permission:`) is preserved.
+
 ### scan_discover — read-only session discovery
 
 `scan_discover` scans the known data roots of all 13 formats and returns a structured session index (title, project, path, import status) so you can preview before a batch import. Zero side effects:

@@ -20,6 +20,7 @@
     "export.mjs",
     "lib/imports.mjs",
     "lib/backfill.mjs",
+    "lib/agents.mjs",
     "lib/client.js",
     "lib/command.mjs",
     "lib/context-bridge.mjs",

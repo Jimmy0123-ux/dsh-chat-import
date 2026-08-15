@@ -13,6 +13,15 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Added
 
+- **`import_agents` (REQ-59, 14th tool)** — converts custom agents / mode
+  prompts / skills from **pi** (`~/.pi/agent/{agents,prompts}/*.md`) and
+  **opencode** (`~/.config/opencode/{agents,skill}/*.md`) into persistent DSH
+  skill assets (`$DSH_AGENTS_HOME/skills/<name>/SKILL.md`, default
+  `~/.agents`). Dry-run by default (plan only, zero side effects); `apply:
+  true` writes. Same-name conflicts get a `-pi`/`-opencode` suffix, identical
+  content is skipped, `kind: dsh|skill` sources are not re-imported, bundle
+  dirs lacking `SKILL.md` are completed in place, and nested YAML is preserved.
+  Complements the runtime-only Claude bridge (`context-bridge`, REQ-28).
 - **Kimi CLI source (REQ-14, 13th import source)** — new `import_kimi` tool
   imports Moonshot AI's open-source terminal agent sessions from
   `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` (single session
