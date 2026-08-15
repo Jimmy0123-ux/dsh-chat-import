@@ -13,6 +13,15 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Added
 
+- **Local JSONL session-file import (auto-detect)** — new
+  `import_local_jsonl` tool accepts any local `.jsonl` file or directory and
+  auto-detects the transcript structure across `dsh` / `claude` / `codex` /
+  `cursor` / `reasonix` / `pi` / `openclaw` / `hermes` (path hints order the
+  candidates; the first converter that yields a session wins), with an
+  optional `format` parameter to force one parser. Directory mode imports
+  every `.jsonl` as its own session through the same idempotent/incremental
+  state machine. `npm test` — 391 cases.
+
 - **DSH session-log source (14th import source)** — new `import_dsh` tool
   imports DeepSeek Harness' own session logs (`session.jsonl` and
   `session.jsonl.zstd`, default root `~/.dsh/sessions`), decompressing zstd
