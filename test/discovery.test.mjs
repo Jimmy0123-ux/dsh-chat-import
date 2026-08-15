@@ -538,7 +538,7 @@ test('isInjectedTitle / normalizeTitle / layoutProject 纯函数', () => {
   assert.equal(layoutProject('/home/u/.cursor/projects/slug-c/agent-transcripts/abc/abc.jsonl', 'cursor'), 'slug-c')
 })
 
-test('FORMATS 与工具 schema enum 一致（13 种）', () => {
-  assert.equal(FORMATS.length, 13)
-  assert.deepEqual([...FORMATS].sort(), ['chatgpt', 'claude', 'codex', 'cursor', 'gemini', 'grokbuild', 'hermes', 'kimi', 'openclaw', 'opencode', 'pi', 'reasonix', 'zcode'])
+test('FORMATS 与工具 schema enum 一致（14 种）', () => {
+  assert.equal(FORMATS.length, 14)
+  assert.deepEqual([...FORMATS].sort(), ['chatgpt', 'claude', 'codex', 'cursor', 'dsh', 'gemini', 'grokbuild', 'hermes', 'kimi', 'openclaw', 'opencode', 'pi', 'reasonix', 'zcode'])
 })

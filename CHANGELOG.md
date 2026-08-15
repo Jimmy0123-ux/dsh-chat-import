@@ -13,6 +13,16 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Added
 
+- **DSH session-log source (14th import source)** — new `import_dsh` tool
+  imports DeepSeek Harness' own session logs (`session.jsonl` and
+  `session.jsonl.zstd`, default root `~/.dsh/sessions`), decompressing zstd
+  logs with the system `zstd` binary and keeping the durable
+  turn/step/user/assistant/tool events while streaming chunks and runtime
+  state events are dropped. `scan_discover`, the sidebar panel source filter
+  (`dsh`), `/import dsh <path>` and `format: 'dsh'` cover the new source too.
+  The tool-count expectation and README counts move to 14 sources / 19 tools;
+  `npm test` — 387 cases.
+
 - **Kimi CLI source (REQ-14, 13th import source)** — new `import_kimi` tool
   imports Moonshot AI's open-source terminal agent sessions from
   `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` (single session

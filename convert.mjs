@@ -76,3 +76,7 @@ export {
 export {
   convertKimiWire,
 } from './lib/convert/kimi.mjs'
+
+export {
+  convertDshJsonl,
+} from './lib/convert/dsh.mjs'

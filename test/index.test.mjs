@@ -258,12 +258,12 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册十八个工具（13 导入 + scan_discover + export_claude + sync_to_claude + REQ-33 识别/撤回）', () => {
+test('apply 注册十九个工具（14 导入 + scan_discover + export_claude + sync_to_claude + REQ-33 识别/撤回）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 18)
+  assert.equal(registered.length, 19)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'retract_import', 'scan_discover', 'sync_to_claude'])
+  assert.deepEqual(names, ['export_claude', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_dsh', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'retract_import', 'scan_discover', 'sync_to_claude'])
   for (const def of registered) {
     if (['export_claude', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import'].includes(def.name)) {
       // 导出 / 写回 / 发现 / 识别 / 撤回工具：单对象输出 schema（非 oneOf）
@@ -3165,7 +3165,7 @@ test('REQ-17 预览 → 正式导入：去掉 preview 后字段口径一致、�
 
 // ---- REQ-41 被动会话发现（Browser 面板数据源路由） ----
 
-test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-import/import，kind exact），工具计数不变', () => {
+test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-import/import，kind exact），工具计数不变（19 个）', () => {
   const { ctx, webRoutes, registered } = makeCtx({})
   apply(ctx)
   const sessions = webRoutes.find((r) => r.path === '/api-import/sessions')
@@ -3176,16 +3176,16 @@ test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-im
   assert.equal(imp.kind, 'exact')
   assert.equal(typeof sessions.handler, 'function')
   assert.equal(typeof imp.handler, 'function')
-  // 只加路由，不加工具：13 导入 + scan/export/sync/list/retract = 18，注册数不变
-  assert.equal(registered.length, 18)
+  // 只加路由，不加工具：14 导入 + scan/export/sync/list/retract = 19，注册数不变
+  assert.equal(registered.length, 19)
 })
 
-test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、18 工具照常注册、无路由', () => {
+test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、19 工具照常注册、无路由', () => {
   const { ctx, webRoutes, registered } = makeCtx({}, { noWebServer: true })
   apply(ctx)
   // 缺 webServer 只是不注册面板路由，导入工具不受影响（CI headless 冒烟场景）
   assert.equal(webRoutes.length, 0)
-  assert.equal(registered.length, 18)
+  assert.equal(registered.length, 19)
 })
 
 test('REQ-41 /api-import/sessions handler：合成夹具经 discoverSessions 返回会话、未知来源 400', async () => {

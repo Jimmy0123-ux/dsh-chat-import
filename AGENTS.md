@@ -7,12 +7,12 @@
 根目录只放发布到 GitHub / npm 的文件；本地工程文件一律收进 `dev/`（gitignore，永不提交）。
 
 ```
-index.mjs        插件入口（薄组合层，host 面）：只做组装——registerTools（lib/tools.mjs 注册 13 个
+index.mjs        插件入口（薄组合层，host 面）：只做组装——registerTools（lib/tools.mjs 注册 14 个
                  导入工具 + scan_discover + export_claude + sync_to_claude + list_imported_sessions +
                  retract_import）+ ctx.inject(['webServer']) 延迟挂载面板路由
                  （POST /api-import/sessions 发现、POST /api-import/import 面板导入）
 lib/             导入/同步驱动（按职责拆分，均消费 ctx、非纯函数）：imports.mjs（幂等 registry）、
-                 backfill.mjs（sync_to_claude 写回）、discovery.mjs（13 格式统一发现 + 30s TTL / 持久化
+                 backfill.mjs（sync_to_claude 写回）、discovery.mjs（14 格式统一发现 + 30s TTL / 持久化
                  书签）、budget.mjs（REQ-37 预算解析链）、import-core.mjs（共享导入编排：importTranscript
                  状态机 / importDirectory / runDecision 落盘 / 归组 / 标准预览）、import-variants.mjs
                  （chatgpt / grokbuild / hermes / kimi 编排 + opencode / zcode 等 dry-run 预览）、toolkit.mjs
@@ -41,7 +41,7 @@ test/            convert 单测 + export 单测 + index mock 集成 + zcode 自�
 dev/             ❌ 本地工程面（gitignore，永不提交）：bin/（脚本：session.mjs 多会话认领 CLI、verify-*、totp）、hooks/（pre-push）、research/（竞品/方向调研）、HANDOFF.md、REQUIREMENTS.md、GROWTH.md、RELEASING.md、ORCHESTRATOR-PROMPT.md、TESTER-PROMPT.md、gh-pat.txt（凭据勿提交）；多会话协调靠 dsh-file-claim 插件
 ```
 
-- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/client.js`、`lib/command.mjs`、`lib/context-bridge.mjs`、`lib/discovery.mjs`、`lib/budget.mjs`、`lib/import-core.mjs`、`lib/import-variants.mjs`、`lib/toolkit.mjs`、`lib/export-tool.mjs`、`lib/prompt-hint.mjs`、`lib/retract.mjs`、`lib/discovery-host.mjs`、`lib/panel.mjs`、`lib/tools.mjs`、`lib/convert`、`lib/export`、`lib/hermes.mjs`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
+- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/client.js`、`lib/command.mjs`、`lib/context-bridge.mjs`、`lib/discovery.mjs`、`lib/budget.mjs`、`lib/import-core.mjs`、`lib/import-variants.mjs`、`lib/toolkit.mjs`、`lib/export-tool.mjs`、`lib/prompt-hint.mjs`、`lib/retract.mjs`、`lib/discovery-host.mjs`、`lib/panel.mjs`、`lib/tools.mjs`、`lib/dsh.mjs`、`lib/convert`、`lib/export`、`lib/hermes.mjs`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
 - **永不提交**：`dev/`、`node_modules/`、`.prev-session*.jsonl`、`.dsh-file-claim/`（插件运行时目录）、真实用户 transcript（含敏感内容）、任何凭据/密钥。
 
 ## 命令
@@ -51,7 +51,7 @@ npm test        # node --test 跑 test/*.test.mjs（convert 单测 + export 单�
 npm run check:linux   # 跨平台路径纪律静态检查（.github/scripts/check-linux-compat.mjs，CI 同款护栏）
 ```
 
-无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` / `export.mjs` / `lib/` 即发布产物（`lib/client.js` 是手写 CJS bundle，亦无构建）。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调任一 `import_*`（13 个）/ `scan_discover` / `export_claude` / `sync_to_claude` / `list_imported_sessions` / `retract_import`；Browser 侧验证：dsh web 侧边栏底部「导入会话」按钮 → 面板按工作区分组浏览 + 单选/多选导入。
+无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` / `export.mjs` / `lib/` 即发布产物（`lib/client.js` 是手写 CJS bundle，亦无构建）。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调任一 `import_*`（14 个）/ `scan_discover` / `export_claude` / `sync_to_claude` / `list_imported_sessions` / `retract_import`；Browser 侧验证：dsh web 侧边栏底部「导入会话」按钮 → 面板按工作区分组浏览 + 单选/多选导入。
 
 ## 提交纪律（保持仓库干净）
 
@@ -102,7 +102,7 @@ npm run check:linux   # 跨平台路径纪律静态检查（.github/scripts/chec
 ## 质量约定
 
 - 文件以**恰好一个**换行结尾；空 `catch` 必须说明吞掉什么且 `try` 只包一条语句；不注释代码里显而易见的事实。
-- 保持 `lib/convert/*` 与 `lib/export/*`（含根 shim `convert.mjs` / `export.mjs`）零依赖纯函数：任何 DSH 依赖只允许出现在 `index.mjs` 与 `lib/{imports,backfill,opencode,zcode,hermes,discovery,budget,import-core,import-variants,toolkit,export-tool,retract,discovery-host,panel,tools}.mjs`（即所有消费 ctx 的 host 面模块）。
+- 保持 `lib/convert/*` 与 `lib/export/*`（含根 shim `convert.mjs` / `export.mjs`）零依赖纯函数：任何 DSH 依赖只允许出现在 `index.mjs` 与 `lib/{imports,backfill,opencode,zcode,hermes,dsh,discovery,budget,import-core,import-variants,toolkit,export-tool,retract,discovery-host,panel,tools}.mjs`（即所有消费 ctx 的 host 面模块）。
 - 测试描述行为而非背书正确性；fixtures 用合成数据，永不掺真实 transcript。
 - **跨平台路径纪律（防 CI 红，`npm run check:linux` 护栏）**：CI 在 Linux 跑 `npm test`，测试里的反斜杠合成路径经代码 `node:path` 运算在 posix 下行为不同（`join()` 产混合分隔符、`dirname('D:\…')` 返 `'.'`）。规则：mock 树查找（`stat`/`readText`/`listDir` 读树）必须做分隔符归一（复用 `index.test.mjs` makeCtx 的 `norm` + `lookup` 三态命中）；断言若比较 `node:path` 运算结果，期望值用同口径函数计算，绝不写死 `'X:\…'` 字面量；新增导入测试优先用真实临时目录（`mkdtemp`）。
 - 不写行内文档废话：注释写契约与上下文，不叙述控制流。
