@@ -4,6 +4,8 @@
 
 **把 14 种外部 Agent 聊天历史全保真导入 DeepSeek Harness 为可继续（resume）会话——并可导出 / 同步回 Claude Code。**
 
+本公开 fork（[AI-Scarlett/dsh-chat-import](https://github.com/AI-Scarlett/dsh-chat-import)）增加了 Claude / Codex / Grok 双向增量同步与 Web 控制面板。上游：[Nwflower/dsh-chat-import](https://github.com/Nwflower/dsh-chat-import)。
+
 [![English](https://img.shields.io/badge/Language-English-blue?style=for-the-badge)](README.md)
 [![简体中文](https://img.shields.io/badge/Language-简体中文-blue?style=for-the-badge)](#)
 
@@ -97,6 +99,12 @@ import_claude({ path: "~/.claude/projects" })
 ```
 
 **3. 续聊** — 刷新一次会话列表，打开导入的会话，继续对话——它会从源记录停下的地方无缝接上。
+
+**4. 双向增量同步（本机二次开发）** — 侧边栏「导入会话」面板新增 **同步** 页：
+
+- **外部 → DSH**：按间隔巡检 Claude / Codex / Grok 的新增或增长会话，走既有幂等续写。
+- **DSH → 外部**：把 DSH 新增完整轮次写回对应 agent。导入源追加到原文件；原生 DSH 会话在该 agent 默认根下落一份副本。
+- 两个方向**默认关闭**，必须在面板里打开开关，或点「立即同步」。配置在 `$DSH_HOME/dsh-chat-import/sync.json`。
 
 <details>
 <summary><b>卸载</b></summary>

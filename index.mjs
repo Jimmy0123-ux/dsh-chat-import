@@ -28,6 +28,8 @@
 import { resolveRegistryDir } from './lib/imports.mjs'
 import { registerTools } from './lib/tools.mjs'
 import { registerPanelRoutes } from './lib/panel.mjs'
+import { registerSyncRoutes } from './lib/sync-panel.mjs'
+import { registerSyncLoop } from './lib/sync-loop.mjs'
 import { registerImportCommand } from './lib/command.mjs'
 import { registerSessionHint } from './lib/prompt-hint.mjs'
 import { registerContextBridge } from './lib/context-bridge.mjs'
@@ -52,7 +54,10 @@ function apply(ctx) {
   // webServer）时回调永不执行，12 个导入工具照常可用，apply 不因缺服务失败。
   ctx.inject(['webServer'], (webCtx) => {
     registerPanelRoutes(ctx, webCtx.webServer, registryDir)
+    registerSyncRoutes(ctx, webCtx.webServer, registryDir)
   })
+  // 双向增量默认同步关闭；打开控制面板开关后才启定时器。
+  registerSyncLoop(ctx, registryDir)
   // REQ-42 /import 命令面：commands 同样可选（headless / CLI 会话可能不挂载），
   // 服务可用时注册（不阻塞插件激活）。
   registerImportCommand(ctx)
