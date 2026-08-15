@@ -13,6 +13,14 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Added
 
+- **Two-way incremental sync control panel** — sidebar panel gains a Sync tab
+  (`GET/POST /api-import/sync`). Optional inbound watch (Claude / Codex / Grok
+  new or grown sessions → DSH append) and outbound writeback (DSH complete
+  turns → Claude source file, or Codex / Grok copies). Both directions default
+  **off**; a timer starts only after the user enables a switch. Outbound
+  copies for native DSH sessions are tracked in `outbound.json` so inbound
+  scans skip them (no echo loop).
+
 - **`import_agents` (REQ-59, 14th tool)** — converts custom agents / mode
   prompts / skills from **pi** (`~/.pi/agent/{agents,prompts}/*.md`) and
   **opencode** (`~/.config/opencode/{agents,skill}/*.md`) into persistent DSH

@@ -238,6 +238,7 @@ function makeCtx(tree, opts = {}) {
       register(def) { registered.push(def); return () => {} },
     },
     on() { return () => {} }, // REQ-53：apply 监听 agent/session-start（本测试不模拟事件）
+    effect() { return () => {} },
   }
   // 测试辅助：按名字取出注册的工具定义
   ctx.tools.registered = (toolName) => registered.find((d) => d.name === toolName)
@@ -3174,8 +3175,10 @@ test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-im
   apply(ctx)
   const sessions = webRoutes.find((r) => r.path === '/api-import/sessions')
   const imp = webRoutes.find((r) => r.path === '/api-import/import')
+  const sync = webRoutes.find((r) => r.path === '/api-import/sync')
   assert.ok(sessions)
   assert.ok(imp)
+  assert.ok(sync)
   assert.equal(sessions.kind, 'exact')
   assert.equal(imp.kind, 'exact')
   assert.equal(typeof sessions.handler, 'function')

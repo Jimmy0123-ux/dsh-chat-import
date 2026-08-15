@@ -98,6 +98,12 @@ import_claude({ path: "~/.claude/projects" })
 
 **3. Resume** — refresh the session list once, open the imported session, and continue chatting — it resumes exactly where the source left off.
 
+**4. Two-way incremental sync** — the sidebar **Import Sessions** panel now has a **Sync** tab:
+
+- **External → DSH**: periodically scan Claude / Codex / Grok for new or grown sessions and import incrementally (same idempotent append state machine).
+- **DSH → External**: write new complete DSH turns back. Imported sessions append to their source file; native DSH sessions get a copy under that agent's default root.
+- Both directions are **off by default**. Turn them on in the panel, or click **Sync now**. Config lives in `$DSH_HOME/dsh-chat-import/sync.json`.
+
 <details>
 <summary><b>Uninstall</b></summary>
 

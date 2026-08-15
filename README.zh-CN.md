@@ -98,6 +98,12 @@ import_claude({ path: "~/.claude/projects" })
 
 **3. 续聊** — 刷新一次会话列表，打开导入的会话，继续对话——它会从源记录停下的地方无缝接上。
 
+**4. 双向增量同步** — 侧边栏「导入会话」面板新增 **同步** 页：
+
+- **外部 → DSH**：按间隔巡检 Claude / Codex / Grok 的新增或增长会话，走既有幂等续写。
+- **DSH → 外部**：把 DSH 新增完整轮次写回对应 agent。导入源追加到原文件；原生 DSH 会话在该 agent 默认根下落一份副本。
+- 两个方向**默认关闭**，必须在面板里打开开关，或点「立即同步」。配置在 `$DSH_HOME/dsh-chat-import/sync.json`。
+
 <details>
 <summary><b>卸载</b></summary>
 
