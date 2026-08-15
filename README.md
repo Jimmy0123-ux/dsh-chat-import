@@ -4,8 +4,6 @@
 
 **Import 14 external agent conversation histories into DeepSeek Harness as full-fidelity, resumable sessions — and export / sync back to Claude Code.**
 
-This public fork ([AI-Scarlett/dsh-chat-import](https://github.com/AI-Scarlett/dsh-chat-import)) adds two-way incremental sync (Claude / Codex / Grok) and a Web control panel. Upstream: [Nwflower/dsh-chat-import](https://github.com/Nwflower/dsh-chat-import).
-
 [![English](https://img.shields.io/badge/Language-English-blue?style=for-the-badge)](#)
 [![简体中文](https://img.shields.io/badge/Language-简体中文-blue?style=for-the-badge)](README.zh-CN.md)
 

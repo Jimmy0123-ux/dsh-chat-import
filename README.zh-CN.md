@@ -4,8 +4,6 @@
 
 **把 14 种外部 Agent 聊天历史全保真导入 DeepSeek Harness 为可继续（resume）会话——并可导出 / 同步回 Claude Code。**
 
-本公开 fork（[AI-Scarlett/dsh-chat-import](https://github.com/AI-Scarlett/dsh-chat-import)）增加了 Claude / Codex / Grok 双向增量同步与 Web 控制面板。上游：[Nwflower/dsh-chat-import](https://github.com/Nwflower/dsh-chat-import)。
-
 [![English](https://img.shields.io/badge/Language-English-blue?style=for-the-badge)](README.md)
 [![简体中文](https://img.shields.io/badge/Language-简体中文-blue?style=for-the-badge)](#)
 

@@ -93,16 +93,13 @@
     "transcript"
   ],
   "author": "Nwflower <1679659@qq.com>",
-  "contributors": [
-    "Scarlett (https://github.com/AI-Scarlett)"
-  ],
-  "homepage": "https://github.com/AI-Scarlett/dsh-chat-import",
+  "homepage": "https://github.com/Nwflower/dsh-chat-import",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/AI-Scarlett/dsh-chat-import.git"
+    "url": "git+https://github.com/Nwflower/dsh-chat-import.git"
   },
   "bugs": {
-    "url": "https://github.com/AI-Scarlett/dsh-chat-import/issues"
+    "url": "https://github.com/Nwflower/dsh-chat-import/issues"
   },
   "engines": {
     "node": ">=22.13"
