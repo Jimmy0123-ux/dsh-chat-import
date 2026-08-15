@@ -27,7 +27,7 @@
 
 <img src="./assets/image-20260814205401839.png" alt="从多个来源导入会话到侧边栏面板" width="600" />
 
-**更新日志（英文）：** [CHANGELOG.md](CHANGELOG.md)
+**更新日志（英文）：** [CHANGELOG.md](CHANGELOG.md) · **路线图：** [ROADMAP.md](ROADMAP.md)
 
 </div>
 
@@ -45,7 +45,7 @@
 
 | 分类 | 特性 | 说明 |
 | --- | --- | --- |
-| 导入 | **14 种来源，一个插件** | 每种来源一条命令——从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录。 |
+| 导入 | **14 种来源 + 本地 JSONL，一个插件** | 每种来源一条命令——从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录。 |
 | 导入 | **全保真** | 工具调用与结果、思考块、标题、模型与时间戳，源有记录就原样保留。 |
 | 导入 | **批量导入** | 指向一个目录（或整个数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。 |
 | 续聊 | **可无缝续聊** | 打开导入的会话，从源记录停下的地方继续对话。 |
@@ -75,6 +75,7 @@
 | **Hermes** | `~/.hermes/`（Windows `%LOCALAPPDATA%\hermes`） | `import_hermes` |
 | **Kimi CLI** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` | `import_kimi` |
 | **DSH 会话日志** | `~/.dsh/sessions/<encoded-workspace>/<sessionId>/session.jsonl(.zstd)` | `import_dsh` |
+| **任意本地 JSONL** | 任意 `.jsonl` 文件 / 目录（自动识别格式） | `import_local_jsonl` |
 
 每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、时间戳、工具调用与结果、思考过程。数据较少的源导入其已有的内容；源格式无法保留的部分，会在导入报告里显式标注（如 Kimi 镜像进父 wire 的 `SubagentEvent` 子代理对话会跳过——父 `Agent` 工具调用与结果保留，子代理自己的 `subagents/<agentId>/wire.jsonl` 可直接导入）。
 
@@ -89,7 +90,7 @@ dsh plugin --profile web add dsh-chat-import                    # npm 包
 dsh plugin --profile web add -w link:/path/to/dsh-chat-import   # 本地源码（符号链接）
 ```
 
-**2. 导入** — 在任意 DSH 会话里导入单个文件或整个目录（14 个导入工具调用方式一致——见上方来源表）：
+**2. 导入** — 在任意 DSH 会话里导入单个文件或整个目录（15 个导入工具调用方式一致——见上方来源表）：
 
 ```
 import_claude({ path: "~/.claude/projects" })

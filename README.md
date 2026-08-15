@@ -27,7 +27,7 @@
 
 <img src="./assets/image-20260814205401839.png" alt="Import sessions from multiple sources into the dsh sidebar panel" width="600" />
 
-**Changelog:** [CHANGELOG.md](CHANGELOG.md)
+**Changelog:** [CHANGELOG.md](CHANGELOG.md) · **Roadmap:** [ROADMAP.md](ROADMAP.md)
 
 </div>
 
@@ -45,7 +45,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 
 | Category | Feature | Description |
 | --- | --- | --- |
-| Import | **14 sources, one plugin** | One tool per source — from Claude Code JSONL and Codex rollouts to SQLite databases and session directories. |
+| Import | **14 sources + local JSONL, one plugin** | One tool per source — from Claude Code JSONL and Codex rollouts to SQLite databases and session directories. |
 | Import | **Full fidelity** | Tool calls & results, thinking blocks, titles, models and timestamps carry over wherever the source records them. |
 | Import | **Batch import** | Point at a directory (or a whole database) and every file / conversation becomes its own session, with a per-file summary. |
 | Resume | **Seamlessly resumable** | Open an imported session and keep chatting exactly where the source left off. |
@@ -75,6 +75,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | **Hermes** | `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`) | `import_hermes` |
 | **Kimi CLI** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` | `import_kimi` |
 | **DSH session logs** | `~/.dsh/sessions/<encoded-workspace>/<sessionId>/session.jsonl(.zstd)` | `import_dsh` |
+| **Any local JSONL** | any `.jsonl` file / directory (auto-detected) | `import_local_jsonl` |
 
 Each import preserves what the source actually records — session id, `cwd`, title, model, timestamps, tool calls & results, reasoning. Sources that record less import what exists; anything a format cannot preserve is explicitly flagged in the import report (e.g. Kimi sub-agent conversations mirrored into the parent wire as `SubagentEvent` are skipped — the parent's `Agent` tool call & result are kept, and a sub-agent's own `subagents/<agentId>/wire.jsonl` can be imported directly).
 
@@ -89,7 +90,7 @@ dsh plugin --profile web add dsh-chat-import                    # npm package
 dsh plugin --profile web add -w link:/path/to/dsh-chat-import   # local checkout (symlink)
 ```
 
-**2. Import** — in any DSH session, import a single file or a whole directory (the same call shape works for all 14 import tools — see the table above):
+**2. Import** — in any DSH session, import a single file or a whole directory (the same call shape works for all 15 import tools — see the table above):
 
 ```
 import_claude({ path: "~/.claude/projects" })
