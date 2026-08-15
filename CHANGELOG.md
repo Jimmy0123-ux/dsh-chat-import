@@ -22,6 +22,21 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   content is skipped, `kind: dsh|skill` sources are not re-imported, bundle
   dirs lacking `SKILL.md` are completed in place, and nested YAML is preserved.
   Complements the runtime-only Claude bridge (`context-bridge`, REQ-28).
+- **Local JSONL session-file import (auto-detect)** — new
+  `import_local_jsonl` tool accepts any local `.jsonl` file or directory and
+  auto-detects the transcript structure across `dsh` / `claude` / `codex` /
+  `cursor` / `reasonix` / `pi` / `openclaw` / `hermes` (path hints order the
+  candidates; the first converter that yields a session wins), with an
+  optional `format` parameter to force one parser. Directory mode imports
+  every `.jsonl` as its own session through the same idempotent/incremental
+  state machine.
+- **DSH session-log source (14th import source)** — new `import_dsh` tool
+  imports DeepSeek Harness' own session logs (`session.jsonl` and
+  `session.jsonl.zstd`, default root `~/.dsh/sessions`), decompressing zstd
+  logs with the system `zstd` binary and keeping the durable
+  turn/step/user/assistant/tool events while streaming chunks and runtime
+  state events are dropped. `scan_discover`, the sidebar panel source filter
+  (`dsh`), `/import dsh <path>` and `format: 'dsh'` cover the new source too.
 - **Kimi CLI source (REQ-14, 13th import source)** — new `import_kimi` tool
   imports Moonshot AI's open-source terminal agent sessions from
   `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` (single session

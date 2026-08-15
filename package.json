@@ -35,6 +35,7 @@
     "lib/discovery-host.mjs",
     "lib/panel.mjs",
     "lib/tools.mjs",
+    "lib/dsh.mjs",
     "lib/convert",
     "lib/export",
     "lib/hermes.mjs",

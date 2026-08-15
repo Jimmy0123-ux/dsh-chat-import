@@ -76,3 +76,12 @@ export {
 export {
   convertKimiWire,
 } from './lib/convert/kimi.mjs'
+
+export {
+  convertDshJsonl,
+} from './lib/convert/dsh.mjs'
+
+export {
+  convertLocalJsonl,
+  LOCAL_JSONL_FORMATS,
+} from './lib/convert/local-jsonl.mjs'

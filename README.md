@@ -2,7 +2,7 @@
 
 # 📥 DSH Chat Import
 
-**Import 13 external agent conversation histories into DeepSeek Harness as full-fidelity, resumable sessions — and export / sync back to Claude Code.**
+**Import 14 external agent conversation histories into DeepSeek Harness as full-fidelity, resumable sessions — and export / sync back to Claude Code.**
 
 [![English](https://img.shields.io/badge/Language-English-blue?style=for-the-badge)](#)
 [![简体中文](https://img.shields.io/badge/Language-简体中文-blue?style=for-the-badge)](README.zh-CN.md)
@@ -21,7 +21,7 @@
 
 </div>
 
-> **13 agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, and export / sync back to Claude Code.
+> **14 agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, and export / sync back to Claude Code.
 
 <div align="center">
 
@@ -35,7 +35,7 @@
 
 ## 💡 Concept
 
-`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes and Kimi CLI** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd`.
+`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes, Kimi CLI and DSH session logs** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd`.
 
 The reverse direction is covered too: `export_claude` serializes a DSH session back into a Claude Code JSONL transcript that Claude Code can load with `--resume` (read-only — your DSH log is never modified), and `sync_to_claude` incrementally appends a session's new turns back to a Claude Code file — guarded, never silently overwriting.
 
@@ -45,7 +45,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 
 | Category | Feature | Description |
 | --- | --- | --- |
-| Import | **13 sources, one plugin** | One tool per source — from Claude Code JSONL and Codex rollouts to SQLite databases and session directories. |
+| Import | **14 sources, one plugin** | One tool per source — from Claude Code JSONL and Codex rollouts to SQLite databases and session directories. |
 | Import | **Full fidelity** | Tool calls & results, thinking blocks, titles, models and timestamps carry over wherever the source records them. |
 | Import | **Batch import** | Point at a directory (or a whole database) and every file / conversation becomes its own session, with a per-file summary. |
 | Resume | **Seamlessly resumable** | Open an imported session and keep chatting exactly where the source left off. |
@@ -74,6 +74,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | **Pi Coding Agent** | `~/.pi/agent/sessions/--<cwd>--/<timestamp>_<uuid>.jsonl` | `import_pi` |
 | **Hermes** | `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`) | `import_hermes` |
 | **Kimi CLI** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` | `import_kimi` |
+| **DSH session logs** | `~/.dsh/sessions/<encoded-workspace>/<sessionId>/session.jsonl(.zstd)` | `import_dsh` |
 
 Each import preserves what the source actually records — session id, `cwd`, title, model, timestamps, tool calls & results, reasoning. Sources that record less import what exists; anything a format cannot preserve is explicitly flagged in the import report (e.g. Kimi sub-agent conversations mirrored into the parent wire as `SubagentEvent` are skipped — the parent's `Agent` tool call & result are kept, and a sub-agent's own `subagents/<agentId>/wire.jsonl` can be imported directly).
 
@@ -88,7 +89,7 @@ dsh plugin --profile web add dsh-chat-import                    # npm package
 dsh plugin --profile web add -w link:/path/to/dsh-chat-import   # local checkout (symlink)
 ```
 
-**2. Import** — in any DSH session, import a single file or a whole directory (the same call shape works for all 13 import tools — see the table above):
+**2. Import** — in any DSH session, import a single file or a whole directory (the same call shape works for all 14 import tools — see the table above):
 
 ```
 import_claude({ path: "~/.claude/projects" })
@@ -116,6 +117,14 @@ import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl"
 import_codex({ path: "C:\Users\<you>\.codex\sessions\2026\05\18\rollout-2026-05-18T21-14-16-xxxx.jsonl" })
 import_chatgpt({ path: "C:\Users\<you>\Downloads\chatgpt-export\conversations.json" })
 import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
+import_local_jsonl({ path: "D:\downloads\session.jsonl" })
+```
+
+`import_local_jsonl({ path })` accepts any local `.jsonl` session file (or directory): it auto-detects `dsh` / `claude` / `codex` / `cursor` / `reasonix` / `pi` / `openclaw` / `hermes`, and the `format` parameter forces one parser when detection is wrong:
+
+```
+import_local_jsonl({ path: "D:\downloads\session.jsonl" })
+import_local_jsonl({ path: "D:\downloads\unknown.jsonl", format: "claude" })
 ```
 
 `import_chatgpt` / `import_opencode` / `import_zcode` / `import_hermes` always return a batch result — one file / database holds all conversations, so each conversation becomes its own session in a single call.
@@ -153,7 +162,7 @@ Semantics: same-name conflicts across sources get a `-pi` / `-opencode` suffix; 
 
 ### scan_discover — read-only session discovery
 
-`scan_discover` scans the known data roots of all 13 formats and returns a structured session index (title, project, path, import status) so you can preview before a batch import. Zero side effects:
+`scan_discover` scans the known data roots of all 14 formats and returns a structured session index (title, project, path, import status) so you can preview before a batch import. Zero side effects:
 
 ```
 scan_discover()
@@ -246,13 +255,13 @@ lib/
 
 ## ⚙️ Compatibility
 
-Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6`) and requires **Node.js >= 22.13** (the first release where `node:sqlite` is available without a flag). `npm test` — 385 cases.
+Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6`) and requires **Node.js >= 22.13** (the first release where `node:sqlite` is available without a flag). `npm test` — 391 cases.
 
 ---
 
 ## 🗺️ Roadmap
 
-- [x] 13 import sources + reverse export / sync back to Claude Code
+- [x] 14 import sources + reverse export / sync back to Claude Code
 - [x] Browser import panel + `/import` slash command + session-start migration hint & context bridge
 - [ ] Interchange IR v1 + portable backup bundle (REQ-18 / REQ-56)
 - [ ] `/import-all` batch command · Codex App Server API source (REQ-52)
