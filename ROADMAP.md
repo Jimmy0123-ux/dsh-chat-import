@@ -89,7 +89,7 @@
 | REQ-58 | P3 | scan_discover 索引补 git 分支/dirty | ✅ |
 | REQ-59 | P2 | 外部 agent/mode prompt 落盘转换为 DSH skills 资产（`import_agents`） | ✅ |
 | REQ-60 | P1 | 发布规范持续达标（plugin_check 全项：types/cordis peer/tsconfig/build 脚本） | ✅ v0.4.0 |
-| REQ-61 | P2 | Claude 资产持久化导入（memory / CLAUDE.md / skills → DSH 资产，扩展 import_agents） | ☐ |
+| REQ-61 | P2 | Claude 资产持久化导入（memory / CLAUDE.md / skills → DSH 资产，扩展 import_agents） | ✅ |
 | REQ-62 | P2 | 便携 bundle 跨机器移动用例（对标 codex-claude-transfer） | ☐ |
 | REQ-63 | P3 | 仓库社区健康（CONTRIBUTING + issue/PR 模板） | ✅ |
 
@@ -105,7 +105,6 @@
 - **REQ-39 — cwd 权威映射 + 沙箱防护（full）**：Claude `.claude.json` 权威映射 + Reasonix slug 贪心解码 + home-dir 沙箱防护。
 - **REQ-43 — 导入会话工具完整可用**：导入会话加入默认 preset scope（工具与正常会话一致）+ 绑定默认模型。
 - **REQ-56 — DSH 会话通用导出/备份**：interchange bundle + SHA-256 指纹 + 还原预览（与 REQ-18 联动，跨机器用例见 REQ-62）。
-- **REQ-61 — Claude 资产持久化导入**：`import_agents` 扩展 Claude 源（memory / CLAUDE.md / skills 落盘为 DSH 资产），对齐 dsh-claude-move 卖点。
 - **REQ-62 — 便携 bundle 跨机器移动**：`.codexbundle` 式导出（A 机 → B 机还原 0 skipped，cwd 不可达走 REQ-39-lite 回退归组），对标 codex-claude-transfer；可选 LAN sync。
 
 ### P3
