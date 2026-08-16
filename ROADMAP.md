@@ -41,7 +41,7 @@
 | REQ-10 | P2 | 引入 eslint + CI 检查 | ✅ |
 | REQ-11 | P2 | 修正 dev 文档过时信息 | ✅ |
 | REQ-12 | P3 | package.json 元数据补齐 + engines 精确化 | ✅ |
-| REQ-13 | P3 | CI 覆盖报告 | ☐ |
+| REQ-13 | P3 | CI 覆盖报告（line ≥ 75% 护栏） | ✅ |
 | REQ-14 | P1 | 多源：Kimi CLI 适配（`import_kimi`，第 13 源） | ✅ |
 | REQ-15 | P1 | 多源：ZCode 格式侦察 | ✅ 并入 REQ-38 |
 | REQ-16 | P1 | 互转：反向导出 MVP — DSH → Claude Code JSONL（`export_claude`） | ✅ |
@@ -63,7 +63,7 @@
 | REQ-32 | P1 | 内部标记：`session/imported` 事件 | ✅ |
 | REQ-33 | P2 | 导入识别 / 撤回（`list_imported_sessions` + 引导手动删） | ✅ |
 | REQ-34 | P2 | UI 分组：host-only Web 面板 | ☐ |
-| REQ-35 | P2 | 卸载语义（自动撤 Hook、绝不删会话） | ☐ |
+| REQ-35 | P2 | 卸载语义（自动撤 Hook、绝不删会话；手动清理引导） | ✅ |
 | REQ-36 | P1 | 反向同步：双向同步桥 B 第一步（`sync_to_claude` 增量写回） | ✅ 真实 `claude --resume` 验证待补 |
 | REQ-37 | P1 | 超长会话三层保护 + 预算自适应 | ✅ |
 | REQ-38 | P1 | ZCode 源适配 | ✅ |
@@ -91,7 +91,7 @@
 | REQ-60 | P1 | 发布规范持续达标（plugin_check 全项：types/cordis peer/tsconfig/build 脚本） | ✅ v0.4.0 |
 | REQ-61 | P2 | Claude 资产持久化导入（memory / CLAUDE.md / skills → DSH 资产，扩展 import_agents） | ☐ |
 | REQ-62 | P2 | 便携 bundle 跨机器移动用例（对标 codex-claude-transfer） | ☐ |
-| REQ-63 | P3 | 仓库社区健康（CONTRIBUTING + issue/PR 模板） | ☐ |
+| REQ-63 | P3 | 仓库社区健康（CONTRIBUTING + issue/PR 模板） | ✅ |
 
 ## 未完成需求说明
 
@@ -104,7 +104,6 @@
 - **REQ-29 — 命令 / Web 面板入口**：`/import-all` 一键批导入（Web 面板与 `/import` 命令已落地，本项剩余命令面收口）。
 - **REQ-30 — 交接摘要续聊**：`/resume-claude` / `/resume-codex`，把外部 transcript 当不可信静态历史生成交接摘要。
 - **REQ-34 — UI 分组：host-only Web 面板**：按源分组展示导入会话（当前 Browser 侧面板已覆盖主要场景，本项为可选项）。
-- **REQ-35 — 卸载语义**：卸载 = 平台自动撤销全部 Hook；只读输出导入会话清单；绝不自动删会话。
 - **REQ-39 — cwd 权威映射 + 沙箱防护（full）**：Claude `.claude.json` 权威映射 + Reasonix slug 贪心解码 + home-dir 沙箱防护。
 - **REQ-43 — 导入会话工具完整可用**：导入会话加入默认 preset scope（工具与正常会话一致）+ 绑定默认模型。
 - **REQ-50 — Hermes-agent 变体 schema**：支持独立 `tool_calls` / `reasoning` 列的变体。
@@ -115,11 +114,9 @@
 
 ### P3
 
-- **REQ-13 — CI 覆盖报告**：`node --test --experimental-test-coverage` 输出覆盖率。
 - **REQ-22 — Reasonix V2 WAL 合并 + Claude compacted 摘要选项**。
 - **REQ-23 — 矩阵化互转 + 校验/修复工具**：DSH↔Claude↔Codex↔Kimi 四向互通 + 只读校验。
 - **REQ-45 — 源覆盖面**：Reasonix 桌面版 + Claude-3p 新端。
 - **REQ-51 — Hermes 会话 lineage**：`parent_session_id` 压缩分叉，只导链尾可加过滤。
 - **REQ-57 — 导入结果结构校验**：seq 连续 / sourceEventSeqs 有效 / 事件白名单。
 - **REQ-58 — scan_discover 索引补 git 分支/dirty**。
-- **REQ-63 — 仓库社区健康**：CONTRIBUTING + issue/PR 模板（community health 42% → ≥75%）。
