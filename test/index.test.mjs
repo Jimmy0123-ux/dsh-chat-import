@@ -2817,6 +2817,58 @@ test('REQ-22 import_claude compacted 参数：摘要导入只落尾部 + compact
   assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
 })
 
+// ---- REQ-51 Hermes 会话 lineage（parent_session_id 压缩分叉） ----
+
+// 建带 parent_session_id 列的 hermes state.db：父会话（带消息，压缩分叉节点）+
+// 叶子子会话（承接内容）。父会话有消息时默认会导入、lineage:tail 会排除。
+function makeHermesLineageDb() {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hermes-'))
+  const dbPath = join(dir, 'state.db')
+  const db = new DatabaseSync(dbPath)
+  db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, parent_session_id TEXT, started_at REAL)')
+  db.exec('CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT, created_at REAL)')
+  db.prepare('INSERT INTO sessions (id, title, parent_session_id, started_at) VALUES (?, ?, ?, ?)').run('parent-1', 'Parent', null, 1786000000000)
+  db.prepare('INSERT INTO sessions (id, title, parent_session_id, started_at) VALUES (?, ?, ?, ?)').run('child-1', 'Child', 'parent-1', 1786000100000)
+  db.prepare('INSERT INTO sessions (id, title, parent_session_id, started_at) VALUES (?, ?, ?, ?)').run('leaf-1', 'Leaf', null, 1786000200000)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('parent-1', 'user', '开始', 1786000000001)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('parent-1', 'assistant', '旧内容', 1786000000002)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('child-1', 'user', '继续', 1786000100001)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('child-1', 'assistant', '好', 1786000100002)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('leaf-1', 'user', '新任务', 1786000200001)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('leaf-1', 'assistant', 'ok', 1786000200002)
+  db.close()
+  return dbPath
+}
+
+test('REQ-51 import_hermes lineage:tail：只导叶子链尾；父会话（含消息）被排除；默认导入全部', async () => {
+  const dbPath = makeHermesLineageDb()
+  const { ctx, persistence } = makeCtx({})
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_hermes')
+  // lineage 参数进 schema
+  assert.equal(def.parameters.properties.lineage.enum[0], 'tail')
+
+  // 默认（无 lineage）：全部导入（父/子/叶 3 会话）
+  const plain = await def.execute({ path: dbPath })
+  assert.equal(plain.imported, 3)
+  assert.ok(persistence.sessions.has('import-parent-1'))
+  assert.ok(persistence.sessions.has('import-child-1'))
+  assert.ok(persistence.sessions.has('import-leaf-1'))
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, plain), [])
+
+  // lineage:tail：父会话（有子会话，非叶子链尾）显式跳过，只导叶子（child-1/leaf-1）
+  const tail = await def.execute({ path: dbPath, force: true, lineage: 'tail' })
+  assert.equal(tail.imported, 2)
+  const tailReasons = tail.results.map((r) => r.reason || '').join(' | ')
+  assert.match(tailReasons, /lineage tail: parent session parent-1/)
+  assert.ok(!tailReasons.includes('child-1'))
+  // 叶子会话落盘（force 副本）
+  assert.ok(persistence.sessions.has('import-child-1-1'))
+  assert.ok(persistence.sessions.has('import-leaf-1-1'))
+  assert.ok(!persistence.sessions.has('import-parent-1-1')) // 父会话不建副本
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, tail), [])
+})
+
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）
 function registeredDef(ctx, toolName = 'import_claude') {
   return ctx.tools.registered(toolName)

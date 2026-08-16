@@ -364,6 +364,26 @@ test('readHermesDb: 空内容 / 缺 role 消息跳过', () => {
   assert.equal(s.messages[1].content, '真实提问')
 })
 
+test('REQ-51 readHermesDb: parent_session_id 透出（压缩分叉关联）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hermes-'))
+  const dbPath = join(dir, 'state.db')
+  const db = new DatabaseSync(dbPath)
+  db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, parent_session_id TEXT, started_at REAL)')
+  db.exec('CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT, created_at REAL)')
+  // 父会话（压缩分叉节点，通常无消息）+ 子会话（承接内容）
+  db.prepare('INSERT INTO sessions (id, title, parent_session_id, started_at) VALUES (?, ?, ?, ?)').run('parent-1', 'Parent', null, 1786000000000)
+  db.prepare('INSERT INTO sessions (id, title, parent_session_id, started_at) VALUES (?, ?, ?, ?)').run('child-1', 'Child', 'parent-1', 1786000100000)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('child-1', 'user', '继续', 1786000100001)
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)').run('child-1', 'assistant', '好', 1786000100002)
+  db.close()
+
+  const sessions = readHermesDb(dbPath)
+  const parent = sessions.find((s) => s.id === 'parent-1')
+  const child = sessions.find((s) => s.id === 'child-1')
+  assert.equal(child.parentSessionId, 'parent-1')
+  assert.equal(parent.parentSessionId, undefined)
+})
+
 test('readHermesDb: db 不可用返回 null（缺失 / 非 SQLite / 无 sessions 表）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-hermes-'))
   const missing = join(dir, 'no.db')
