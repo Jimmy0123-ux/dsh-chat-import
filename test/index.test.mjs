@@ -2751,6 +2751,72 @@ test('REQ-39 Claude 权威映射：转录无 cwd → ~/.claude.json projects 命
   assert.equal(saved.meta.cwd, 'D:\\work\\my-proj')
 })
 
+// ---- REQ-22 Reasonix V2 WAL 合并 + Claude compacted 摘要导入（集成） ----
+
+test('REQ-22 import_reasonix：同目录 <stem>.events.jsonl 自动合并，结果报告 walMerged', async () => {
+  const dir = 'D:\\demo\\reasonix\\sessions'
+  const stem = 'desktop-202607020199-3'
+  const tree = {
+    [dir]: 'dir',
+    [dir + '\\' + stem + '.jsonl']: [
+      JSON.stringify({ role: 'user', content: '问题1' }),
+      JSON.stringify({ role: 'assistant', content: '旧回答' }),
+    ].join('\n'),
+    [dir + '\\' + stem + '.events.jsonl']: [
+      JSON.stringify({ type: 'replace', messages: [
+        { role: 'user', content: '问题1' },
+        { role: 'assistant', content: 'WAL 权威回答' },
+      ] }),
+    ].join('\n'),
+    [dir + '\\' + stem + '.meta.json']: JSON.stringify({ workspace: 'D:\\Reasonix', summary: 'WAL 会话' }),
+    [dir + '\\desktop-202607020199-4.jsonl']: [ // 无 WAL 的对照文件
+      JSON.stringify({ role: 'user', content: '问题' }),
+      JSON.stringify({ role: 'assistant', content: '回答' }),
+    ].join('\n'),
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_reasonix')
+  const value = await def.execute({ path: dir })
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.imported, 2)
+  const walItem = value.results.find((r) => r.path.includes(stem + '.jsonl'))
+  assert.equal(walItem.walMerged, true)
+  assert.equal(walItem.walRecords, 2)
+  const plain = value.results.find((r) => r.path.includes('desktop-202607020199-4'))
+  assert.equal(plain.walMerged, undefined)
+  // WAL 权威内容落盘
+  const saved = persistence.sessions.get('import-' + stem)
+  const asst = saved.events.find((e) => e.type === 'assistant/message')
+  assert.equal(asst.data.message.content[0].text, 'WAL 权威回答')
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('REQ-22 import_claude compacted 参数：摘要导入只落尾部 + compacted 报告 + schema', async () => {
+  const lines = [
+    JSON.stringify({ sessionId: 'sess-comp-002', type: 'user', message: { role: 'user', content: '问题1' } }),
+    JSON.stringify({ sessionId: 'sess-comp-002', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '回答1' }] } }),
+    JSON.stringify({ sessionId: 'sess-comp-002', type: 'summary', summary: '最终总结', title: '压缩标题' }),
+    JSON.stringify({ sessionId: 'sess-comp-002', type: 'user', message: { role: 'user', content: '收尾' } }),
+    JSON.stringify({ sessionId: 'sess-comp-002', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '收尾回答' }] } }),
+  ].join('\n')
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\claude\\projects\\p\\sess-comp-002.jsonl': lines })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_claude')
+  // 参数进 schema
+  assert.equal(def.parameters.properties.compacted.type, 'boolean')
+  const value = await def.execute({ path: 'D:\\demo\\claude\\projects\\p\\sess-comp-002.jsonl', compacted: true })
+  assert.equal(value.status, 'imported')
+  assert.equal(value.compacted, true)
+  const saved = persistence.sessions.get('import-sess-comp-002')
+  const turns = saved.events.filter((e) => e.type === 'turn/start').length
+  assert.equal(turns, 1) // 只导摘要后的尾部
+  const asst = saved.events.find((e) => e.type === 'assistant/message')
+  assert.equal(asst.data.message.content[0].type, 'reasoning')
+  assert.equal(asst.data.message.content[0].text, '最终总结')
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）
 function registeredDef(ctx, toolName = 'import_claude') {
   return ctx.tools.registered(toolName)

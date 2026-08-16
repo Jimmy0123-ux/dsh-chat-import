@@ -1071,6 +1071,86 @@ test('reasonixStemTime: desktop/subagent 命名解析、无或非法时间戳回
   assert.equal(reasonixStemTime('code-tmp'), null)
   assert.equal(reasonixStemTime('desktop-202613990000-1'), null) // 非法月份
 })
+
+// ---- REQ-22 Reasonix V2 WAL 合并 + Claude compacted 摘要导入 ----
+
+test('REQ-22 convertReasonixJsonl: WAL replace 事件整表接管（权威快照），walMerged/walRecords 报告', () => {
+  const checkpoint = [
+    JSON.stringify({ role: 'user', content: '问题1' }),
+    JSON.stringify({ role: 'assistant', content: '旧回答' }),
+  ].join('\n')
+  const wal = [
+    JSON.stringify({ type: 'replace', messages: [
+      { role: 'user', content: '问题1' },
+      { role: 'assistant', content: '新回答（WAL 权威）' },
+      { role: 'user', content: '问题2' },
+      { role: 'assistant', content: '回答2' },
+    ] }),
+  ].join('\n')
+  const out = convertReasonixJsonl(checkpoint, { reasonixId: 'desktop-202607020199-1', walText: wal })
+  assert.equal(out.walMerged, true)
+  assert.equal(out.walRecords, 4)
+  assert.equal(out.records, 4) // WAL 消息整表接管
+  assert.equal(out.turns.length, 2)
+  const texts = out.events.filter((e) => e.type === 'assistant/message').map((e) => e.data.message.content[0].text)
+  assert.deepEqual(texts, ['新回答（WAL 权威）', '回答2'])
+})
+
+test('REQ-22 convertReasonixJsonl: 追加式 WAL（checkpoint 后事件）晚到者胜；无 WAL 纯 checkpoint', () => {
+  const checkpoint = [
+    JSON.stringify({ role: 'user', content: '问题1' }),
+    JSON.stringify({ role: 'assistant', content: '回答1' }),
+  ].join('\n')
+  const wal = [
+    JSON.stringify({ role: 'user', content: '问题2' }),
+    JSON.stringify({ role: 'assistant', content: '回答2' }),
+  ].join('\n')
+  const out = convertReasonixJsonl(checkpoint, { reasonixId: 'desktop-202607020199-2', walText: wal })
+  assert.equal(out.walMerged, true)
+  assert.equal(out.walRecords, 2)
+  assert.equal(out.turns.length, 2)
+  // 无 WAL → 旧行为
+  const plain = convertReasonixJsonl(checkpoint, { reasonixId: 'desktop-202607020199-2' })
+  assert.equal(plain.walMerged, undefined)
+  assert.equal(plain.turns.length, 1)
+})
+
+test('REQ-22 convertClaudeJsonl: compacted 只导最后一次摘要 + 尾部，摘要作 reasoning 前置', () => {
+  const lines = [
+    JSON.stringify({ sessionId: 'sess-comp-001', type: 'user', message: { role: 'user', content: '问题1' } }),
+    JSON.stringify({ sessionId: 'sess-comp-001', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '回答1' }] } }),
+    JSON.stringify({ sessionId: 'sess-comp-001', type: 'summary', summary: '第一段总结', title: '压缩标题' }),
+    JSON.stringify({ sessionId: 'sess-comp-001', type: 'user', message: { role: 'user', content: '继续问题' } }),
+    JSON.stringify({ sessionId: 'sess-comp-001', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '继续回答' }] } }),
+    JSON.stringify({ sessionId: 'sess-comp-001', type: 'summary', summary: '最终总结：需求已完成', title: '最终标题' }),
+    JSON.stringify({ sessionId: 'sess-comp-001', type: 'user', message: { role: 'user', content: '收尾' } }),
+    JSON.stringify({ sessionId: 'sess-comp-001', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '收尾回答' }] } }),
+  ].join('\n')
+  const full = convertClaudeJsonl(lines, { fileStem: 'sess-comp-001' })
+  assert.equal(full.turns.length, 3)
+  const out = convertClaudeJsonl(lines, { fileStem: 'sess-comp-001', compacted: true })
+  assert.equal(out.compacted, true)
+  // 只保留最后一次 summary 之后的尾部（1 轮）
+  assert.equal(out.turns.length, 1)
+  const texts = out.events.filter((e) => e.type === 'assistant/message')
+    .map((e) => e.data.message.content.filter((b) => b.type === 'text').map((b) => b.text)[0])
+  assert.deepEqual(texts, ['收尾回答'])
+  // 摘要 reasoning 前置到首个保留轮
+  const firstAsst = out.events.find((e) => e.type === 'assistant/message')
+  assert.ok(firstAsst.data.message.content.some((b) => b.type === 'reasoning' && b.text === '最终总结：需求已完成'))
+  // 标题取最后一次 summary 的 title（custom-title 载体）
+  assert.equal(out.title, '最终标题')
+  // 事件平衡（session/title 钉在最后，不破坏回合平衡）
+  const types = out.events.map((e) => e.type)
+  assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
+  // 无 summary 记录 → compacted 不生效（全量）
+  const noSummary = convertClaudeJsonl([
+    JSON.stringify({ sessionId: 'sess-comp-001', type: 'user', message: { role: 'user', content: '问题1' } }),
+    JSON.stringify({ sessionId: 'sess-comp-001', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '回答1' }] } }),
+  ].join('\n'), { fileStem: 'sess-comp-001', compacted: true })
+  assert.equal(noSummary.compacted, undefined)
+  assert.equal(noSummary.turns.length, 1)
+})
 // ---- Pi Coding Agent 会话 JSONL ----
 
 test('convertPiJsonl: 简单问答、头行元数据、平衡回合', () => {
