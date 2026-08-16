@@ -11,3 +11,13 @@ export {
   serializeClaudeJsonlTail,
   verifyClaudeJsonl,
 } from './lib/export/claude.mjs'
+
+// REQ-56/62 interchange bundle（备份/便携格式，纯函数）
+export {
+  BUNDLE_NAMESPACE,
+  BUNDLE_FORMAT,
+  BUNDLE_VERSION,
+  sessionLogToJsonl,
+  serializeBundle,
+  verifyBundle,
+} from './lib/export/bundle.mjs'

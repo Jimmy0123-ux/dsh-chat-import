@@ -49,6 +49,8 @@ export interface ToolSurface {
   import_local_jsonl(options: ImportOptions & { format?: LocalJsonlFormat }): Promise<ImportResult>
   import_agents(options?: AgentsImportOptions): Promise<AgentsImportResult>
   export_claude(options: ExportClaudeParams): Promise<ExportClaudeResult>
+  export_bundle(options: ExportBundleParams): Promise<ExportBundleResult>
+  restore_bundle(options: RestoreBundleParams): Promise<RestoreBundleResult>
   sync_to_claude(options: SyncToClaudeParams): Promise<SyncToClaudeResult>
   list_imported_sessions(): Promise<ListImportedResult>
   retract_import(options: RetractParams): Promise<RetractResult>
@@ -286,6 +288,88 @@ export interface ExportClaudeResult {
   title?: string
   dryRun: boolean
   mapping: ExportMapping
+  /** REQ-21 降级清单（有损项逐条报告；仅非空时出现）。 */
+  degradations?: Array<{ id: string; kind: string; strategy: 'lossless' | 'text-fallback' | 'skip-placeholder'; count: number }>
+}
+
+// ---------- export_bundle / restore_bundle（REQ-56/62 interchange bundle） ----------
+
+export interface ExportBundleParams {
+  /** 要导出的 DSH 会话 id（必填）。 */
+  sessionId: string
+  /** 输出文件路径（缺省 <outputDir>/<sessionId>.dshbundle.json）。 */
+  path?: string
+  /** 输出目录（默认 ~/.dsh/exports）。 */
+  outputDir?: string
+  /** true 时不写盘，只序列化并返回目标路径与指纹。 */
+  dryRun?: boolean
+}
+
+export interface ExportBundleResult {
+  mode: 'single'
+  sessionId: string
+  filePath: string
+  eventCount: number
+  dryRun: boolean
+  originalCwd?: string
+  landingHint?: string
+  sha256: { session: string; bundle: string }
+}
+
+export interface RestoreBundleParams {
+  /** bundle 文件（.dshbundle.json）或含 .dshbundle.json 的目录路径（必填）。 */
+  path: string
+  /** 覆盖还原出的 DSH 会话 id（默认 import-<源会话 id>）。 */
+  sessionId?: string
+  /** true 时即使已还原也以新 id 另存完整副本。 */
+  force?: boolean
+  /** true 时 dry-run 预览（零副作用）。 */
+  preview?: boolean
+  /** preview 的兼容别名。 */
+  dryRun?: boolean
+  /** 目录模式是否递归子目录（默认 true）。 */
+  recursive?: boolean
+}
+
+export interface RestoreBundleResult {
+  mode: 'single' | 'batch'
+  preview?: boolean
+  sessionId?: string
+  sourceSessionId?: string
+  status?: 'imported' | 'already-imported' | 'appended' | 'skipped'
+  turns?: number
+  messages?: number
+  toolCalls?: number
+  skipped?: number
+  skipReason?: string
+  /** 原 cwd（机器相关，跨机器还原时 B 机通常不可达）。 */
+  originalCwd?: string
+  /** 原 cwd 在本机是否可达（目录存在）。 */
+  cwdAvailable?: boolean
+  /** 建议落点（originalCwd basename）。 */
+  landingHint?: string
+  /** 实际归组目录（cwd 不可达时 = bundle 文件目录，REQ-39-lite 回退）。 */
+  groupedTo?: string
+  /** 跨机器还原报告（cwd 不可达时出现，不静默）。 */
+  restoreNote?: string
+  alreadyImported?: boolean | number
+  total?: number
+  imported?: number
+  appended?: number
+  failed?: number
+  results?: Array<{
+    path: string
+    status: string
+    sessionId?: string
+    turns?: number
+    messages?: number
+    toolCalls?: number
+    skipped?: number
+    restoreNote?: string
+    cwdAvailable?: boolean
+    error?: string
+    reason?: string
+  }>
 }
 
 export interface SyncToClaudeParams {

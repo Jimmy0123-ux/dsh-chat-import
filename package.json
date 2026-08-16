@@ -34,6 +34,7 @@
     "lib/import-core.mjs",
     "lib/import-variants.mjs",
     "lib/toolkit.mjs",
+    "lib/restore.mjs",
     "lib/export-tool.mjs",
     "lib/prompt-hint.mjs",
     "lib/retract.mjs",

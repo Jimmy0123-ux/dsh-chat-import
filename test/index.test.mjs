@@ -259,15 +259,15 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册二十一个工具（15 导入 + import_agents + scan_discover + export_claude + sync_to_claude + REQ-33 识别/撤回）', () => {
+test('apply 注册二十三个工具（15 导入 + import_agents + scan_discover + export_claude + sync_to_claude + REQ-33 识别/撤回 + REQ-56 bundle 导出/还原）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 21)
+  assert.equal(registered.length, 23)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['export_claude', 'import_agents', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_dsh', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_local_jsonl', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'retract_import', 'scan_discover', 'sync_to_claude'])
+  assert.deepEqual(names, ['export_bundle', 'export_claude', 'import_agents', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_dsh', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_local_jsonl', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'restore_bundle', 'retract_import', 'scan_discover', 'sync_to_claude'])
   for (const def of registered) {
-    if (['export_claude', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import'].includes(def.name)) {
-      // 导出 / 写回 / 发现 / 识别 / 撤回工具：单对象输出 schema（非 oneOf）
+    if (['export_claude', 'export_bundle', 'restore_bundle', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import'].includes(def.name)) {
+      // 导出 / bundle / 写回 / 发现 / 识别 / 撤回工具：单对象输出 schema（非 oneOf）
       assert.equal(def.output.schema.type, 'object')
       assert.ok(!Array.isArray(def.output.schema.oneOf))
     } else if (def.name === 'import_agents') {
@@ -2429,6 +2429,137 @@ test('export_claude 中断会话：末尾补发空 tool_result，会话日志只
   assert.equal(saved.events.filter((e) => e.type === 'tool/result').length, 0)
 })
 
+// ---- REQ-56/62 export_bundle / restore_bundle（interchange bundle 备份/便携） ----
+
+test('REQ-56 bundle 闭环：export_bundle 落盘 → restore_bundle 还原 0 skipped、schema 校验、幂等', async () => {
+  const { ctx, persistence, writes } = makeCtx({})
+  await seedSession(persistence, 'sess-bundle-001', { version: 0, id: 'sess-bundle-001', createdAt: 1786000000000, cwd: 'D:\\demo\\proj' }, [
+    mkEvent('turn/start', 0, 1786000000000, { turn: 1 }),
+    mkEvent('user/message', 1, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: '你好' }], source: { kind: 'user' } }, { surfaceOp: 'append' }),
+    mkEvent('assistant/message', 2, 1786000000000, { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: '你好！' }], source: { kind: 'model', provider: 'dsh' } } }, { surfaceOp: 'append' }),
+    mkEvent('turn/end', 3, 1786000000000, { turn: 1, reason: { kind: 'completed' } }),
+  ])
+  apply(ctx)
+  const exp = registeredDef(ctx, 'export_bundle')
+  const bundlePath = join('C:', 'Users', 'test', 'exports', 'sess-bundle-001.dshbundle.json')
+  const value = await exp.execute({ sessionId: 'sess-bundle-001', path: bundlePath })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.eventCount, 4)
+  assert.match(value.sha256.session, /^[0-9a-f]{64}$/)
+  assert.match(value.sha256.bundle, /^[0-9a-f]{64}$/)
+  assert.deepEqual(validateJsonSchemaValue(exp.output.schema, value), [])
+  assert.equal(writes[0].path, bundlePath)
+  assert.equal(writes[0].options.kind, 'createIfAbsent')
+
+  // 还原（bundle 在 mock 树里）
+  const tree2 = { [bundlePath]: writes[0].content }
+  const { ctx: ctx2, persistence: p2 } = makeCtx(tree2)
+  apply(ctx2)
+  const rst = registeredDef(ctx2, 'restore_bundle')
+  const restored = await rst.execute({ path: bundlePath })
+  assert.equal(restored.mode, 'single')
+  assert.equal(restored.status, 'imported')
+  assert.equal(restored.skipped, 0)
+  assert.equal(restored.turns, 1)
+  assert.equal(restored.messages, 2)
+  assert.equal(restored.sourceSessionId, 'sess-bundle-001')
+  assert.equal(restored.originalCwd, 'D:\\demo\\proj')
+  assert.equal(restored.cwdAvailable, true) // 同机：原 cwd 可达
+  assert.deepEqual(validateJsonSchemaValue(rst.output.schema, restored), [])
+  const saved = p2.sessions.get(restored.sessionId)
+  assert.ok(saved)
+  assert.equal(saved.events.at(-1).type, 'turn/end')
+  // 幂等：重复还原 already-imported
+  const again = await rst.execute({ path: bundlePath })
+  assert.equal(again.status, 'already-imported')
+  assert.equal(p2.sessions.size, 1)
+})
+
+test('REQ-62 跨机器还原：originalCwd 不可达 → cwdAvailable:false + 回退归组 + restoreNote（不静默）', async () => {
+  // A 机导出 bundle（cwd = A 机路径，B 机不存在——用确定不存在的目录名保证 stat 失败）
+  const A_CWD = 'D:\\__machine_a_nonexistent_9f3k__\\work'
+  const { ctx, writes } = makeCtx({})
+  await seedSession(ctx.sessionPersistence, 'sess-machine-a', { version: 0, id: 'sess-machine-a', createdAt: 1786000000000, cwd: A_CWD }, [
+    mkEvent('user/message', 0, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }, { surfaceOp: 'append' }),
+    mkEvent('assistant/message', 1, 1786000000000, { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'hi' }], source: { kind: 'model', provider: 'dsh' } } }, { surfaceOp: 'append' }),
+  ])
+  apply(ctx)
+  const exp = registeredDef(ctx, 'export_bundle')
+  const bundlePath = join('C:', 'Users', 'b', 'incoming', 'sess-machine-a.dshbundle.json')
+  await exp.execute({ sessionId: 'sess-machine-a', path: bundlePath })
+  const bundleContent = writes[0].content
+
+  // B 机：bundle 文件在（原 cwd D:\machine-a\work 不存在），还原
+  const treeB = { [bundlePath]: bundleContent }
+  const { ctx: ctxB, persistence: pB, attached } = makeCtx(treeB)
+  apply(ctxB)
+  const rst = registeredDef(ctxB, 'restore_bundle')
+  const restored = await rst.execute({ path: bundlePath })
+  assert.equal(restored.status, 'imported')
+  assert.equal(restored.skipped, 0)
+  assert.equal(restored.cwdAvailable, false)
+  assert.equal(restored.originalCwd, A_CWD)
+  assert.equal(restored.landingHint, 'work')
+  assert.equal(restored.groupedTo, dirname(bundlePath)) // REQ-39-lite 回退归组到 bundle 目录
+  assert.match(restored.restoreNote, /原 cwd 不可达/)
+  assert.deepEqual(validateJsonSchemaValue(rst.output.schema, restored), [])
+  // 会话确实落盘（mock workspaceRegistry 对不存在的 cwd 也会虚拟创建，故只断言
+  // 归组发生过一次；真实 host resolveByPath 失败 → REQ-39-lite 回退到 bundle 目录，
+  // 该落点由 groupedTo 报告契约保证）
+  assert.equal(attached.length, 1)
+  assert.ok(pB.sessions.has(restored.sessionId))
+})
+
+test('REQ-56 损坏检测：bundle 被篡改（log 改动）→ restore_bundle 大声失败不还原', async () => {
+  const { ctx, writes } = makeCtx({})
+  await seedSession(ctx.sessionPersistence, 'sess-tamper', { version: 0, id: 'sess-tamper', createdAt: 1786000000000, cwd: 'D:\\demo\\proj' }, [
+    mkEvent('user/message', 0, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }, { surfaceOp: 'append' }),
+  ])
+  apply(ctx)
+  await registeredDef(ctx, 'export_bundle').execute({ sessionId: 'sess-tamper', path: 'C:\\tmp\\tamper.dshbundle.json' })
+  const doc = JSON.parse(writes[0].content)
+  doc.log = doc.log.replace('hi', '被篡改') // 不重算指纹
+  const { ctx: ctx2, persistence: p2 } = makeCtx({ 'C:\\tmp\\tamper.dshbundle.json': JSON.stringify(doc) })
+  apply(ctx2)
+  const rst = registeredDef(ctx2, 'restore_bundle')
+  await assert.rejects(() => rst.execute({ path: 'C:\\tmp\\tamper.dshbundle.json' }), /bundle 校验失败/)
+  assert.equal(p2.sessions.size, 0)
+  // 预览分支同样报跳过原因（不抛错）
+  const preview = await rst.execute({ path: 'C:\\tmp\\tamper.dshbundle.json', preview: true })
+  assert.equal(preview.preview, true)
+  assert.equal(preview.skipped, 1)
+  assert.match(preview.skipReason, /bundle 校验失败/)
+})
+
+test('REQ-56 restore_bundle 目录模式：递归收集 .dshbundle.json 逐文件还原', async () => {
+  const { ctx, writes } = makeCtx({})
+  await seedSession(ctx.sessionPersistence, 'sess-dir-001', { version: 0, id: 'sess-dir-001', createdAt: 1786000000000, cwd: 'D:\\demo\\proj' }, [
+    mkEvent('user/message', 0, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }, { surfaceOp: 'append' }),
+    mkEvent('assistant/message', 1, 1786000000000, { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'hi' }], source: { kind: 'model', provider: 'dsh' } } }, { surfaceOp: 'append' }),
+  ])
+  apply(ctx)
+  const exp = registeredDef(ctx, 'export_bundle')
+  const dir = 'C:\\backups'
+  await exp.execute({ sessionId: 'sess-dir-001', path: dir + '\\sess-dir-001.dshbundle.json' })
+  await exp.execute({ sessionId: 'sess-dir-001', path: dir + '\\sub\\sess-dir-001-copy.dshbundle.json', cwd: 'D:\\other' })
+
+  const { ctx: ctx2, persistence: p2 } = makeCtx({
+    [dir]: 'dir',
+    [dir + '\\sess-dir-001.dshbundle.json']: writes[0].content,
+    [dir + '\\sub']: 'dir',
+    [dir + '\\sub\\sess-dir-001-copy.dshbundle.json']: writes[1].content,
+    [dir + '\\notes.txt']: 'not a bundle',
+  })
+  apply(ctx2)
+  const rst = registeredDef(ctx2, 'restore_bundle')
+  const value = await rst.execute({ path: dir })
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.deepEqual(validateJsonSchemaValue(rst.output.schema, value), [])
+  assert.equal(p2.sessions.size, 2)
+})
+
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）
 function registeredDef(ctx, toolName = 'import_claude') {
   return ctx.tools.registered(toolName)
@@ -3240,16 +3371,16 @@ test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-im
   assert.equal(imp.kind, 'exact')
   assert.equal(typeof sessions.handler, 'function')
   assert.equal(typeof imp.handler, 'function')
-  // 只加路由，不加工具：15 导入 + import_agents + scan/export/sync/list/retract = 21，注册数不变
-  assert.equal(registered.length, 21)
+  // 只加路由，不加工具：15 导入 + import_agents + scan/export/sync/list/retract + bundle 导出/还原 = 23，注册数不变
+  assert.equal(registered.length, 23)
 })
 
-test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、21 工具照常注册、无路由', () => {
+test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、23 工具照常注册、无路由', () => {
   const { ctx, webRoutes, registered } = makeCtx({}, { noWebServer: true })
   apply(ctx)
   // 缺 webServer 只是不注册面板路由，导入工具不受影响（CI headless 冒烟场景）
   assert.equal(webRoutes.length, 0)
-  assert.equal(registered.length, 21)
+  assert.equal(registered.length, 23)
 })
 
 test('REQ-41 /api-import/sessions handler：合成夹具经 discoverSessions 返回会话、未知来源 400', async () => {
