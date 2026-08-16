@@ -82,7 +82,7 @@
 | REQ-51 | P3 | Hermes 会话 lineage（parent_session_id 压缩分叉） | ☐ |
 | REQ-52 | P2 | Codex 官方 App Server API 路线侦察 | ✅ 维持 rollout |
 | REQ-53 | P2 | 新会话开始迁移提示（per-project 记忆） | ✅ |
-| REQ-54 | P2 | 源文件变更自动增量续写 + 面板 Sync 入口 | ◐ Sync 已落地；watch 懒检查待做 |
+| REQ-54 | P2 | 源文件变更自动增量续写 + 面板 Sync 入口 + watch 懒检查 | ✅ |
 | REQ-55 | P1 | 缺陷：导入会话归档后可重新导入 | ✅ |
 | REQ-56 | P2 | DSH 会话通用导出/备份（interchange bundle + 指纹 + 还原） | ☐ |
 | REQ-57 | P3 | 导入结果结构校验 | ✅ |
