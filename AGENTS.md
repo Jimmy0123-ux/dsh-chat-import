@@ -12,6 +12,9 @@ index.mjs        插件入口（薄组合层，host 面）：只做组装——r
                  retract_import）+ ctx.inject(['webServer']) 延迟挂载面板路由
                  （POST /api-import/sessions 发现、POST /api-import/import 面板导入、
                  GET/POST /api-import/sync 双向增量控制台）
+index.d.ts       类型面（手写维护，随工具 schema 同步）：Cordis 入口 apply/inject/name + ToolSurface
+                 覆盖 21 个工具的参数/返回；package.json types 与 exports 的 types 条件引用，进 npm 包
+tsconfig.json    TS 工具链最小配置（仅 include index.d.ts；零构建、不进 npm 包）
 lib/             导入/同步驱动（按职责拆分，均消费 ctx、非纯函数）：imports.mjs（幂等 registry）、
                  backfill.mjs（sync_to_claude 写回）、discovery.mjs（14 格式统一发现 + 30s TTL / 持久化
                  书签）、budget.mjs（REQ-37 预算解析链）、import-core.mjs（共享导入编排：importTranscript
@@ -34,7 +37,8 @@ convert.mjs      转换核心 re-export shim（已按源拆到 lib/convert/{core
 export.mjs       反向导出序列化器 re-export shim（实体在 lib/export/claude.mjs——DSH 会话日志 → Claude
                  Code JSONL，纯函数、零 DSH 依赖；`exports["./export.mjs"]` 子路径契约保持不变）
 cordis.patch.yml bundle 声明（insert import-claude）
-.github/         GitHub Actions CI（npm test，不进 npm 包）
+.github/         GitHub Actions CI（npm test，不进 npm 包）；scripts/build-check.mjs 作零构建包的
+                 scripts.build/prepack 发布面自检（files 完整性 + node --check 语法 + lockfile 版本）
 package.json     npm 包元数据；files 白名单 = 发布内容；dsh.client 声明 Browser 侧注入
 README.md        对外契约（英文，GitHub/npm 默认）；README.zh-CN.md 中文版——行为变更必须同步两版
 CHANGELOG.md     变更日志（进 npm 包）
@@ -44,7 +48,7 @@ test/            convert 单测 + export 单测 + index mock 集成 + zcode 自�
 dev/             ❌ 本地工程面（gitignore，永不提交）：bin/（脚本：session.mjs 多会话认领 CLI、verify-*、totp）、hooks/（pre-push）、research/（竞品/方向调研）、HANDOFF.md、REQUIREMENTS.md、GROWTH.md、RELEASING.md、ORCHESTRATOR-PROMPT.md、TESTER-PROMPT.md、gh-pat.txt（凭据勿提交）；多会话协调靠 dsh-file-claim 插件
 ```
 
-- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/client.js`、`lib/command.mjs`、`lib/context-bridge.mjs`、`lib/discovery.mjs`、`lib/budget.mjs`、`lib/import-core.mjs`、`lib/import-variants.mjs`、`lib/toolkit.mjs`、`lib/export-tool.mjs`、`lib/prompt-hint.mjs`、`lib/retract.mjs`、`lib/discovery-host.mjs`、`lib/panel.mjs`、`lib/sync-config.mjs`、`lib/sync-loop.mjs`、`lib/sync-panel.mjs`、`lib/tools.mjs`、`lib/dsh.mjs`、`lib/convert`、`lib/export`、`lib/hermes.mjs`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
+- `package.json` 的 `files` 白名单就是 npm 发布面：`index.mjs`、`index.d.ts`、`convert.mjs`、`export.mjs`、`lib/imports.mjs`、`lib/backfill.mjs`、`lib/client.js`、`lib/command.mjs`、`lib/context-bridge.mjs`、`lib/discovery.mjs`、`lib/budget.mjs`、`lib/import-core.mjs`、`lib/import-variants.mjs`、`lib/toolkit.mjs`、`lib/export-tool.mjs`、`lib/prompt-hint.mjs`、`lib/retract.mjs`、`lib/discovery-host.mjs`、`lib/panel.mjs`、`lib/sync-config.mjs`、`lib/sync-loop.mjs`、`lib/sync-panel.mjs`、`lib/tools.mjs`、`lib/dsh.mjs`、`lib/convert`、`lib/export`、`lib/hermes.mjs`、`lib/opencode.mjs`、`lib/zcode.mjs`、`cordis.patch.yml`、`README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`assets/import.svg`、`LICENSE`。新增被 `index.mjs` import 或 README 引用的文件必须同步加进 `files`。
 - **永不提交**：`dev/`、`node_modules/`、`.prev-session*.jsonl`、`.dsh-file-claim/`（插件运行时目录）、真实用户 transcript（含敏感内容）、任何凭据/密钥。
 
 ## 命令
@@ -52,9 +56,10 @@ dev/             ❌ 本地工程面（gitignore，永不提交）：bin/（脚�
 ```sh
 npm test        # node --test 跑 test/*.test.mjs（convert 单测 + export 单测 + index mock 集成 + zcode 自包含）
 npm run check:linux   # 跨平台路径纪律静态检查（.github/scripts/check-linux-compat.mjs，CI 同款护栏）
+npm run build   # 零构建包的「build」：发布面自检（files 完整性 + node --check 语法 + lockfile 版本，prepack 自动跑）
 ```
 
-无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` / `export.mjs` / `lib/` 即发布产物（`lib/client.js` 是手写 CJS bundle，亦无构建）。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调任一 `import_*`（15 个）/ `scan_discover` / `export_claude` / `sync_to_claude` / `list_imported_sessions` / `retract_import`；Browser 侧验证：dsh web 侧边栏底部「导入会话」按钮 → 面板按工作区分组浏览 + 单选/多选导入。
+无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` / `export.mjs` / `lib/` 即发布产物（`lib/client.js` 是手写 CJS bundle，亦无构建；`npm run build` 是发布面自检而非编译）。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调任一 `import_*`（15 个）/ `scan_discover` / `export_claude` / `sync_to_claude` / `list_imported_sessions` / `retract_import`；Browser 侧验证：dsh web 侧边栏底部「导入会话」按钮 → 面板按工作区分组浏览 + 单选/多选导入。
 
 ## 提交纪律（保持仓库干净）
 

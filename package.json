@@ -1,11 +1,15 @@
 {
   "name": "dsh-chat-import",
   "description": "Import Claude Code / Codex / ChatGPT / Cursor / Gemini / Reasonix / Pi Coding Agent / opencode / ZCode / Grok Build / OpenClaw / Hermes / Kimi CLI conversation histories as resumable DeepSeek Harness sessions",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "main": "./index.mjs",
+  "types": "./index.d.ts",
   "exports": {
-    ".": "./index.mjs",
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    },
     "./client": {
       "default": "./lib/client.js"
     },
@@ -16,6 +20,7 @@
   },
   "files": [
     "index.mjs",
+    "index.d.ts",
     "convert.mjs",
     "export.mjs",
     "lib/imports.mjs",
@@ -64,6 +69,7 @@
     }
   },
   "peerDependencies": {
+    "cordis": ">=4.0.0-rc.8 <5.0.0",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.6",
     "react": ">=18.0.0"
@@ -108,6 +114,8 @@
     "test": "node --test \"test/*.test.mjs\"",
     "lint": "eslint .",
     "check:linux": "node .github/scripts/check-linux-compat.mjs",
+    "build": "node .github/scripts/build-check.mjs",
+    "prepack": "npm run build",
     "prepublishOnly": "npm test && git diff --quiet && git diff --cached --quiet && npm pack --dry-run"
   },
   "license": "MIT",
