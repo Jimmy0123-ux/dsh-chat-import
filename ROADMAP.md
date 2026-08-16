@@ -85,7 +85,7 @@
 | REQ-54 | P2 | 源文件变更自动增量续写 + 面板 Sync 入口 | ◐ Sync 已落地；watch 懒检查待做 |
 | REQ-55 | P1 | 缺陷：导入会话归档后可重新导入 | ✅ |
 | REQ-56 | P2 | DSH 会话通用导出/备份（interchange bundle + 指纹 + 还原） | ☐ |
-| REQ-57 | P3 | 导入结果结构校验 | ☐ |
+| REQ-57 | P3 | 导入结果结构校验 | ✅ |
 | REQ-58 | P3 | scan_discover 索引补 git 分支/dirty | ✅ |
 | REQ-59 | P2 | 外部 agent/mode prompt 落盘转换为 DSH skills 资产（`import_agents`） | ✅ |
 | REQ-60 | P1 | 发布规范持续达标（plugin_check 全项：types/cordis peer/tsconfig/build 脚本） | ✅ v0.4.0 |
@@ -115,4 +115,3 @@
 - **REQ-23 — 矩阵化互转 + 校验/修复工具**：DSH↔Claude↔Codex↔Kimi 四向互通 + 只读校验。
 - **REQ-45 — 源覆盖面（◐）**：Reasonix 桌面版 + Claude-3p 新端——侦察完成（dev/research/reasonix-desktop-claude-3p-recon.md），WAL schema / 目录层级待真机样本校准后实现。
 - **REQ-51 — Hermes 会话 lineage**：`parent_session_id` 压缩分叉，只导链尾可加过滤。
-- **REQ-57 — 导入结果结构校验**：seq 连续 / sourceEventSeqs 有效 / 事件白名单。
