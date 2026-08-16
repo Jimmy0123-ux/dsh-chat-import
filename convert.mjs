@@ -23,6 +23,18 @@ export {
   validateSessionEvents,
 } from './lib/convert/core.mjs'
 
+// REQ-18 interchange v1 协议（IR 显式化 + 能力矩阵 + REQ-21 降级规则）
+export {
+  INTERCHANGE_VERSION,
+  INTERCHANGE_NAMESPACE,
+  INTERCHANGE_SCHEMA,
+  validateInterchange,
+  serializeInterchange,
+  SOURCE_CAPABILITIES,
+  DEGRADATION_RULES,
+  summarizeDegradations,
+} from './lib/convert/interchange.mjs'
+
 export {
   convertClaudeJsonl,
 } from './lib/convert/claude.mjs'
