@@ -406,3 +406,83 @@ test('readHermesDb → convertHermesJson: DB fixture 每个会话都能转出平
     }
   }
 })
+
+// ── REQ-50：hermes-agent 变体（tool_calls / reasoning 独立列）──────────────
+
+test('readHermesDb: 变体列 tool_calls / reasoning（JSON 文本）进中间 JSON', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hermes-'))
+  const dbPath = join(dir, 'state.db')
+  const db = new DatabaseSync(dbPath)
+  db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, started_at REAL)')
+  db.exec('CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT, tool_calls TEXT, reasoning TEXT, timestamp REAL)')
+  db.prepare('INSERT INTO sessions (id, title, cwd, started_at) VALUES (?, ?, ?, ?)').run('va', 'Variant', 'E:/demo', 1)
+  db.prepare('INSERT INTO messages (session_id, role, content, tool_calls, reasoning, timestamp) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('va', 'user', '帮我跑测试', null, null, 1)
+  db.prepare('INSERT INTO messages (session_id, role, content, tool_calls, reasoning, timestamp) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('va', 'assistant', '跑一下', JSON.stringify([{ id: 'call-v1', name: 'bash', arguments: { command: 'npm test' } }]), JSON.stringify('先看测试输出'), 2)
+  db.close()
+
+  const [s] = readHermesDb(dbPath)
+  assert.equal(s.messages.length, 2)
+  const asst = s.messages[1]
+  assert.equal(asst.reasoning, '先看测试输出')
+  assert.deepEqual(asst.toolCalls, [{ id: 'call-v1', name: 'bash', input: { command: 'npm test' } }])
+  assert.equal(s.messages[0].toolCalls, undefined) // 无工具列消息不占键
+  assert.equal(s.messages[0].reasoning, undefined)
+})
+
+test('convertHermesJson: 变体 toolCalls/reasoning → reasoning 块前置 + tool-call 块配对，0 skipped', () => {
+  const raw = JSON.stringify({
+    id: 'va',
+    createdAt: 1,
+    messages: [
+      { role: 'user', content: '帮我跑测试', ts: 1 },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: '跑一下' }],
+        reasoning: '先看测试输出',
+        toolCalls: [{ id: 'call-v1', name: 'bash', input: { command: 'npm test' } }],
+        ts: 2,
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'call-v1', content: [{ type: 'text', text: 'PASS' }] }],
+        ts: 3,
+      },
+    ],
+  })
+  const out = convertHermesJson(raw, { sourcePath: 'E:/demo/state.db' })
+  assert.equal(out.skipped, 0)
+  assert.equal(out.droppedToolResults, 0)
+  assert.equal(out.toolCalls, 1)
+  assertBalanced(out)
+  const blocks = out.events.find((e) => e.type === 'assistant/message').data.message.content
+  assert.equal(blocks[0].type, 'reasoning')
+  assert.equal(blocks[0].text, '先看测试输出')
+  assert.ok(blocks.some((b) => b.type === 'tool-call' && b.id === 'call-v1' && b.name === 'bash'))
+  const call = out.events.find((e) => e.type === 'tool/call')
+  const result = out.events.find((e) => e.type === 'tool/result')
+  assert.deepEqual(result.sourceEventSeqs, [call.seq])
+})
+
+test('readHermesDb → convertHermesJson: 变体 DB 全链路平衡（tool_calls 列 + 结果配对）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hermes-'))
+  const dbPath = join(dir, 'state.db')
+  const db = new DatabaseSync(dbPath)
+  db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, started_at REAL)')
+  db.exec('CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT, tool_calls TEXT, reasoning TEXT, timestamp REAL)')
+  db.prepare('INSERT INTO sessions (id, title, cwd, started_at) VALUES (?, ?, ?, ?)').run('vb', 'Variant B', 'E:/demo', 1)
+  db.prepare('INSERT INTO messages (session_id, role, content, tool_calls, reasoning, timestamp) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('vb', 'user', '重构成啥', null, null, 1)
+  db.prepare('INSERT INTO messages (session_id, role, content, tool_calls, reasoning, timestamp) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('vb', 'assistant', 'plan', JSON.stringify([{ id: 'c1', name: 'bash', input: { command: 'ls' } }]), '先看目录', 2)
+  db.prepare('INSERT INTO messages (session_id, role, content, tool_calls, reasoning, timestamp) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('vb', 'user', JSON.stringify([{ type: 'tool_result', tool_use_id: 'c1', content: [{ type: 'text', text: 'src' }] }]), null, null, 3)
+  db.close()
+
+  const [s] = readHermesDb(dbPath)
+  const out = convertHermesJson(JSON.stringify(s), { sourcePath: dbPath })
+  assert.equal(out.skipped, 0)
+  assert.equal(out.toolCalls, 1)
+  assertBalanced(out)
+})
