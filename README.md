@@ -17,7 +17,7 @@
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 [![Listed in Awesome DSH Plugins](https://img.shields.io/badge/Listed_in-Awesome_DSH_Plugins-6A5ACD?style=for-the-badge&logo=awesome&logoColor=white)](https://github.com/Dominic789654/awesome-deepseek-harness)
 
-[💡 Concept](#-concept) · [✨ Features](#-features) · [🗂 Supported sources](#-supported-sources) · [🚀 Quick start](#-quick-start) · [🛠 Usage](#-usage) · [🔑 Key behaviors](#-key-behaviors) · [🏗️ Tech Stack](#-tech-stack) · [🗺️ Roadmap](#-roadmap) · [🤝 Contributing](#-contributing)
+[💡 Concept](#-concept) · [✨ Features](#-features) · [🗂 Supported sources](#-supported-sources) · [🚀 Quick start](#-quick-start) · [🛠 Usage](#-usage) · [🔑 Key behaviors](#-key-behaviors) · [🏗️ Tech Stack](#-tech-stack) · [🗺️ Roadmap](#-roadmap) · [⭐ Star History](#-star-history) · [🤝 Contributing](#-contributing)
 
 </div>
 
@@ -262,7 +262,7 @@ lib/
 
 ## ⚙️ Compatibility
 
-Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6`) and requires **Node.js >= 22.13** (the first release where `node:sqlite` is available without a flag). `npm test` — 391 cases.
+Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6`) and requires **Node.js >= 22.13** (the first release where `node:sqlite` is available without a flag). `npm test` — 413 cases.
 
 ---
 
@@ -273,6 +273,12 @@ Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6
 - [ ] Interchange IR v1 + portable backup bundle (REQ-18 / REQ-56)
 - [ ] `/import-all` batch command · Codex App Server API source (REQ-52)
 - [ ] More sources: Reasonix desktop, Claude-3p · Hermes lineage (REQ-45 / REQ-51)
+
+---
+
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Nwflower/dsh-chat-import&type=Date)](https://star-history.com/#Nwflower/dsh-chat-import&Date)
 
 ---
 

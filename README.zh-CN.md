@@ -17,7 +17,7 @@
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 [![已收录于 Awesome DSH Plugins](https://img.shields.io/badge/%E5%B7%B2%E6%94%B6%E5%BD%95%E4%BA%8E-Awesome_DSH_Plugins-6A5ACD?style=for-the-badge&logo=awesome&logoColor=white)](https://github.com/Dominic789654/awesome-deepseek-harness)
 
-[💡 概念](#-概念) · [✨ 功能特性](#-功能特性) · [🗂 支持的来源](#-支持的来源) · [🚀 快速开始](#-快速开始) · [🛠 使用](#-使用) · [🔑 关键行为](#-关键行为) · [🏗️ 技术栈](#-技术栈) · [🗺️ 路线图](#-路线图) · [🤝 贡献](#-贡献)
+[💡 概念](#-概念) · [✨ 功能特性](#-功能特性) · [🗂 支持的来源](#-支持的来源) · [🚀 快速开始](#-快速开始) · [🛠 使用](#-使用) · [🔑 关键行为](#-关键行为) · [🏗️ 技术栈](#-技术栈) · [🗺️ 路线图](#-路线图) · [⭐ Star History](#-star-history) · [🤝 贡献](#-贡献)
 
 </div>
 
@@ -262,7 +262,7 @@ lib/
 
 ## ⚙️ 兼容性
 
-面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 391 个用例。
+面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 413 个用例。
 
 ---
 
@@ -273,6 +273,12 @@ lib/
 - [ ] Interchange IR v1 + 便携备份 bundle（REQ-18 / REQ-56）
 - [ ] `/import-all` 批量命令 · Codex 官方 App Server API 源（REQ-52）
 - [ ] 更多来源：Reasonix 桌面版、Claude-3p · Hermes lineage（REQ-45 / REQ-51）
+
+---
+
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Nwflower/dsh-chat-import&type=Date)](https://star-history.com/#Nwflower/dsh-chat-import&Date)
 
 ---
 
