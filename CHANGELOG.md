@@ -9,6 +9,29 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
+## [0.5.1] - 2026-08-16
+
+First patch release — fixes both findings from [issue #10](https://github.com/Nwflower/dsh-chat-import/issues/10)
+(reported by dsh-plugin-healthcheck on 0.4.0):
+
+### Fixed
+
+- **`files` whitelist uses glob patterns instead of fixed filenames** — the
+  npm publish list now declares `lib/*.mjs` + `lib/*.js` + the `lib/convert` /
+  `lib/export` directories instead of enumerating every `lib/*.mjs` entry, so
+  future modules are picked up automatically and the package can never silently
+  miss a file. `.github/scripts/build-check.mjs` (the `scripts.build` /
+  `prepack` publish-surface self-check) now expands the single-level `*` globs
+  with npm-equivalent semantics — which also surfaced and fixed a latent bug
+  where `readdirSync` was used but never imported (directory entries made the
+  checker crash instead of validating).
+- **`peerDependencies.cordis` renamed to `@deepseek-ai/cordis ^4.0.1`** — the
+  DSH host runtime actually provides the patched fork
+  `@deepseek-ai/cordis` (declared by `@deepseek-ai/dsh` itself); the upstream
+  `cordis` package name cannot resolve from a plugin install directory
+  (`dep-unresolvable`). The peer now names the real host package the plugin
+  runs under.
+
 ## [0.5.0] - 2026-08-16
 
 Fourth minor release — completes the interchange / interop track and the

@@ -4,7 +4,7 @@
 // 这里把它实现为发布面完整性校验（诚实语义）：files 白名单逐项存在 +
 // 所有发布的 .mjs/.js 通过 node --check 语法校验 + lockfile 根版本与
 // package.json 一致。任何一项失败 exit 1，prepack 随即中止发布。
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,15 +29,30 @@ const readdirSafe = (dir) => {
   }
 }
 
+// npm files 支持通配（单层 '*'，如 lib/*.mjs）；existsSync 无法直接校验通配条目，
+// 这里把含 '*' 的条目展开为实际文件再校验（与 npm pack 的匹配语义一致）。
+const expandEntry = (entry) => {
+  if (!entry.includes('*')) return existsSync(join(root, entry)) ? [entry] : []
+  const starIdx = entry.indexOf('*')
+  const dirPart = entry.slice(0, starIdx)
+  const pattern = entry.slice(starIdx)
+  const re = new RegExp('^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$')
+  return readdirSafe(join(root, dirPart))
+    .filter((name) => re.test(name))
+    .map((name) => dirPart + name)
+}
+
 const missing = []
 for (const entry of pkg.files || []) {
-  const full = join(root, entry)
-  if (!existsSync(full)) {
+  const expanded = expandEntry(entry)
+  if (expanded.length === 0) {
     missing.push(entry)
-  } else if (statSync(full).isDirectory()) {
-    collectJs(full)
-  } else if (/\.(mjs|js|cjs)$/.test(entry)) {
-    jsFiles.push(full)
+    continue
+  }
+  for (const real of expanded) {
+    const full = join(root, real)
+    if (statSync(full).isDirectory()) collectJs(full)
+    else if (/\.(mjs|js|cjs)$/.test(real)) jsFiles.push(full)
   }
 }
 
