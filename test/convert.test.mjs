@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertPiJsonl, convertOpencodeJson, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION, tailSessionEvents, codexCustomToolArguments, jsObjectLiteralToJson, estimateTokens, cropContentBlocks, trimTurns, applyBudgetTrim, TEXT_BLOCK_CHAR_LIMIT, TOOL_RESULT_CHAR_LIMIT } from '../convert.mjs'
+import { convertClaudeJsonl, convertCodexJsonl, convertChatgptJson, convertCursorJsonl, convertGeminiJson, convertReasonixJsonl, convertPiJsonl, convertOpencodeJson, reasonixStemTime, mintSessionId, parseTime, SESSION_FORMAT_VERSION, tailSessionEvents, codexCustomToolArguments, jsObjectLiteralToJson, estimateTokens, cropContentBlocks, trimTurns, applyBudgetTrim, TEXT_BLOCK_CHAR_LIMIT, TOOL_RESULT_CHAR_LIMIT, validateSessionEvents } from '../convert.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -1600,4 +1600,73 @@ test('convertClaudeJsonl: budget 裁剪后事件仍平衡（配对 + 投影顺�
   const plain = convertClaudeJsonl(lines.join('\n'), { sourcePath: 'D:\\demo\\sess-trim-001.jsonl' })
   assert.equal(plain.trimmed, undefined)
   assert.ok(plain.turns.length > out.turns.length)
+})
+
+// ── validateSessionEvents（REQ-57：导入结果结构校验）────────────────────────
+
+// 一条合法事件的最小形状（surface 事件带 surfaceOp:'append'）。
+const ev = (seq, type, extra = {}) => ({ type, seq, time: 1, data: {}, ...extra })
+
+test('validateSessionEvents：合法会话 0 告警', () => {
+  const events = [
+    ev(0, 'session/imported', { ignorable: true }),
+    ev(1, 'turn/start'),
+    ev(2, 'user/message', { surfaceOp: 'append' }),
+    ev(3, 'assistant/message', { surfaceOp: 'append' }),
+    ev(4, 'tool/call'),
+    ev(5, 'tool/result', { surfaceOp: 'append', sourceEventSeqs: [4] }),
+    ev(6, 'step/end'),
+    ev(7, 'turn/end'),
+  ]
+  const r = validateSessionEvents(events)
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.problems, [])
+})
+
+test('validateSessionEvents：断 seq / 重复 seq / 缺 seq 均被报告', () => {
+  const gap = validateSessionEvents([
+    ev(0, 'turn/start'), ev(1, 'user/message', { surfaceOp: 'append' }), ev(3, 'assistant/message', { surfaceOp: 'append' }),
+  ])
+  assert.equal(gap.ok, false)
+  assert.ok(gap.problems.some((p) => p.kind === 'seq-gap' && p.seq === 3))
+
+  const dup = validateSessionEvents([ev(0, 'turn/start'), ev(0, 'turn/start')])
+  assert.ok(dup.problems.some((p) => p.kind === 'duplicate-seq'))
+
+  const missing = validateSessionEvents([ev(0, 'turn/start'), { type: 'turn/end', data: {} }])
+  assert.ok(missing.problems.some((p) => p.kind === 'missing-seq'))
+})
+
+test('validateSessionEvents：未知类型 / surface 缺 surfaceOp / sourceEventSeqs 指向非 call', () => {
+  const unknown = validateSessionEvents([ev(0, 'bogus/event')])
+  assert.ok(unknown.problems.some((p) => p.kind === 'unknown-type'))
+
+  const noSurface = validateSessionEvents([ev(0, 'user/message')])
+  assert.ok(noSurface.problems.some((p) => p.kind === 'missing-surface-op'))
+
+  const badRef = validateSessionEvents([
+    ev(0, 'user/message', { surfaceOp: 'append' }),
+    ev(1, 'tool/result', { surfaceOp: 'append', sourceEventSeqs: [0] }),
+  ])
+  assert.ok(badRef.problems.some((p) => p.kind === 'source-event-seqs-not-call'))
+})
+
+test('validateSessionEvents：指向集合外的 sourceEventSeqs 合法（append 尾片跨轮引用）', () => {
+  // 尾片从 fromSeq 重编号，引用前段事件（不在集合内）——不报错
+  const tail = [
+    ev(10, 'turn/start'),
+    ev(11, 'tool/result', { surfaceOp: 'append', sourceEventSeqs: [3] }),
+  ]
+  const r = validateSessionEvents(tail)
+  assert.equal(r.ok, true)
+})
+
+test('validateSessionEvents：非数组 / 畸形条目报告且封顶', () => {
+  const notArr = validateSessionEvents({})
+  assert.equal(notArr.ok, false)
+  assert.equal(notArr.problems[0].kind, 'not-array')
+
+  const many = validateSessionEvents(Array.from({ length: 100 }, (_, i) => ev(i, 'bogus/event')))
+  assert.ok(many.problems.length <= 20) // VALIDATION_PROBLEM_CAP
+  assert.equal(many.ok, false)
 })

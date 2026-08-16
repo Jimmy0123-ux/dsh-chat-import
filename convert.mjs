@@ -20,6 +20,7 @@ export {
   cropContentBlocks,
   trimTurns,
   applyBudgetTrim,
+  validateSessionEvents,
 } from './lib/convert/core.mjs'
 
 export {

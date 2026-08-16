@@ -110,6 +110,16 @@ export interface LineIssue {
   error: string
 }
 
+/** REQ-57 落盘会话结构校验报告（导入结果附加字段，仅校验失败时出现）。 */
+export interface ValidationReport {
+  ok: boolean
+  problems: Array<{
+    kind: string
+    seq: number | null
+    message: string
+  }>
+}
+
 export interface SecretLocation {
   line: number
   kind: string
@@ -139,6 +149,7 @@ export interface SingleImportResult {
   droppedBoundaryResults?: number
   trimmed?: TrimReport | null
   forceImported?: { previous: string; current: string }
+  validation?: ValidationReport
 }
 
 export interface BatchItemResult {
@@ -160,6 +171,7 @@ export interface BatchItemResult {
   backfilled?: boolean
   trimmed?: TrimReport | null
   forceImported?: { previous: string; current: string }
+  validation?: ValidationReport
 }
 
 export interface BatchImportResult {
