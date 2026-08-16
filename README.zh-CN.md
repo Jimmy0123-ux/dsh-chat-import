@@ -2,7 +2,7 @@
 
 # 📥 DSH Chat Import
 
-**把 14 种外部 Agent 聊天历史全保真导入 DeepSeek Harness 为可继续（resume）会话——并可导出 / 同步回 Claude Code。**
+**把 14 种外部 Agent 聊天历史全保真导入 DeepSeek Harness 为可继续（resume）会话——并可导出 / 同步回 Claude Code、Codex、Kimi，或便携 interchange bundle。**
 
 [![English](https://img.shields.io/badge/Language-English-blue?style=for-the-badge)](README.md)
 [![简体中文](https://img.shields.io/badge/Language-简体中文-blue?style=for-the-badge)](#)
@@ -21,13 +21,13 @@
 
 </div>
 
-> **一个插件，14 种来源** —— 全保真导入 DeepSeek Harness，无缝续聊，并可导出 / 同步回 Claude Code。
+> **一个插件，14 种来源** —— 全保真导入 DeepSeek Harness，无缝续聊，反向可互转 / 备份 / 交接。
 
 <div align="center">
 
 <img src="./assets/image-20260814205401839.png" alt="从多个来源导入会话到侧边栏面板" width="600" />
 
-**更新日志（英文）：** [CHANGELOG.md](CHANGELOG.md) · **路线图：** [ROADMAP.md](ROADMAP.md)
+**更新日志（英文）：** [CHANGELOG.md](CHANGELOG.md) · **路线图：** [ROADMAP.md](ROADMAP.md) · **互转协议：** [docs/INTERCHANGE.md](docs/INTERCHANGE.md)
 
 </div>
 
@@ -35,9 +35,9 @@
 
 ## 💡 概念
 
-`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw、Pi Coding Agent、Hermes、Kimi CLI 与 DSH 会话日志** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区。
+`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw、Pi Coding Agent、Hermes、Kimi CLI 与 DSH 会话日志** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区（经 `~/.claude.json` projects 权威映射 / Reasonix slug 贪心解码解析，带主目录沙箱防护）。
 
-反向方向同样覆盖：`export_claude` 把 DSH 会话序列化回 Claude Code JSONL（只读——绝不修改你的 DSH 日志），Claude Code 可用 `--resume` 加载续聊；`sync_to_claude` 再把会话新增轮次增量写回 Claude Code 文件——带守卫、绝不静默覆盖。
+反向方向同样覆盖：`export_claude` 把 DSH 会话序列化回 Claude Code JSONL（只读——绝不修改你的 DSH 日志），Claude Code 可用 `--resume` 加载续聊；`sync_to_claude` 再把会话新增轮次增量写回 Claude Code 文件——带守卫、绝不静默覆盖；同一矩阵延伸到 **Codex rollout**（`export_codex`）与 **Kimi wire**（`export_kimi`），外加带 SHA-256 指纹与跨机器还原的**便携 interchange bundle**（`export_bundle` / `restore_bundle`，REQ-56/62）。
 
 ---
 
@@ -45,15 +45,20 @@
 
 | 分类 | 特性 | 说明 |
 | --- | --- | --- |
-| 导入 | **14 种来源 + 本地 JSONL，一个插件** | 每种来源一条命令——从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录。 |
+| 导入 | **14 种来源 + 本地 JSONL，一个插件** | 每种来源一条命令——从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录，含 Reasonix 桌面版与 Claude-3p 新端根。 |
 | 导入 | **全保真** | 工具调用与结果、思考块、标题、模型与时间戳，源有记录就原样保留。 |
 | 导入 | **批量导入** | 指向一个目录（或整个数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。 |
-| 续聊 | **可无缝续聊** | 打开导入的会话，从源记录停下的地方继续对话。 |
-| 续聊 | **自动归组工作区** | 会话按源 `cwd` 挂进对应工作区（本机无此路径时回退到源文件所在目录）——不再「未分组」。 |
-| 反向 | **导出回 Claude Code** | `export_claude` 把任意 DSH 会话（导入的或原生的）写到 `<outputDir>/<slug>/<uuid>.jsonl`，可直接 `--resume`。 |
+| 导入 | **ChatGPT 分支还原** | `import_chatgpt({ branch: 'all' })` 把每条 root→leaf 分支还原为独立会话；工具消息还原为真正的 `tool/call` + `tool/result`。 |
+| 续聊 | **可无缝续聊** | 打开导入的会话，从源记录停下的地方继续对话——工具完整可用（默认 preset scope + 绑定默认模型）。 |
+| 续聊 | **自动归组工作区** | 会话按源 `cwd` 挂进对应工作区（权威映射 → slug 解码 → 主目录沙箱防护；本机无此路径时回退源文件所在目录）——不再「未分组」。 |
+| 互转 | **矩阵化导出** | `export_claude` / `export_codex` / `export_kimi` 把任意 DSH 会话序列化为目标格式——DSH↔Claude↔Codex↔Kimi 四向互通。 |
+| 互转 | **降级显式报告** | 每次导出逐条列出有损项（`degradations`：孤儿结果 / 注入跳过 / 附件跳过）——绝不静默丢弃。 |
+| 备份 | **便携 bundle** | `export_bundle` 产出带双重 SHA-256 指纹的 interchange bundle；`restore_bundle` 本机或跨机器还原（cwd 不可达回退有报告，不静默）。 |
 | 反向 | **反向同步** | `sync_to_claude` 把会话新增完整轮次追加回 Claude Code 文件——带守卫、绝不覆盖。 |
+| 交接 | **外部历史续聊** | `/resume-claude` / `/resume-codex` 把外部 transcript 当不可信历史生成交接摘要（目标 / 文件 / 停止点 / 下一步）注入当前会话；多匹配列候选不猜测。 |
+| 质量 | **校验** | `verify_session` 只读结构审计（seq / 事件白名单 / surfaceOp / 回合平衡 / 工具配对），按 kind 给 repair 提示。 |
 | 保护 | **幂等 + 增量** | 重复导入未变化的源直接跳过；增长的源只追加新增轮次。 |
-| 保护 | **上下文预算保护** | 超长会话按安全上下文预算裁剪，裁剪结果显式上报。 |
+| 保护 | **上下文预算保护** | 超长会话按安全上下文预算裁剪，裁剪结果显式上报；`compacted: true` 还原 Claude 压缩摘要。 |
 
 ---
 
@@ -62,11 +67,12 @@
 | 来源 | 存储位置 | 导入工具 |
 | --- | --- | --- |
 | **Claude Code** | `~/.claude/projects/<slug>/<sessionId>.jsonl` | `import_claude` |
+| **Claude-3p**（新端） | `%LOCALAPPDATA%\Claude-3p\claude-code-sessions`（元数据经 `cliSessionId` 反查 jsonl） | `import_claude` |
 | **Codex / ChatGPT CLI** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `import_codex` |
 | **ChatGPT**（网页导出） | 导出压缩包（任意路径）——`conversations.json` | `import_chatgpt` |
 | **Cursor** | `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` | `import_cursor` |
 | **Gemini CLI** | `~/.gemini/history/<slot>/chats/session-*.json` | `import_gemini` |
-| **Reasonix** | `~/.reasonix/sessions/desktop-*.jsonl` | `import_reasonix` |
+| **Reasonix**（CLI + 桌面版） | `~/.reasonix/sessions/desktop-*.jsonl` · `%APPDATA%\reasonix\projects\<slug>\sessions\*.jsonl` | `import_reasonix` |
 | **opencode** | `~/.local/share/opencode/opencode.db` | `import_opencode` |
 | **ZCode**（z.ai CLI） | `~/.zcode/cli/db/db.sqlite` | `import_zcode` |
 | **Grok Build** | `~/.grok/sessions/<project>/<session_id>/` | `import_grokbuild` |
@@ -77,7 +83,7 @@
 | **DSH 会话日志** | `~/.dsh/sessions/<encoded-workspace>/<sessionId>/session.jsonl(.zstd)` | `import_dsh` |
 | **任意本地 JSONL** | 任意 `.jsonl` 文件 / 目录（自动识别格式） | `import_local_jsonl` |
 
-每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、时间戳、工具调用与结果、思考过程。数据较少的源导入其已有的内容；源格式无法保留的部分，会在导入报告里显式标注（如 Kimi 镜像进父 wire 的 `SubagentEvent` 子代理对话会跳过——父 `Agent` 工具调用与结果保留，子代理自己的 `subagents/<agentId>/wire.jsonl` 可直接导入）。
+每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、时间戳、工具调用与结果、思考过程。数据较少的源导入其已有的内容；源格式无法保留的部分，会在导入报告里显式标注（如 Kimi 镜像进父 wire 的 `SubagentEvent` 子代理对话会跳过——父 `Agent` 工具调用与结果保留，子代理自己的 `subagents/<agentId>/wire.jsonl` 可直接导入）。Reasonix V2 会话自动合并 `*.events.jsonl` WAL（上报 `walMerged`）；Claude 会话可用 `compacted: true` 只导最后一次压缩摘要 + 尾部。
 
 ---
 
@@ -145,6 +151,9 @@ import_local_jsonl({ path: "D:\downloads\unknown.jsonl", format: "claude" })
 - `preview: true`（别名 `dryRun: true`）— **只读**运行：照常解析 / 读取 / 转换，但**零副作用**、不落盘。去掉该参数再调一次即正式导入。
 - `force: true` — 即使已导入，也以新 id（`import-<sessionId>-<n>`）另存一份**完整副本**；旧会话绝不修改。
 - `sessionId`（可选）— 覆盖目标 DSH 会话 id（默认 `import-<源sessionId>`）。
+- `import_chatgpt({ branch: 'all' })` — 把对话 DAG 的**每条 root→leaf 分支**还原为独立会话（主线程仍是最后 child 链；分支会话带后缀源 id 与分支标记标题）。导出里的工具消息还原为真正的 `tool/call` + `tool/result`（结构化 JSON 参数、FIFO 配对），不再是纯文本。
+- `import_claude({ compacted: true })` — 只导长会话的**最后一次压缩摘要 + 尾部**（摘要作前置 `reasoning` 块；标题取 summary 记录）。无 summary 记录时该参数不生效。
+- `import_hermes({ lineage: 'tail' })` — 只导**叶子链尾**（不是任何其它会话父会话的会话）；压缩分叉父会话跳过并标注。
 - **已归档会话可重新导入** — DSH 的归档会把会话从侧边栏隐藏，但保留在持久化里（及其 id）——面板与 `scan_discover` 现在把已归档目标标记为 **已归档 / Archived** 并提供重新导入按钮。再次导入以新 id（`import-<sessionId>-<n>`，与 `force` 同一铸键）另存完整副本，不触碰已归档会话；多会话源（chatgpt / opencode / zcode / hermes 库）内逐会话同样适用。
 - **增量续写（重导）** — 重导同一源路径绝不改写已导入历史：未变文件跳过（`already-imported`，不重读）；增长文件只把**新增轮次** append 进同一会话（`appended`）；截断文件检测并上报（`sourceShrunk`）——需要完整新副本时用 `force: true`：
 
@@ -172,7 +181,7 @@ import_agents({ apply: true })     // 写入 $DSH_AGENTS_HOME/skills/<name>/SKIL
 
 ### scan_discover — 只读会话发现
 
-`scan_discover` 扫描全部 14 种格式的已知数据根，返回结构化会话索引（标题、项目、cwd、路径、导入状态，源目录为 git 仓库时附分支/dirty），供批导入前预览。零副作用：
+`scan_discover` 扫描全部 14 种格式的已知数据根（Windows 上含 Reasonix 桌面版与 Claude-3p 根），返回结构化会话索引（标题、项目、cwd、路径、导入状态，源目录为 git 仓库时附分支/dirty），供批导入前预览。零副作用：
 
 ```
 scan_discover()
@@ -188,13 +197,34 @@ list_imported_sessions()
 retract_import({ sessionId: "import-019f5f27-…" })
 ```
 
-### export_claude — DSH → Claude Code JSONL
+### export_claude / export_codex / export_kimi — DSH → 目标格式
 
-`export_claude({ sessionId })` 把现有 DSH 会话（导入的或原生的）序列化为 Claude Code JSONL transcript，可直接 `--resume`。文件写到 `<outputDir>/<slug>/<uuid>.jsonl`（默认 `~/.claude/projects`），文件名是全新 UUID v4——绝不覆盖已有文件：
+`export_claude({ sessionId })` 把现有 DSH 会话（导入的或原生的）序列化为 Claude Code JSONL transcript，可直接 `--resume`。文件写到 `<outputDir>/<slug>/<uuid>.jsonl`（默认 `~/.claude/projects`），文件名是全新 UUID v4——绝不覆盖已有文件。`export_codex` 与 `export_kimi` 分别写 Codex rollout JSONL 与 Kimi `wire.jsonl`（默认 `~/.dsh/exports`）——补齐 DSH↔Claude↔Codex↔Kimi 矩阵（导入边已存在）。每次导出在 `degradations` 字段里逐条列出**有损项**（孤儿工具结果 / 注入跳过 / 附件跳过）——绝不静默丢弃：
 
 ```
 export_claude({ sessionId: "import-019f5f27-…" })
-export_claude({ sessionId: "…", outputDir: "D:\backup\claude-projects", dryRun: true })
+export_codex({ sessionId: "…", dryRun: true })
+export_kimi({ sessionId: "…", outputDir: "D:\backup\kimi" })
+```
+
+### export_bundle / restore_bundle — 便携 interchange bundle
+
+`export_bundle({ sessionId })` 写出 **`.dshbundle.json`**——事件级无损的 interchange bundle（协议见 [docs/INTERCHANGE.md](docs/INTERCHANGE.md)），带双重 SHA-256 指纹（会话级 + 文件级）与机器无关的落点信息（`originalCwd` + `landingHint`）。`restore_bundle({ path })` 先校验指纹（损坏大声报告、绝不静默还原），再经同一幂等状态机导入——重复还原跳过、`force: true` 另存副本、目录模式逐个还原 `.dshbundle.json`：
+
+```
+export_bundle({ sessionId: "import-019f5f27-…" })                    // → ~/.dsh/exports/<id>.dshbundle.json
+restore_bundle({ path: "D:\backup\sess.dshbundle.json" })            // A 机导出 → B 机还原
+restore_bundle({ path: "D:\backup\bundle-dir", preview: true })      // dry-run
+```
+
+**跨机器（REQ-62）：** A 机导出 → 拷贝 bundle → B 机还原。原 `cwd` 在 B 机不可达时，会话回退归到 bundle 文件所在目录（REQ-39-lite 归组），结果报告 `cwdAvailable: false` / `groupedTo` / `restoreNote`——绝不静默。
+
+### verify_session — 只读结构审计
+
+`verify_session({ sessionId })` 对任意 DSH 会话做只读结构校验：seq 连续、事件类型白名单、surface 事件带 `surfaceOp`、`sourceEventSeqs` 指向真实 `tool/call`、turn/step 平衡、工具调用↔结果配对。问题逐条定位（kind + seq + message），并按 kind 给出 `repairHints`（`force` 重导 / 闭合半开轮 / 源转录中途开始的边界说明）：
+
+```
+verify_session({ sessionId: "import-019f5f27-…" })
 ```
 
 ### sync_to_claude — 增量写回
@@ -214,11 +244,18 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 
 > 数据来自与 `scan_discover` 同一套只读发现（30s TTL 缓存 + 持久化 mtime 书签）；面板除你主动触发的导入外零写入。
 
-### `/import` 斜杠命令
+### `/import` 斜杠命令与 `/resume-*` 交接
 
 插件还注册了一个 **`/import <source> <path>`** 斜杠命令（在挂载了 dsh `commands` 服务的环境下可用）：直接在会话里输入即可导入，不占模型轮次——与 `import_*` 工具同一管线、同一幂等 / 增量 / force / 上下文预算语义。`<source>` 接受短名（`claude`、`codex`…）、客户端来源 id（`claude-code`）或工具全名（`import_claude`）；`<path>` 为 transcript 文件或会话目录 / 数据根（单文件导入 / 目录批量照常判定）。
 
 **`/import-all [source] [path]`** 一键扫描默认数据根（或单一来源 / 显式路径）并批量导入所有未导入会话——同一管线，幂等跳过 / 增量续写，归档会话跳过，失败逐条上报。
+
+**`/resume-claude [id:<会话id> | 关键词]`** 与 **`/resume-codex`** 从外部 transcript 生成**交接摘要**（目标 + 最后请求、涉及文件/产物、最近工具调用、精确停止点、最安全下一步）并注入当前会话，让你在 DSH 里接着干——把 transcript 当**不可信静态历史**（不复述 system/developer/thinking；旧工具输出视为过期证据需复核）。留空取最近会话，`id:<会话id>` 精确指定，或用标题关键词——**多匹配列候选不猜测**：
+
+```
+/resume-claude id:282095ab-1111-4222-8333-444455556666
+/resume-codex 修复登录
+```
 
 ### 会话启动上下文增强
 
@@ -233,9 +270,10 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 
 - **只读导入** — 源转录与数据库绝不改写；导入的 DSH 历史 append-only（既有事件绝不修改）。
 - **幂等 + 增量** — 未变源不重读直接跳过；增长只追加新增轮次；截断检测并上报。
-- **自动归组工作区** — 会话按源 `cwd` 归入对应工作区；`cwd` 在本机不存在时（跨机器迁移 transcript 的常见情况）回退归到**源文件所在目录**的工作区，不会消失在「未分组」里。
-- **上下文预算保护** — 导入会话没有 provider 配置，dsh 不会自动压缩它们；超长会话按上下文预算裁剪（单条内容上限，中间段压缩，保留最早提问、一条摘要与尾部）。预算可在调用时指定，或通过环境变量 `DSH_IMPORT_CONTEXT_BUDGET` 设置；裁剪结果总是上报。
-- **失败要大声，绝不静默** — 畸形行与疑似敏感信息按位置计数上报（行号 / kind——绝不输出内容）；源格式无法保留的部分在导入报告里显式标注。每个落盘会话还会跑一次结构自检（seq 连续、事件类型白名单、surface 事件带 surfaceOp、sourceEventSeqs 有效）——违规以 `validation` 报告随导入结果上报。
+- **自动归组工作区** — 会话按源 `cwd` 归入对应工作区；`cwd` 经 `~/.claude.json` projects 权威映射（精确 / basename / 下划线变体，CJK 保留同款编码）解析、ASCII slug 解码兜底（Claude）、磁盘存在性贪心解码（Reasonix 项目 slug），并带**主目录沙箱防护**（cwd = 用户主目录绝不当工作区——沙箱 ACL 会拒绝）。解析出的 `cwd` 在本机不存在时（跨机器迁移 transcript 的常见情况）回退归到**源文件所在目录**的工作区，不会消失在「未分组」里。
+- **导入会话工具完整可用** — 会话创建优先走 host `agents.create`（`setup` 钩子挂载默认 preset scope，`agentOptions` 绑定默认模型 provider/model/maxTokens），导入会话与原生会话工具面一致、自动压缩可触发；`agents` 服务缺席时回退纯 `sessionPersistence`，不破坏导入。
+- **上下文预算保护** — 导入会话没有 provider 配置，dsh 不会自动压缩它们；超长会话按上下文预算裁剪（单条内容上限，中间段压缩，保留最早提问、一条摘要与尾部）。预算可在调用时指定，或通过环境变量 `DSH_IMPORT_CONTEXT_BUDGET` 设置；裁剪结果总是上报。Claude 会话也可用 `compacted: true` 只导最后一次压缩摘要 + 尾部。
+- **失败要大声，绝不静默** — 畸形行与疑似敏感信息按位置计数上报（行号 / kind——绝不输出内容）；源格式无法保留的部分在导入报告里显式标注，每次导出上报其 `degradations`。每个落盘会话还会跑一次结构自检（seq 连续、事件类型白名单、surface 事件带 surfaceOp、sourceEventSeqs 有效）——违规以 `validation` 报告随导入结果上报；`verify_session` 可随时对任意会话只读审计并给 repair 提示。
 - **沙箱** — 读取工作区之外的源文件或写工作区之外的导出目标，需要会话沙箱放行该路径。
 
 ---
@@ -247,18 +285,24 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 | 运行时 | Node.js ≥ 22.13 — 纯 ESM，零构建 |
 | 平台 | DeepSeek Harness 插件 — Cordis「一切皆插件」，只消费公开 host 服务 |
 | 解析器 | Claude/Codex/Cursor/Gemini/Reasonix/Pi/Kimi JSONL · ChatGPT JSON · opencode/ZCode/Hermes SQLite（`node:sqlite`） |
+| 互转 | Interchange v1 协议（[docs/INTERCHANGE.md](docs/INTERCHANGE.md)）——共享 turns IR + 降级规则 + bundle 格式 |
 | UI | dsh web 侧边栏面板（手写 CJS bundle）· 经 `@deepseek-ai/dsh-client-locale` 多语言 |
 | CI | GitHub Actions — test / lint / `check:linux` 跨平台护栏 / headless 冒烟 |
 
 ```
 lib/
-├── convert/          # 纯函数按源转换器（零 DSH 依赖，可独立单测）
-├── export/           # 反向序列化器（DSH → Claude Code JSONL）
+├── convert/          # 纯函数按源转换器 + interchange v1 核心（零 DSH 依赖）
+├── export/           # 反向序列化器（claude / codex / kimi / bundle）
 ├── imports.mjs       # 幂等导入 registry
-├── import-core.mjs   # 共享导入状态机
+├── import-core.mjs   # 共享导入状态机（agents.create + cwdHint + 主目录防护）
 ├── toolkit.mjs       # makeImportTool 工厂 + IMPORT_SPECS
 ├── panel.mjs         # 浏览器面板 JSON 路由
-├── command.mjs       # /import 斜杠命令
+├── command.mjs       # /import + /import-all 斜杠命令
+├── resume-command.mjs # /resume-claude /resume-codex 交接（REQ-30）
+├── handoff.mjs       # 交接摘要纯函数（REQ-30）
+├── cwd-map.mjs       # cwd 权威映射 + slug 解码 + 主目录防护（REQ-39）
+├── restore.mjs       # restore_bundle 编排（REQ-56/62）
+├── verify.mjs        # verify_session 结构审计（REQ-23）
 ├── prompt-hint.mjs   # 会话启动迁移提示（REQ-53）
 └── context-bridge.mjs # Claude memory / CLAUDE.md / skills 桥接（REQ-28）
 ```
@@ -267,17 +311,18 @@ lib/
 
 ## ⚙️ 兼容性
 
-面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 413 个用例。
+面向 `dsh 0.1.x` 线（`dsh-tools ^0.1.0-rc.6`，实测 `dsh 0.1.0-rc.6`），需要 **Node.js >= 22.13**（`node:sqlite` 免 flag 的首个版本）。`npm test` — 484 个用例。
 
 ---
 
 ## 🗺️ 路线图
 
 - [x] 14 种来源导入 + 反向导出 / 同步回 Claude Code
-- [x] 浏览器导入面板 + `/import` 斜杠命令 + 会话启动迁移提示与上下文桥接
-- [ ] Interchange IR v1 + 便携备份 bundle（REQ-18 / REQ-56）
-- [ ] `/import-all` 批量命令 · Codex 官方 App Server API 源（REQ-52）
-- [ ] 更多来源：Reasonix 桌面版、Claude-3p · Hermes lineage（REQ-45 / REQ-51）
+- [x] 浏览器导入面板 + `/import` / `/import-all` 斜杠命令 + 会话启动迁移提示与上下文桥接
+- [x] Interchange IR v1 + 便携备份 bundle + 跨机器还原（REQ-18 / REQ-56 / REQ-62）
+- [x] 矩阵化互转（Claude ↔ Codex ↔ Kimi ↔ DSH）+ `verify_session` 审计（REQ-23）+ `/resume-claude` / `/resume-codex` 交接（REQ-30）
+- [x] 更多来源：Reasonix 桌面版、Claude-3p（REQ-45）· Hermes lineage（REQ-51）
+- [ ] Codex 官方 App Server API 源（REQ-52——侦察已落盘，维持 rollout 路线）
 
 ---
 
