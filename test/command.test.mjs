@@ -6,7 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readFileSync, statSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, statSync, mkdirSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { registerTools } from '../lib/tools.mjs'
@@ -28,7 +28,7 @@ function makeCtx() {
   const sessions = new Map() // id → { header, events }
   const attached = []
   const registered = []
-  let commandDef = null
+  const commands = []
 
   const fs = {
     async resolve(path) { return { targetKey: path, displayPath: path } },
@@ -39,7 +39,14 @@ function makeCtx() {
       } catch { return undefined }
     },
     async readText(target) { return readFileSync(target.targetKey, 'utf8') },
-    async listDir() { return [] },
+    async listDir(target) {
+      // /import-all 走发现层目录扫描：真实列出目录项（mock 空 listDir 会让扫描落空）
+      return readdirSync(target.targetKey, { withFileTypes: true }).map((e) => ({
+        name: e.name,
+        type: e.isDirectory() ? 'directory' : 'file',
+        target: { targetKey: join(target.targetKey, e.name), displayPath: join(target.targetKey, e.name) },
+      }))
+    },
     async writeText(target, content) { writeFileSync(target.targetKey, content, 'utf8'); return { path: target.targetKey } },
     processPath(target) { return target.targetKey },
   }
@@ -76,18 +83,22 @@ function makeCtx() {
     },
     inject(serviceList, cb) {
       if (Array.isArray(serviceList) && serviceList.includes('commands')) {
-        cb({ ...ctx, commands: { register(def) { commandDef = def; return () => {} } } })
+        cb({ ...ctx, commands: { register(def) { commands.push(def); return () => {} } } })
       }
       return undefined
     },
   }
-  return { ctx, registryDir, sessions, attached, registered, getCommand: () => commandDef }
+  return {
+    ctx, registryDir, sessions, attached, registered,
+    getCommand: (name) => commands.find((c) => c.name === (name || 'import')),
+    getAllCommands: () => commands,
+  }
 }
 
 function setup() {
   const env = makeCtx()
   registerTools(env.ctx, env.registryDir)
-  registerImportCommand(env.ctx)
+  registerImportCommand(env.ctx, env.registryDir)
   const cmd = env.getCommand()
   assert.ok(cmd, 'commands.register 应被调用（commands 服务在场）')
   return { ...env, cmd }
@@ -155,4 +166,52 @@ test('REQ-42 /import：缺 path 报用法', async () => {
   const empty = await cmd.handler({ rawInput: '' })
   assert.equal(empty.kind, 'error')
   assert.ok(empty.text.includes('用法'), empty.text)
+})
+
+// ── REQ-29 /import-all 批量命令 ───────────────────────────────────────────
+
+test('REQ-29 /import-all：命令注册 + 指定路径批量导入 + 幂等重导跳过', async () => {
+  const env = makeCtx()
+  registerTools(env.ctx, env.registryDir)
+  registerImportCommand(env.ctx, env.registryDir)
+  const cmd = env.getCommand('import-all')
+  assert.ok(cmd, 'import-all 命令应注册')
+  assert.equal(cmd.input.hint, '[source] [path]')
+  assert.ok(cmd.description.includes('/import-all'))
+
+  const srcDir = mkdtempSync(join(tmpdir(), 'dsh-importall-src-'))
+  const file = join(srcDir, 'all-sess.jsonl')
+  writeFileSync(file, simpleClaudeJsonl('all-sess'), 'utf8')
+
+  // 指定来源 + 路径：扫描 → 导入
+  const first = await cmd.handler({ rawInput: 'claude ' + srcDir })
+  assert.equal(first.kind, 'success', first.text)
+  assert.ok(first.text.includes('扫描 1 个会话'), first.text)
+  assert.ok(first.text.includes('新增 1'), first.text)
+  assert.ok([...env.sessions.keys()].some((id) => id.includes('all-sess')))
+
+  // 幂等：已导入 → 跳过（不再出现「新增」）
+  const second = await cmd.handler({ rawInput: 'claude ' + srcDir })
+  assert.equal(second.kind, 'success', second.text)
+  assert.ok(!second.text.includes('新增 1'), second.text)
+  assert.ok(second.text.includes('跳过'), second.text)
+})
+
+test('REQ-29 /import-all：仅路径（全部格式探测）+ 未知来源提示', async () => {
+  const env = makeCtx()
+  registerTools(env.ctx, env.registryDir)
+  registerImportCommand(env.ctx, env.registryDir)
+  const cmd = env.getCommand('import-all')
+
+  // 首 token 不是来源名 → 整体按路径（无 format 时逐格式探测同一目录）
+  const srcDir = mkdtempSync(join(tmpdir(), 'dsh-importall-src2-'))
+  writeFileSync(join(srcDir, 'sess.jsonl'), simpleClaudeJsonl('sess'), 'utf8')
+  const byPath = await cmd.handler({ rawInput: srcDir })
+  assert.equal(byPath.kind, 'success', byPath.text)
+  assert.ok(byPath.text.includes('新增 1'), byPath.text)
+
+  // 来源名 typo（claude 前缀命中）→ 报未知来源而非静默当路径
+  const typo = await cmd.handler({ rawInput: 'claud' })
+  assert.equal(typo.kind, 'error')
+  assert.ok(typo.text.includes('未知来源'), typo.text)
 })

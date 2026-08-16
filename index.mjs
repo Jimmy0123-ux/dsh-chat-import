@@ -58,9 +58,9 @@ function apply(ctx) {
   })
   // 双向增量默认同步关闭；打开控制面板开关后才启定时器。
   registerSyncLoop(ctx, registryDir)
-  // REQ-42 /import 命令面：commands 同样可选（headless / CLI 会话可能不挂载），
-  // 服务可用时注册（不阻塞插件激活）。
-  registerImportCommand(ctx)
+  // REQ-42/29 /import、/import-all 命令面：commands 同样可选（headless / CLI 会话
+  // 可能不挂载），服务可用时注册（不阻塞插件激活）。
+  registerImportCommand(ctx, registryDir)
   // REQ-53 新会话开始迁移提示：监听 agent/session-start（host 核心事件，非可选服务），
   // cwd 有可导入/已导入历史时注入提示（per-project 记忆 + env 开关）。
   registerSessionHint(ctx, registryDir)
