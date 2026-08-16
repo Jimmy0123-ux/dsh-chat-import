@@ -48,7 +48,7 @@
 | REQ-17 | P1 | 保真度：导入 dry-run 预览 | ✅ |
 | REQ-18 | P2 | 互转：IR 协议化（interchange v1 schema + 文档） | ☐ |
 | REQ-19 | P2 | 保真度：ChatGPT 分支还原 + tool 参数结构化 | ☐ |
-| REQ-20 | P2 | 保真度：Cursor tool_result / opencode patch diff 复查 | ☐ |
+| REQ-20 | P2 | 保真度：Cursor tool_result / opencode patch diff 复查 | ✅ 边界确认 |
 | REQ-21 | P2 | 互转：保真度降级策略显式化 | ☐ |
 | REQ-22 | P3 | 保真度：Reasonix V2 WAL 合并 + Claude compacted 摘要选项 | ☐ |
 | REQ-23 | P3 | 互转：矩阵化互转 + repair 校验工具 | ☐ |
@@ -62,7 +62,7 @@
 | REQ-31 | P3 | 竞品 / 官方能力监控（周期性） | ✅ |
 | REQ-32 | P1 | 内部标记：`session/imported` 事件 | ✅ |
 | REQ-33 | P2 | 导入识别 / 撤回（`list_imported_sessions` + 引导手动删） | ✅ |
-| REQ-34 | P2 | UI 分组：host-only Web 面板 | ☐ |
+| REQ-34 | P2 | UI 分组：host-only Web 面板 | ✅ 由 REQ-41 Browser 面板取代 |
 | REQ-35 | P2 | 卸载语义（自动撤 Hook、绝不删会话；手动清理引导） | ✅ |
 | REQ-36 | P1 | 反向同步：双向同步桥 B 第一步（`sync_to_claude` 增量写回） | ✅ 真实 `claude --resume` 验证待补 |
 | REQ-37 | P1 | 超长会话三层保护 + 预算自适应 | ✅ |
@@ -73,20 +73,20 @@
 | REQ-42 | P2 | `/import <tool> <path>` 命令面 | ✅ |
 | REQ-43 | P2 | 导入会话工具完整可用（agentPresets.mount + 默认模型绑定） | ☐ |
 | REQ-44 | P2 | codex `custom_tool_call` JS 参数转标准 JSON | ✅ |
-| REQ-45 | P3 | 源覆盖面：Reasonix 桌面版 + Claude-3p 新端 | ☐ |
+| REQ-45 | P3 | 源覆盖面：Reasonix 桌面版 + Claude-3p 新端 | ◐ 侦察完成；实现待真机校准 |
 | REQ-46 | P1 | 新源：Grok Build 适配（第 9 源） | ✅ |
 | REQ-47 | P1 | 新源：OpenClaw 适配（第 10 源） | ✅ |
 | REQ-48 | P1 | 新源：Hermes 适配（第 11 源） | ✅ |
 | REQ-49 | P1 | 缺陷：trimTurns L2 锚点收缩静默丢轮 | ✅ |
 | REQ-50 | P2 | Hermes-agent（NousResearch）变体 tool_calls / reasoning 独立列 | ☐ |
 | REQ-51 | P3 | Hermes 会话 lineage（parent_session_id 压缩分叉） | ☐ |
-| REQ-52 | P2 | Codex 官方 App Server API 路线侦察 | ☐ |
+| REQ-52 | P2 | Codex 官方 App Server API 路线侦察 | ✅ 维持 rollout |
 | REQ-53 | P2 | 新会话开始迁移提示（per-project 记忆） | ✅ |
 | REQ-54 | P2 | 源文件变更自动增量续写 + 面板 Sync 入口 | ◐ Sync 已落地；watch 懒检查待做 |
 | REQ-55 | P1 | 缺陷：导入会话归档后可重新导入 | ✅ |
 | REQ-56 | P2 | DSH 会话通用导出/备份（interchange bundle + 指纹 + 还原） | ☐ |
 | REQ-57 | P3 | 导入结果结构校验 | ☐ |
-| REQ-58 | P3 | scan_discover 索引补 git 分支/dirty | ☐ |
+| REQ-58 | P3 | scan_discover 索引补 git 分支/dirty | ✅ |
 | REQ-59 | P2 | 外部 agent/mode prompt 落盘转换为 DSH skills 资产（`import_agents`） | ✅ |
 | REQ-60 | P1 | 发布规范持续达标（plugin_check 全项：types/cordis peer/tsconfig/build 脚本） | ✅ v0.4.0 |
 | REQ-61 | P2 | Claude 资产持久化导入（memory / CLAUDE.md / skills → DSH 资产，扩展 import_agents） | ☐ |
@@ -99,15 +99,12 @@
 
 - **REQ-18 — 互转 IR 协议化**：把内部 turns IR 显式化为 interchange v1（JSON Schema + 版本 + 语义文档），作为源↔目标双向适配器的中立交换格式。
 - **REQ-19 — ChatGPT 分支还原 + tool 参数结构化**：`import_chatgpt` 支持 `branch: 'main' | 'all'`；tool 消息还原 `tool/call` + `tool/result`。
-- **REQ-20 — Cursor tool_result / opencode patch diff 复查**：格式侦察型，确认新版是否可拿 tool_result / patch diff。
 - **REQ-21 — 互转保真度降级策略显式化**：定义降级规则表并在互转/导出结果里逐条报告。
 - **REQ-29 — 命令 / Web 面板入口**：`/import-all` 一键批导入（Web 面板与 `/import` 命令已落地，本项剩余命令面收口）。
 - **REQ-30 — 交接摘要续聊**：`/resume-claude` / `/resume-codex`，把外部 transcript 当不可信静态历史生成交接摘要。
-- **REQ-34 — UI 分组：host-only Web 面板**：按源分组展示导入会话（当前 Browser 侧面板已覆盖主要场景，本项为可选项）。
 - **REQ-39 — cwd 权威映射 + 沙箱防护（full）**：Claude `.claude.json` 权威映射 + Reasonix slug 贪心解码 + home-dir 沙箱防护。
 - **REQ-43 — 导入会话工具完整可用**：导入会话加入默认 preset scope（工具与正常会话一致）+ 绑定默认模型。
 - **REQ-50 — Hermes-agent 变体 schema**：支持独立 `tool_calls` / `reasoning` 列的变体。
-- **REQ-52 — Codex 官方 App Server API 路线侦察**：thread/list vs rollout，抗格式漂移。
 - **REQ-56 — DSH 会话通用导出/备份**：interchange bundle + SHA-256 指纹 + 还原预览（与 REQ-18 联动，跨机器用例见 REQ-62）。
 - **REQ-61 — Claude 资产持久化导入**：`import_agents` 扩展 Claude 源（memory / CLAUDE.md / skills 落盘为 DSH 资产），对齐 dsh-claude-move 卖点。
 - **REQ-62 — 便携 bundle 跨机器移动**：`.codexbundle` 式导出（A 机 → B 机还原 0 skipped，cwd 不可达走 REQ-39-lite 回退归组），对标 codex-claude-transfer；可选 LAN sync。
@@ -116,7 +113,6 @@
 
 - **REQ-22 — Reasonix V2 WAL 合并 + Claude compacted 摘要选项**。
 - **REQ-23 — 矩阵化互转 + 校验/修复工具**：DSH↔Claude↔Codex↔Kimi 四向互通 + 只读校验。
-- **REQ-45 — 源覆盖面**：Reasonix 桌面版 + Claude-3p 新端。
+- **REQ-45 — 源覆盖面（◐）**：Reasonix 桌面版 + Claude-3p 新端——侦察完成（dev/research/reasonix-desktop-claude-3p-recon.md），WAL schema / 目录层级待真机样本校准后实现。
 - **REQ-51 — Hermes 会话 lineage**：`parent_session_id` 压缩分叉，只导链尾可加过滤。
 - **REQ-57 — 导入结果结构校验**：seq 连续 / sourceEventSeqs 有效 / 事件白名单。
-- **REQ-58 — scan_discover 索引补 git 分支/dirty**。
