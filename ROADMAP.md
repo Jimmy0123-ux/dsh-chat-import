@@ -5,7 +5,7 @@
 
 ## 生态收录
 
-`dsh-chat-import` 已收录于：[awesome-dsh-plugin/awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [AdamPlatin123/awesome-dsh-plugins](https://github.com/AdamPlatin123/awesome-dsh-plugins) · [0xsline/awesome-deepseek-harness](https://github.com/0xsline/awesome-deepseek-harness) · [Dominic789654/awesome-deepseek-harness](https://github.com/Dominic789654/awesome-deepseek-harness) · [Alex-Yanggg/awesome-DSH-plugin](https://github.com/Alex-Yanggg/awesome-DSH-plugin) · [Zhiyuan-Fan/Awesome-DeepSeek-Harness-Plugins](https://github.com/Zhiyuan-Fan/Awesome-DeepSeek-Harness-Plugins) · [bruc3van/awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin) · [kejixiaoliang/awesome-dsh-plugins](https://github.com/kejixiaoliang/awesome-dsh-plugins) · npm registry。
+`dsh-chat-import` 已收录于：[awesome-dsh-plugin/awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) · [AdamPlatin123/awesome-dsh-plugins](https://github.com/AdamPlatin123/awesome-dsh-plugins)（PR #4 已 merged，行尾 ✅）· [0xsline/awesome-deepseek-harness](https://github.com/0xsline/awesome-deepseek-harness) · [Dominic789654/awesome-deepseek-harness](https://github.com/Dominic789654/awesome-deepseek-harness) · [Alex-Yanggg/awesome-DSH-plugin](https://github.com/Alex-Yanggg/awesome-DSH-plugin) · [Zhiyuan-Fan/Awesome-DeepSeek-Harness-Plugins](https://github.com/Zhiyuan-Fan/Awesome-DeepSeek-Harness-Plugins) · [bruc3van/awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin) · [kejixiaoliang/awesome-dsh-plugins](https://github.com/kejixiaoliang/awesome-dsh-plugins) · [dshbase.com 插件目录](https://dshbase.com/plugins/dsh-chat-import/) · [awesome-dsh-plugin.com 兼容性徽章](https://awesome-dsh-plugin.com) · npm registry。
 
 自动收录渠道（打 `dsh-plugin` topic 即收录）：ZASENJC/dsh-plugins-store、YELEBAI/dsh-plugin-marketplace、bradeGithub/DSH-Plugins-Marketplace 等。
 
@@ -13,7 +13,7 @@
 
 | 能力 | dsh-chat-import | 生态内其他 |
 | --- | --- | --- |
-| 来源数 | 15 源 | 单源 ~ 4 源 |
+| 来源数 | 14 源 + 本地 JSONL（15 工具） | 单源 ~ 4 源 |
 | 全保真（tool/result + thinking + sourceEventSeqs） | ✅ | 部分 |
 | 增量续写（append 新轮次） | ✅ | 部分（复制式） |
 | 上下文预算保护 | ✅ | — |
@@ -23,7 +23,7 @@
 | Browser 面板 + `/import` 命令 | ✅ | 部分 |
 | 会话开始迁移提示 | ✅ | 部分 |
 
-生态内同类工具：[dsh-claude-move](https://github.com/PerryLink/dsh-claude-move) · [dsh-plugin-session-import](https://github.com/huguangyu666/dsh-plugin-session-import) · [dsh-import-agents](https://github.com/Chang-Tong/dsh-import-agents) · [opencode-dsh-importer](https://github.com/wang-xudong/opencode-dsh-importer) · [dsh-resume-plugin](https://github.com/Demogorgon314/dsh-resume-plugin) · [dsh-session-import](https://github.com/kinyokun/dsh-session-import) · [dsh-plugin-codex-import](https://github.com/Gordonynh/dsh-plugin-codex-import)。
+生态内同类工具：[dsh-claude-move](https://github.com/PerryLink/dsh-claude-move)（Claude 会话+资产 copy，REQ-61 跟进点）· [dsh-plugin-cc](https://github.com/cpj-dev/dsh-plugin-cc)（DSH↔Claude 控制面桥）· [dsh-movein](https://github.com/sjh9714/dsh-movein)（Claude 配置迁移，README 指向我们补会话——互补）· [dsh-plugin-session-import](https://github.com/huguangyu666/dsh-plugin-session-import) · [dsh-import-agents](https://github.com/Chang-Tong/dsh-import-agents) · [opencode-dsh-importer](https://github.com/wang-xudong/opencode-dsh-importer) · [dsh-resume-plugin](https://github.com/Demogorgon314/dsh-resume-plugin) · [dsh-session-import](https://github.com/kinyokun/dsh-session-import) · [dsh-plugin-codex-import](https://github.com/Gordonynh/dsh-plugin-codex-import)。
 
 ## 需求总览
 
@@ -57,7 +57,7 @@
 | REQ-26 | P1 | 畸形行行号 + secrets 位置上报 + permission 计数 | ✅ |
 | REQ-27 | P1 | 标题兜底（custom-title > ai-title > 首问） | ✅ |
 | REQ-28 | P2 | memory / skills / CLAUDE.md 上下文桥接（默认关闭） | ✅ |
-| REQ-29 | P2 | 命令 / Web 面板入口 | ☐ |
+| REQ-29 | P2 | /import-all 批量命令（Web 面板 REQ-41、/import REQ-42 已落地） | ◐ |
 | REQ-30 | P2 | 交接摘要续聊（/resume-claude /resume-codex） | ☐ |
 | REQ-31 | P3 | 竞品 / 官方能力监控（周期性） | ✅ |
 | REQ-32 | P1 | 内部标记：`session/imported` 事件 | ✅ |
@@ -88,6 +88,10 @@
 | REQ-57 | P3 | 导入结果结构校验 | ☐ |
 | REQ-58 | P3 | scan_discover 索引补 git 分支/dirty | ☐ |
 | REQ-59 | P2 | 外部 agent/mode prompt 落盘转换为 DSH skills 资产（`import_agents`） | ✅ |
+| REQ-60 | P1 | 发布规范持续达标（plugin_check 全项：types/cordis peer/tsconfig/build 脚本） | ✅ v0.4.0 |
+| REQ-61 | P2 | Claude 资产持久化导入（memory / CLAUDE.md / skills → DSH 资产，扩展 import_agents） | ☐ |
+| REQ-62 | P2 | 便携 bundle 跨机器移动用例（对标 codex-claude-transfer） | ☐ |
+| REQ-63 | P3 | 仓库社区健康（CONTRIBUTING + issue/PR 模板） | ☐ |
 
 ## 未完成需求说明
 
@@ -105,7 +109,9 @@
 - **REQ-43 — 导入会话工具完整可用**：导入会话加入默认 preset scope（工具与正常会话一致）+ 绑定默认模型。
 - **REQ-50 — Hermes-agent 变体 schema**：支持独立 `tool_calls` / `reasoning` 列的变体。
 - **REQ-52 — Codex 官方 App Server API 路线侦察**：thread/list vs rollout，抗格式漂移。
-- **REQ-56 — DSH 会话通用导出/备份**：interchange bundle + SHA-256 指纹 + 还原预览（与 REQ-18 联动）。
+- **REQ-56 — DSH 会话通用导出/备份**：interchange bundle + SHA-256 指纹 + 还原预览（与 REQ-18 联动，跨机器用例见 REQ-62）。
+- **REQ-61 — Claude 资产持久化导入**：`import_agents` 扩展 Claude 源（memory / CLAUDE.md / skills 落盘为 DSH 资产），对齐 dsh-claude-move 卖点。
+- **REQ-62 — 便携 bundle 跨机器移动**：`.codexbundle` 式导出（A 机 → B 机还原 0 skipped，cwd 不可达走 REQ-39-lite 回退归组），对标 codex-claude-transfer；可选 LAN sync。
 
 ### P3
 
@@ -116,3 +122,4 @@
 - **REQ-51 — Hermes 会话 lineage**：`parent_session_id` 压缩分叉，只导链尾可加过滤。
 - **REQ-57 — 导入结果结构校验**：seq 连续 / sourceEventSeqs 有效 / 事件白名单。
 - **REQ-58 — scan_discover 索引补 git 分支/dirty**。
+- **REQ-63 — 仓库社区健康**：CONTRIBUTING + issue/PR 模板（community health 42% → ≥75%）。
