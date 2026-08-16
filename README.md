@@ -107,7 +107,9 @@ import_claude({ path: "~/.claude/projects" })
 <details>
 <summary><b>Uninstall</b></summary>
 
-`dsh plugin` folds the plugin's bundle declaration into the profile; the plugin becomes active after restarting dsh. To uninstall, remove the `import-claude` insert line from the profile's bundles and restart dsh. Already-imported sessions stay in the DSH data directory and are unaffected.
+`dsh plugin` folds the plugin's bundle declaration into the profile; the plugin becomes active after restarting dsh. To uninstall, remove the `import-claude` insert line from the profile's bundles and restart dsh.
+
+Uninstall never touches your data: already-imported sessions stay in the DSH data directory, and every plugin hook (tools, panel routes, sync timer, event subscriptions) is torn down by the host when the plugin unloads — nothing stays registered. Before removing the plugin you can enumerate everything it imported with `list_imported_sessions()` and clear its registry records — with manual-deletion guidance — via `retract_import({ sessionId })`; nothing is ever deleted automatically.
 
 </details>
 

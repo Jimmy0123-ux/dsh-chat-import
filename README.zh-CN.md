@@ -107,7 +107,9 @@ import_claude({ path: "~/.claude/projects" })
 <details>
 <summary><b>卸载</b></summary>
 
-`dsh plugin` 把插件的 bundle 声明收编进 profile；重启 dsh 后插件生效。卸载：从 profile 的 bundles 移除 `import-claude` insert 行并重启 dsh。已导入的会话保留在 DSH 数据目录，不受影响。
+`dsh plugin` 把插件的 bundle 声明收编进 profile；重启 dsh 后插件生效。卸载：从 profile 的 bundles 移除 `import-claude` insert 行并重启 dsh。
+
+卸载绝不触碰数据：已导入会话保留在 DSH 数据目录；插件卸载时宿主自动撤销全部 Hook（工具 / 面板路由 / 同步定时器 / 事件订阅），无残留注册。移除前可用 `list_imported_sessions()` 列出本插件导入的全部会话，用 `retract_import({ sessionId })` 清除 registry 记录并获取手动删除引导——一切删除都需手动，插件绝不自动删。
 
 </details>
 
