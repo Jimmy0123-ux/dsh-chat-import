@@ -388,3 +388,75 @@ test('convertKimiWire: 空 user_input 的 TurnBegin 不建轮（后续内容挂�
   assert.equal(users.length, 1)
   assert.equal(users[0].data.content[0].text, '真实问题')
 })
+
+// ── 新 Kimi Code（~/.kimi-code/sessions/<workspace-id>/<session-id>/agents/main/wire.jsonl）──
+
+// 新 wire：每行直接是 {type, time, …}，不包 message 外壳。
+function newWire(recs, tsBase = 1786888277773) {
+  const lines = [JSON.stringify({ type: 'metadata', protocol_version: '1', created_at: tsBase })]
+  recs.forEach((r, i) => lines.push(JSON.stringify({ ...r, time: tsBase + i })))
+  return lines.join('\n')
+}
+function newEv(type, data = {}) { return { type, ...data } }
+
+test('convertKimiWire: 新 Kimi Code wire（turn.prompt + context.append_loop_event）', () => {
+  const out = convertKimiWire(newWire([
+    newEv('turn.prompt', { input: [{ type: 'text', text: '帮我看看构建失败' }], origin: { kind: 'user' } }),
+    newEv('context.append_message', { message: { role: 'user', content: [{ type: 'text', text: '帮我看看构建失败' }], toolCalls: [], origin: { kind: 'user' }, id: 'msg_1' } }),
+    newEv('context.append_loop_event', { event: { type: 'step.begin', turnId: '0', step: 1 } }),
+    newEv('context.append_loop_event', { event: { type: 'content.part', part: { type: 'think', think: '先看日志' } } }),
+    newEv('context.append_loop_event', { event: { type: 'content.part', part: { type: 'text', text: '是缺少依赖。' } } }),
+    newEv('context.append_loop_event', { event: { type: 'step.end', turnId: '0', step: 1, finishReason: 'end_turn' } }),
+    newEv('turn.ended', { turnId: 0, reason: 'completed' }),
+  ]), { sourcePath: 'C:/Users/u/.kimi-code/sessions/wd_nwflower_249d4b67aa09/sess-001/agents/main/wire.jsonl' })
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.messages, 2)
+  assert.equal(out.meta.sourceId, 'sess-001') // 新布局 wire 父目录再向上两级
+  assert.equal(out.title, '帮我看看构建失败')
+  assert.equal(out.meta.createdAt, 1786888277773) // 首条 record time（毫秒）
+  const asst = out.events.find((e) => e.type === 'assistant/message').data.message
+  assert.deepEqual(asst.content.map((c) => c.type), ['reasoning', 'text'])
+  assert.equal(asst.content[1].text, '是缺少依赖。')
+  out.events.forEach((e, i) => assert.equal(e.seq, i))
+  assertMessageOrderLegal(out.events)
+})
+
+test('convertKimiWire: 新 Kimi Code tool.call/tool.result 配对；turn.prompt + append_message 不重复建轮', () => {
+  const out = convertKimiWire(newWire([
+    newEv('turn.prompt', { input: [{ type: 'text', text: '跑一下测试' }], origin: { kind: 'user' } }),
+    newEv('context.append_message', { message: { role: 'user', content: [{ type: 'text', text: '跑一下测试' }], toolCalls: [], origin: { kind: 'user' }, id: 'msg_1' } }),
+    newEv('context.append_loop_event', { event: { type: 'step.begin', turnId: '0', step: 1 } }),
+    newEv('context.append_loop_event', { event: { type: 'content.part', part: { type: 'text', text: '好的' } } }),
+    newEv('context.append_loop_event', { event: { type: 'tool.call', turnId: '0', step: 1, toolCallId: 'call_01', name: 'Bash', args: { command: 'npm test' } } }),
+    newEv('context.append_loop_event', { event: { type: 'tool.result', parentUuid: 'x', toolCallId: 'call_01', result: { output: 'all tests passed', is_error: false } } }),
+    newEv('context.append_loop_event', { event: { type: 'step.end', turnId: '0', step: 1, finishReason: 'tool_use' } }),
+    newEv('context.append_loop_event', { event: { type: 'step.begin', turnId: '0', step: 2 } }),
+    newEv('context.append_loop_event', { event: { type: 'content.part', part: { type: 'text', text: '完成' } } }),
+    newEv('context.append_loop_event', { event: { type: 'step.end', turnId: '0', step: 2, finishReason: 'end_turn' } }),
+    newEv('turn.ended', { turnId: 0, reason: 'completed' }),
+  ]), { sourcePath: SRC, kimiId: 'sess-001' })
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.toolCalls, 1)
+  assert.equal(out.events.filter((e) => e.type === 'user/message').length, 1) // append_message 不重复建轮
+  const call = out.events.find((e) => e.type === 'tool/call')
+  assert.equal(call.data.arguments, '{"command":"npm test"}') // 对象 args → JSON 字符串
+  const result = out.events.find((e) => e.type === 'tool/result')
+  assert.equal(result.data.message.content[0].content[0].text, 'all tests passed')
+  assert.deepEqual(result.sourceEventSeqs, [call.seq])
+  assertToolPairing(out.events)
+  assertMessageOrderLegal(out.events)
+})
+
+test('convertKimiWire: 新 wire 无 turn.prompt 时 context.append_message 兜底建轮', () => {
+  const out = convertKimiWire(newWire([
+    newEv('context.append_message', { message: { role: 'user', content: [{ type: 'text', text: '只有 append_message' }], toolCalls: [], origin: { kind: 'user' }, id: 'msg_1' } }),
+    newEv('context.append_loop_event', { event: { type: 'step.begin', turnId: '0', step: 1 } }),
+    newEv('context.append_loop_event', { event: { type: 'content.part', part: { type: 'text', text: '回复' } } }),
+    newEv('context.append_loop_event', { event: { type: 'step.end', turnId: '0', step: 1, finishReason: 'end_turn' } }),
+    newEv('turn.ended', { turnId: 0, reason: 'completed' }),
+  ]), { sourcePath: SRC, kimiId: 'sess-001' })
+  assert.equal(out.turns.length, 1)
+  const users = out.events.filter((e) => e.type === 'user/message')
+  assert.equal(users.length, 1)
+  assert.equal(users[0].data.content[0].text, '只有 append_message')
+})

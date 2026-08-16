@@ -1607,6 +1607,13 @@ function kimiWire(recs) {
 function kimiEv(type, payload = {}) { return { type, payload } }
 // kimi.json workdir 目录名 = md5(path)（kaos 本地时无前缀）
 const kimiHash = (p) => createHash('md5').update(p, 'utf8').digest('hex')
+// 新 Kimi Code wire：每行直接是 {type, time, …}，不包 message 外壳。
+function kimiCodeWire(recs, tsBase = 1786888277773) {
+  const lines = [JSON.stringify({ type: 'metadata', protocol_version: '1', created_at: tsBase })]
+  recs.forEach((r, i) => lines.push(JSON.stringify({ ...r, time: tsBase + i })))
+  return lines.join('\n')
+}
+function kimiCodeEv(type, data = {}) { return { type, ...data } }
 
 test('import_kimi 单会话目录：wire.jsonl + state.json + kimi.json 映射、落盘、归组、schema 校验', async () => {
   const workDir = 'D:/demo/kimi-proj'
@@ -1797,6 +1804,84 @@ test('import_kimi dry-run 预览：preview 零副作用、0 skipped、清单字�
   assert.equal(value.skipped, 0)
   assert.equal(persistence.sessions.size, 0) // 零副作用：不落盘
   assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+})
+
+test('import_kimi 新 Kimi Code 单会话目录：agents/main/wire.jsonl + state.json cwd/title', async () => {
+  const sess = 'C:\\Users\\u\\.kimi-code\\sessions\\wd_nwflower_249d4b67aa09\\session-001'
+  const tree = {
+    'C:\\Users\\u\\.kimi-code\\sessions': 'dir',
+    'C:\\Users\\u\\.kimi-code\\sessions\\wd_nwflower_249d4b67aa09': 'dir',
+    [sess]: 'dir',
+    [sess + '\\agents']: 'dir',
+    [sess + '\\agents\\main']: 'dir',
+    [sess + '\\agents\\main\\wire.jsonl']: kimiCodeWire([
+      kimiCodeEv('turn.prompt', { input: [{ type: 'text', text: '帮我看看构建失败' }], origin: { kind: 'user' } }),
+      kimiCodeEv('context.append_message', { message: { role: 'user', content: [{ type: 'text', text: '帮我看看构建失败' }], toolCalls: [], origin: { kind: 'user' }, id: 'msg_1' } }),
+      kimiCodeEv('context.append_loop_event', { event: { type: 'step.begin', turnId: '0', step: 1 } }),
+      kimiCodeEv('context.append_loop_event', { event: { type: 'content.part', part: { type: 'text', text: '是缺少依赖。' } } }),
+      kimiCodeEv('context.append_loop_event', { event: { type: 'step.end', turnId: '0', step: 1, finishReason: 'end_turn' } }),
+      kimiCodeEv('turn.ended', { turnId: 0, reason: 'completed' }),
+    ]),
+    [sess + '\\state.json']: JSON.stringify({ id: 'session-001', cwd: 'C:/Users/u/proj', title: '新 Kimi Code 标题', isCustomTitle: true }),
+  }
+  const { ctx, persistence, attached } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_kimi')
+  const value = await def.execute({ path: sess })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-session-001')
+  assert.equal(value.status, 'imported')
+  assert.equal(value.turns, 1)
+  assert.equal(value.messages, 2)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get('import-session-001')
+  assert.ok(saved)
+  assert.equal(saved.meta.cwd, 'C:/Users/u/proj') // state.json.cwd
+  assert.equal(saved.meta.sourceId, 'session-001')
+  assert.equal(saved.events.at(-1).type, 'session/title')
+  assert.equal(saved.events.at(-1).data.title, '新 Kimi Code 标题') // isCustomTitle:true 钉标题
+  assertImportedMarker(saved.events, { tool: 'kimi', sourceId: 'session-001', sourcePath: sess })
+  assert.equal(attached.length, 1)
+})
+
+test('import_kimi 新 Kimi Code 目录批量：递归扫 agents/main/wire.jsonl', async () => {
+  const mkSession = (id) => {
+    const sess = 'C:\\Users\\u\\.kimi-code\\sessions\\wd_nwflower_249d4b67aa09\\' + id
+    return {
+      [sess]: 'dir',
+      [sess + '\\agents']: 'dir',
+      [sess + '\\agents\\main']: 'dir',
+      [sess + '\\agents\\main\\wire.jsonl']: kimiCodeWire([
+        kimiCodeEv('turn.prompt', { input: [{ type: 'text', text: '问题 ' + id }], origin: { kind: 'user' } }),
+        kimiCodeEv('context.append_loop_event', { event: { type: 'step.begin', turnId: '0', step: 1 } }),
+        kimiCodeEv('context.append_loop_event', { event: { type: 'content.part', part: { type: 'text', text: '回答' } } }),
+        kimiCodeEv('context.append_loop_event', { event: { type: 'step.end', turnId: '0', step: 1, finishReason: 'end_turn' } }),
+        kimiCodeEv('turn.ended', { turnId: 0, reason: 'completed' }),
+      ]),
+      [sess + '\\state.json']: JSON.stringify({ id, cwd: 'C:/Users/u/proj' }),
+    }
+  }
+  const tree = {
+    'C:\\Users\\u\\.kimi-code\\sessions': 'dir',
+    'C:\\Users\\u\\.kimi-code\\sessions\\wd_nwflower_249d4b67aa09': 'dir',
+    ...mkSession('session-001'),
+    ...mkSession('session-002'),
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_kimi')
+  const value = await def.execute({ path: 'C:\\Users\\u\\.kimi-code\\sessions' })
+
+  assert.equal(value.mode, 'batch')
+  assert.equal(value.total, 2)
+  assert.equal(value.imported, 2)
+  assert.equal(value.failed, 0)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  const ids = [...persistence.sessions.keys()].sort()
+  assert.deepEqual(ids, ['import-session-001', 'import-session-002'])
+  for (const id of ids) assert.equal(persistence.sessions.get(id).meta.cwd, 'C:/Users/u/proj')
 })
 
 // ---- REQ-24 增量续写（重导 append 新轮次 + 源路径幂等键） ----

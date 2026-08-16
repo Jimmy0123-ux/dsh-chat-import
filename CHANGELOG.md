@@ -9,6 +9,21 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
+## [Unreleased]
+
+### Fixed
+
+- **Kimi Code standalone (`~/.kimi-code`) import support** — `import_kimi`
+  previously only understood the old Kimi CLI layout
+  (`~/.kimi/sessions/<md5>/<sessionId>/wire.jsonl`) and old wire format
+  (`TurnBegin` / `TextPart` / …). It now also discovers and imports the new
+  Kimi Code layout
+  (`~/.kimi-code/sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl`)
+  and its wire events (`turn.prompt` / `context.append_loop_event` / …), with
+  `state.json` providing `cwd` and title metadata. `scan_discover` includes
+  `~/.kimi-code/sessions` by default and both layouts remain under the
+  `kimi` format / `import_kimi` tool.
+
 ## [0.5.1] - 2026-08-16
 
 First patch release — fixes both findings from [issue #10](https://github.com/Nwflower/dsh-chat-import/issues/10)

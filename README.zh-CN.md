@@ -35,7 +35,7 @@
 
 ## 💡 概念
 
-`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw、Pi Coding Agent、Hermes、Kimi CLI 与 DSH 会话日志** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区（经 `~/.claude.json` projects 权威映射 / Reasonix slug 贪心解码解析，带主目录沙箱防护）。
+`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw、Pi Coding Agent、Hermes、Kimi CLI / Kimi Code 与 DSH 会话日志** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区（经 `~/.claude.json` projects 权威映射 / Reasonix slug 贪心解码解析，带主目录沙箱防护）。
 
 反向方向同样覆盖：`export_claude` 把 DSH 会话序列化回 Claude Code JSONL（只读——绝不修改你的 DSH 日志），Claude Code 可用 `--resume` 加载续聊；`sync_to_claude` 再把会话新增轮次增量写回 Claude Code 文件——带守卫、绝不静默覆盖；同一矩阵延伸到 **Codex rollout**（`export_codex`）与 **Kimi wire**（`export_kimi`），外加带 SHA-256 指纹与跨机器还原的**便携 interchange bundle**（`export_bundle` / `restore_bundle`，REQ-56/62）。
 
@@ -79,11 +79,11 @@
 | **OpenClaw** | `~/.openclaw/agents/<agent>/sessions/*.jsonl` | `import_openclaw` |
 | **Pi Coding Agent** | `~/.pi/agent/sessions/--<cwd>--/<timestamp>_<uuid>.jsonl` | `import_pi` |
 | **Hermes** | `~/.hermes/`（Windows `%LOCALAPPDATA%\hermes`） | `import_hermes` |
-| **Kimi CLI** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` | `import_kimi` |
+| **Kimi CLI / Kimi Code** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` · `~/.kimi-code/sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl` | `import_kimi` |
 | **DSH 会话日志** | `~/.dsh/sessions/<encoded-workspace>/<sessionId>/session.jsonl(.zstd)` | `import_dsh` |
 | **任意本地 JSONL** | 任意 `.jsonl` 文件 / 目录（自动识别格式） | `import_local_jsonl` |
 
-每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、时间戳、工具调用与结果、思考过程。数据较少的源导入其已有的内容；源格式无法保留的部分，会在导入报告里显式标注（如 Kimi 镜像进父 wire 的 `SubagentEvent` 子代理对话会跳过——父 `Agent` 工具调用与结果保留，子代理自己的 `subagents/<agentId>/wire.jsonl` 可直接导入）。Reasonix V2 会话自动合并 `*.events.jsonl` WAL（上报 `walMerged`）；Claude 会话可用 `compacted: true` 只导最后一次压缩摘要 + 尾部。
+每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、时间戳、工具调用与结果、思考过程。数据较少的源导入其已有的内容；源格式无法保留的部分，会在导入报告里显式标注（如 Kimi 镜像进父 wire 的 `SubagentEvent` 子代理对话会跳过——父 `Agent` 工具调用与结果保留，子代理自己的 `subagents/<agentId>/wire.jsonl` 或新布局 `agents/<agentId>/wire.jsonl` 可直接导入）。Reasonix V2 会话自动合并 `*.events.jsonl` WAL（上报 `walMerged`）；Claude 会话可用 `compacted: true` 只导最后一次压缩摘要 + 尾部。
 
 ---
 

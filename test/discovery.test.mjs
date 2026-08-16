@@ -319,6 +319,48 @@ test('kimi：wire.jsonl 会话目录发现、custom_title 标题、kimi.json md5
   assert.equal(s.messageCount, null)
 })
 
+test('kimi：新 Kimi Code ~/.kimi-code agents/main/wire.jsonl 发现、state.json cwd/title', async () => {
+  const root = join(HOME, '.kimi-code', 'sessions')
+  const workspace = join(root, 'wd_nwflower_249d4b67aa09')
+  const sessDir = join(workspace, 'session-001')
+  const agentWire = join(sessDir, 'agents', 'main', 'wire.jsonl')
+  const files = new Map([
+    [root, { type: 'dir' }],
+    [join(HOME, '.kimi-code'), { type: 'dir' }],
+    [workspace, { type: 'dir' }],
+    [sessDir, { type: 'dir' }],
+    [join(sessDir, 'agents'), { type: 'dir' }],
+    [join(sessDir, 'agents', 'main'), { type: 'dir' }],
+    [agentWire, { type: 'file', mtimeMs: 1786000002000, text: [
+      j({ type: 'metadata', protocol_version: '1', created_at: 1786000000500 }),
+      j({ type: 'turn.prompt', input: [{ type: 'text', text: '帮我看看构建失败' }], time: 1786000000501 }),
+      j({ type: 'context.append_loop_event', event: { type: 'content.part', part: { type: 'text', text: '是缺少依赖。' } }, time: 1786000000502 }),
+    ].join('\n') }],
+    [join(sessDir, 'state.json'), { type: 'file', text: j({ id: 'session-001', cwd: 'C:/Users/u/proj', title: '新 Kimi Code 标题', isCustomTitle: true }) }],
+    // agents/main 自身不是会话目录（没有 state.json 伴生）
+    [join(workspace, 'not-a-session'), { type: 'dir' }],
+  ])
+  const host = mockHost(files)
+
+  const { sessions, total } = await discoverSessions({ path: root, format: 'kimi', host, imports: {} })
+  assert.equal(total, 1)
+  const s = sessions[0]
+  assert.equal(s.format, 'kimi')
+  assert.equal(s.sessionId, 'session-001')
+  assert.equal(s.title, '新 Kimi Code 标题') // state.json isCustomTitle+title
+  assert.equal(s.project, 'proj') // state.json cwd basename
+  assert.equal(s.cwd, 'C:/Users/u/proj')
+  assert.equal(s.createdAt, 1786000000500) // 新 wire metadata created_at（毫秒）
+  assert.equal(s.lastActiveAt, 1786000002000) // agents/main/wire.jsonl mtime
+  assert.equal(s.messageCount, null)
+
+  // 直接把单个新会话目录作为 path 也应识别为会话（不自拒、不误收 agents/main）
+  const direct = await discoverSessions({ path: sessDir, format: 'kimi', host, imports: {} })
+  assert.equal(direct.total, 1)
+  assert.equal(direct.sessions[0].sessionId, 'session-001')
+  assert.equal(direct.sessions[0].sourcePath, sessDir)
+})
+
 // ── 30s TTL 缓存（REQ-25/REQ-40：命中不重读，可观测计数断言）──────────────
 
 test('30s TTL 缓存：命中不重读、过期重扫（注入时钟）', async () => {

@@ -35,7 +35,7 @@
 
 ## 💡 Concept
 
-`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes, Kimi CLI and DSH session logs** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd` (resolved via the authoritative `~/.claude.json` project mapping, greedy slug decoding for Reasonix, with a home-directory sandbox guard).
+`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes, Kimi CLI / Kimi Code and DSH session logs** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd` (resolved via the authoritative `~/.claude.json` project mapping, greedy slug decoding for Reasonix, with a home-directory sandbox guard).
 
 The reverse direction is covered too: `export_claude` serializes a DSH session back into a Claude Code JSONL transcript that Claude Code can load with `--resume` (read-only — your DSH log is never modified), `sync_to_claude` incrementally appends a session's new turns back to a Claude Code file — guarded, never silently overwriting — and the same matrix extends to **Codex rollouts** (`export_codex`) and **Kimi wire files** (`export_kimi`), plus a **portable interchange bundle** (`export_bundle` / `restore_bundle`, REQ-56/62) with SHA-256 fingerprints and cross-machine restore.
 
@@ -79,11 +79,11 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | **OpenClaw** | `~/.openclaw/agents/<agent>/sessions/*.jsonl` | `import_openclaw` |
 | **Pi Coding Agent** | `~/.pi/agent/sessions/--<cwd>--/<timestamp>_<uuid>.jsonl` | `import_pi` |
 | **Hermes** | `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`) | `import_hermes` |
-| **Kimi CLI** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` | `import_kimi` |
+| **Kimi CLI / Kimi Code** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` · `~/.kimi-code/sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl` | `import_kimi` |
 | **DSH session logs** | `~/.dsh/sessions/<encoded-workspace>/<sessionId>/session.jsonl(.zstd)` | `import_dsh` |
 | **Any local JSONL** | any `.jsonl` file / directory (auto-detected) | `import_local_jsonl` |
 
-Each import preserves what the source actually records — session id, `cwd`, title, model, timestamps, tool calls & results, reasoning. Sources that record less import what exists; anything a format cannot preserve is explicitly flagged in the import report (e.g. Kimi sub-agent conversations mirrored into the parent wire as `SubagentEvent` are skipped — the parent's `Agent` tool call & result are kept, and a sub-agent's own `subagents/<agentId>/wire.jsonl` can be imported directly). Reasonix V2 sessions merge their `*.events.jsonl` WAL automatically (`walMerged` reported); Claude sessions can be imported as their last compression summary + tail with `compacted: true`.
+Each import preserves what the source actually records — session id, `cwd`, title, model, timestamps, tool calls & results, reasoning. Sources that record less import what exists; anything a format cannot preserve is explicitly flagged in the import report (e.g. Kimi sub-agent conversations mirrored into the parent wire as `SubagentEvent` are skipped — the parent's `Agent` tool call & result are kept, and a sub-agent's own `subagents/<agentId>/wire.jsonl` or new-layout `agents/<agentId>/wire.jsonl` can be imported directly). Reasonix V2 sessions merge their `*.events.jsonl` WAL automatically (`walMerged` reported); Claude sessions can be imported as their last compression summary + tail with `compacted: true`.
 
 ---
 
