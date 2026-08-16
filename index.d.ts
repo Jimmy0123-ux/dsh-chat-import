@@ -49,8 +49,11 @@ export interface ToolSurface {
   import_local_jsonl(options: ImportOptions & { format?: LocalJsonlFormat }): Promise<ImportResult>
   import_agents(options?: AgentsImportOptions): Promise<AgentsImportResult>
   export_claude(options: ExportClaudeParams): Promise<ExportClaudeResult>
+  export_codex(options: ExportTargetParams): Promise<ExportTargetResult>
+  export_kimi(options: ExportTargetParams): Promise<ExportTargetResult>
   export_bundle(options: ExportBundleParams): Promise<ExportBundleResult>
   restore_bundle(options: RestoreBundleParams): Promise<RestoreBundleResult>
+  verify_session(options: { sessionId: string }): Promise<VerifySessionResult>
   sync_to_claude(options: SyncToClaudeParams): Promise<SyncToClaudeResult>
   list_imported_sessions(): Promise<ListImportedResult>
   retract_import(options: RetractParams): Promise<RetractResult>
@@ -249,6 +252,43 @@ export interface AgentsImportResult {
     reason?: string
     target?: string
   }>
+}
+
+// ---------- export_codex / export_kimi（REQ-23 矩阵化互转） ----------
+
+export interface ExportTargetParams {
+  /** 要导出的 DSH 会话 id（必填）。 */
+  sessionId: string
+  /** 输出文件路径（缺省 <outputDir>/<sessionId>.rollout.jsonl 或 .wire.jsonl）。 */
+  path?: string
+  /** 输出目录（默认 ~/.dsh/exports）。 */
+  outputDir?: string
+  /** true 时不写盘，只序列化并返回目标路径与统计。 */
+  dryRun?: boolean
+}
+
+export interface ExportTargetResult {
+  mode: 'single'
+  sessionId: string
+  filePath: string
+  recordCount: number
+  toolCalls: number
+  toolResults: number
+  dryRun: boolean
+  degradations?: Array<{ id: string; kind: string; strategy: 'lossless' | 'text-fallback' | 'skip-placeholder'; count: number }>
+}
+
+// ---------- verify_session（REQ-23 只读结构校验 + repair 提示） ----------
+
+export interface VerifySessionResult {
+  mode: 'single'
+  sessionId: string
+  ok: boolean
+  eventCount: number
+  turns: number
+  title?: string
+  problems: Array<{ kind: string; seq: number | null; message: string }>
+  repairHints: Array<{ kind: string; hint: string }>
 }
 
 // ---------- export_claude / sync_to_claude ----------

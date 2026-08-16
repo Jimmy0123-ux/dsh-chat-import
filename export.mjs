@@ -21,3 +21,18 @@ export {
   serializeBundle,
   verifyBundle,
 } from './lib/export/bundle.mjs'
+
+// REQ-23 矩阵化互转（DSH → Codex rollout / DSH → Kimi wire，纯函数）
+export {
+  serializeCodexRecords,
+  serializeCodexJsonl,
+  serializeCodexJsonlTail,
+  verifyCodexJsonl,
+  tailCodexEvents,
+} from './lib/export/codex.mjs'
+
+export {
+  serializeKimiRecords,
+  serializeKimiWire,
+  verifyKimiWire,
+} from './lib/export/kimi.mjs'

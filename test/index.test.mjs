@@ -259,15 +259,15 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册二十三个工具（15 导入 + import_agents + scan_discover + export_claude + sync_to_claude + REQ-33 识别/撤回 + REQ-56 bundle 导出/还原）', () => {
+test('apply 注册二十六个工具（15 导入 + import_agents + scan_discover + export_claude/codex/kimi + sync_to_claude + REQ-33 识别/撤回 + REQ-56 bundle 导出/还原 + verify_session）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 23)
+  assert.equal(registered.length, 26)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['export_bundle', 'export_claude', 'import_agents', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_dsh', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_local_jsonl', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'restore_bundle', 'retract_import', 'scan_discover', 'sync_to_claude'])
+  assert.deepEqual(names, ['export_bundle', 'export_claude', 'export_codex', 'export_kimi', 'import_agents', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_dsh', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_local_jsonl', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'restore_bundle', 'retract_import', 'scan_discover', 'sync_to_claude', 'verify_session'])
   for (const def of registered) {
-    if (['export_claude', 'export_bundle', 'restore_bundle', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import'].includes(def.name)) {
-      // 导出 / bundle / 写回 / 发现 / 识别 / 撤回工具：单对象输出 schema（非 oneOf）
+    if (['export_claude', 'export_codex', 'export_kimi', 'export_bundle', 'restore_bundle', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import', 'verify_session'].includes(def.name)) {
+      // 导出 / bundle / 写回 / 发现 / 识别 / 撤回 / 校验工具：单对象输出 schema（非 oneOf）
       assert.equal(def.output.schema.type, 'object')
       assert.ok(!Array.isArray(def.output.schema.oneOf))
     } else if (def.name === 'import_agents') {
@@ -2560,6 +2560,89 @@ test('REQ-56 restore_bundle 目录模式：递归收集 .dshbundle.json 逐文�
   assert.equal(p2.sessions.size, 2)
 })
 
+// ---- REQ-23 矩阵化互转 + verify_session ----
+
+test('REQ-23 export_codex / export_kimi：落盘 + 可再导入 + 降级报告 + schema', async () => {
+  const { ctx, writes } = makeCtx({})
+  await seedSession(ctx.sessionPersistence, 'sess-matrix-001', { version: 0, id: 'sess-matrix-001', createdAt: 1786000000000, cwd: 'D:\\demo\\proj' }, [
+    mkEvent('turn/start', 0, 1786000000000, { turn: 1 }),
+    mkEvent('user/message', 1, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: '跑测试' }], source: { kind: 'user' } }, { surfaceOp: 'append' }),
+    mkEvent('assistant/message', 2, 1786000000000, { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: '好' }, { type: 'tool-call', id: 'c1', name: 'Bash', arguments: '{"command":"npm test"}' }], source: { kind: 'model', provider: 'dsh' } } }, { surfaceOp: 'append' }),
+    mkEvent('tool/call', 3, 1786000000000, { turn: 1, step: 1, callId: 'c1', name: 'Bash', arguments: '{"command":"npm test"}' }),
+    mkEvent('tool/result', 4, 1786000000000, { turn: 1, step: 1, message: { id: 't1', role: 'user', content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'all green' }] }], source: { kind: 'tool', callId: 'c1' } } }, { surfaceOp: 'append' }),
+    mkEvent('turn/end', 5, 1786000000000, { turn: 1, reason: { kind: 'completed' } }),
+  ])
+  apply(ctx)
+  const codexDef = registeredDef(ctx, 'export_codex')
+  const cwdPath = 'C:\\exports\\x.rollout.jsonl'
+  const codexOut = await codexDef.execute({ sessionId: 'sess-matrix-001', path: cwdPath })
+  assert.equal(codexOut.recordCount, 5) // session_meta + user + assistant + function_call + function_call_output
+  assert.equal(codexOut.toolCalls, 1)
+  assert.equal(codexOut.toolResults, 1)
+  assert.deepEqual(validateJsonSchemaValue(codexDef.output.schema, codexOut), [])
+
+  const kimiDef = registeredDef(ctx, 'export_kimi')
+  const kimiPath = 'C:\\exports\\y.wire.jsonl'
+  const kimiOut = await kimiDef.execute({ sessionId: 'sess-matrix-001', path: kimiPath })
+  assert.equal(kimiOut.recordCount, 7) // metadata + TurnBegin + StepBegin + TextPart + ToolCall + ToolResult + TurnEnd
+  assert.equal(kimiOut.toolCalls, 1)
+  assert.deepEqual(validateJsonSchemaValue(kimiDef.output.schema, kimiOut), [])
+
+  // 双向闭环：导出文件再经对应 import_* 导入（新 ctx 模拟另一侧）
+  const { ctx: ctx2, persistence: p2 } = makeCtx({ [cwdPath]: writes[0].content, [kimiPath]: writes[1].content })
+  apply(ctx2)
+  const impCodex = registeredDef(ctx2, 'import_codex')
+  const codexBack = await impCodex.execute({ path: cwdPath })
+  assert.equal(codexBack.mode, 'single')
+  assert.equal(codexBack.status, 'imported')
+  assert.equal(codexBack.toolCalls, 1)
+  const impKimi = registeredDef(ctx2, 'import_kimi')
+  const kimiBack = await impKimi.execute({ path: kimiPath })
+  assert.equal(kimiBack.mode, 'single')
+  assert.equal(kimiBack.status, 'imported')
+  assert.equal(kimiBack.toolCalls, 1)
+  assert.equal(p2.sessions.size, 2)
+})
+
+test('REQ-23 verify_session：平衡会话 ok、不平衡会话定位问题 + repair 提示（只读）', async () => {
+  const { ctx, persistence } = makeCtx({})
+  // 平衡会话
+  await seedSession(persistence, 'sess-ok', { version: 0, id: 'sess-ok', createdAt: 1786000000000, cwd: 'D:\\demo\\proj' }, [
+    mkEvent('turn/start', 0, 1786000000000, { turn: 1 }),
+    mkEvent('user/message', 1, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }, { surfaceOp: 'append' }),
+    mkEvent('assistant/message', 2, 1786000000000, { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'hi' }], source: { kind: 'model', provider: 'dsh' } } }, { surfaceOp: 'append' }),
+    mkEvent('turn/end', 3, 1786000000000, { turn: 1, reason: { kind: 'completed' } }),
+  ])
+  // 不平衡会话：turn 无 end + call 无 result + surface 缺 surfaceOp
+  await seedSession(persistence, 'sess-broken', { version: 0, id: 'sess-broken', createdAt: 1786000000000, cwd: 'D:\\demo\\proj' }, [
+    mkEvent('turn/start', 0, 1786000000000, { turn: 1 }),
+    mkEvent('user/message', 1, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }), // 缺 surfaceOp
+    mkEvent('assistant/message', 2, 1786000000000, { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'hi' }], source: { kind: 'model', provider: 'dsh' } } }, { surfaceOp: 'append' }),
+    mkEvent('tool/call', 3, 1786000000000, { turn: 1, step: 1, callId: 'c1', name: 'Bash', arguments: '{}' }), // 无 result
+  ])
+  apply(ctx)
+  const def = registeredDef(ctx, 'verify_session')
+  const ok = await def.execute({ sessionId: 'sess-ok' })
+  assert.equal(ok.ok, true)
+  assert.equal(ok.problems.length, 0)
+  assert.equal(ok.turns, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, ok), [])
+
+  const broken = await def.execute({ sessionId: 'sess-broken' })
+  assert.equal(broken.ok, false)
+  const kinds = broken.problems.map((p) => p.kind)
+  assert.ok(kinds.includes('missing-surface-op'))
+  assert.ok(kinds.includes('turn-unbalanced'))
+  assert.ok(kinds.includes('call-without-result'))
+  // repair 提示按 kind 给出
+  const hints = broken.repairHints.map((h) => h.kind)
+  assert.ok(hints.includes('call-without-result'))
+  assert.ok(hints.includes('turn-unbalanced'))
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, broken), [])
+  // 只读：会话未被改动
+  assert.equal(persistence.sessions.get('sess-broken').events.length, 4)
+})
+
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）
 function registeredDef(ctx, toolName = 'import_claude') {
   return ctx.tools.registered(toolName)
@@ -3371,16 +3454,16 @@ test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-im
   assert.equal(imp.kind, 'exact')
   assert.equal(typeof sessions.handler, 'function')
   assert.equal(typeof imp.handler, 'function')
-  // 只加路由，不加工具：15 导入 + import_agents + scan/export/sync/list/retract + bundle 导出/还原 = 23，注册数不变
-  assert.equal(registered.length, 23)
+  // 只加路由，不加工具：15 导入 + import_agents + scan/export×3/sync/list/retract + bundle 导出/还原 + verify = 26，注册数不变
+  assert.equal(registered.length, 26)
 })
 
-test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、23 工具照常注册、无路由', () => {
+test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、26 工具照常注册、无路由', () => {
   const { ctx, webRoutes, registered } = makeCtx({}, { noWebServer: true })
   apply(ctx)
   // 缺 webServer 只是不注册面板路由，导入工具不受影响（CI headless 冒烟场景）
   assert.equal(webRoutes.length, 0)
-  assert.equal(registered.length, 23)
+  assert.equal(registered.length, 26)
 })
 
 test('REQ-41 /api-import/sessions handler：合成夹具经 discoverSessions 返回会话、未知来源 400', async () => {
