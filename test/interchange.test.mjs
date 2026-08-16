@@ -37,6 +37,12 @@ function sampleConverted() {
   }
 }
 
+test('INTERCHANGE_SCHEMA: 顶层必填字段与 version const 正确', () => {
+  assert.equal(INTERCHANGE_SCHEMA.properties.version.const, INTERCHANGE_VERSION)
+  assert.equal(INTERCHANGE_SCHEMA.properties.interchange.const, INTERCHANGE_NAMESPACE)
+  assert.deepEqual(INTERCHANGE_SCHEMA.required, ['interchange', 'version', 'meta', 'turns'])
+})
+
 test('validateInterchange: 合法文档通过', () => {
   const doc = serializeInterchange(sampleConverted())
   const r = validateInterchange(doc)
