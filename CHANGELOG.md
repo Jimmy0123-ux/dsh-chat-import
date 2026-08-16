@@ -9,6 +9,132 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
+## [0.5.0] - 2026-08-16
+
+Fourth minor release — completes the interchange / interop track and the
+remaining P2/P3 requirements (REQ-09/18/19/21/22/23/30/39/43/45/51/56/62):
+interchange v1 protocol + degradation reporting, bundle backup & cross-machine
+restore, four-way matrix interop, `/resume-claude` / `/resume-codex` handoff,
+ChatGPT branch restore, Reasonix WAL merge + Claude compacted import, cwd
+authoritative mapping + home-dir sandbox guard, imported sessions joining the
+default preset scope, Reasonix desktop / Claude-3p discovery, Hermes lineage
+filtering, and the `makeImportTool` parameter-grouping refactor. 484 test
+cases green.
+
+### Added
+
+- **Interchange v1 protocol (REQ-18)** — the internal turns IR is now an
+  explicit, versioned, machine-checkable neutral interchange format: JSON
+  Schema (`INTERCHANGE_SCHEMA`), `validateInterchange` / `serializeInterchange`
+  pure functions, a per-source capability matrix (`SOURCE_CAPABILITIES`, all 14
+  sources) and the protocol spec at `docs/INTERCHANGE.md`. It is the shared
+  middle layer for source→target adapters, the bundle backup format (REQ-56)
+  and the interop matrix (REQ-23).
+- **Fidelity degradation policy (REQ-21)** — a documented degradation-rule
+  table (`DEGRADATION_RULES`, strategies: lossless / text-fallback /
+  skip-placeholder) drives an explicit `degradations` field on every export
+  result (`export_claude` / `export_codex` / `export_kimi` / `export_bundle`):
+  orphan tool results, skipped injections and skipped attachments are listed
+  one-by-one instead of being silently dropped ("fail loudly").
+- **Interchange bundle backup / restore (REQ-56)** — new `export_bundle` /
+  `restore_bundle` tools: a DSH session is serialized to a `.dshbundle.json`
+  (event-level lossless log + double SHA-256 fingerprints — session-level and
+  file-level), tamper/corruption is detected loudly on restore, and restore
+  reuses the `import_dsh` state machine (idempotent key = bundle path,
+  `force` copies). Restore supports directory mode and dry-run preview.
+- **Portable bundle across machines (REQ-62)** — the bundle carries
+  machine-independent landing info (`originalCwd` + `landingHint`); when the
+  original cwd is unreachable on the target machine, restore falls back to the
+  REQ-39-lite grouping (bundle file's directory) and reports
+  `cwdAvailable: false` / `groupedTo` / `restoreNote` (never silent) — the
+  A-machine-export → B-machine-restore flow is a first-class use case
+  (benchmarked against codex-claude-transfer).
+- **Four-way matrix interop + validation (REQ-23)** — new `export_codex` and
+  `export_kimi` tools complete the DSH↔Claude↔Codex↔Kimi matrix out-edges (the
+  import edges already existed); new pure serializers `lib/export/codex.mjs`
+  (skipped-block counting for honest degradation reports) and
+  `lib/export/kimi.mjs` (TurnBegin/StepBegin/TextPart/ThinkPart/ToolCall/
+  ToolResult/TurnEnd wire events) with `verifyCodexJsonl` / `verifyKimiWire`
+  format pre-checks; new `verify_session` tool — read-only structural
+  validation (seq continuity / event-type whitelist / surfaceOp /
+  sourceEventSeqs / turn & step balance / tool-call-result pairing) with
+  per-kind `repairHints`.
+- **Handoff summary resume — `/resume-claude` / `/resume-codex` (REQ-30)** —
+  treats external transcripts as untrusted static history and generates a
+  handoff summary (goal + last request, involved files/artifacts, last tool
+  call, exact stop point, safest next step) injected into the current session;
+  selection by most recent / `id:<sessionId>` / title keyword (multiple
+  matches list candidates without guessing); summaries never include
+  system/developer/thinking content.
+- **ChatGPT branch restore + structured tool arguments (REQ-19)** —
+  `import_chatgpt` gains `branch: 'main' | 'all'`: `all` enumerates every
+  root→leaf path as its own session (placeholder nodes are traversed, the main
+  thread is the last-child chain; branch sessions carry a suffixed sourceId and
+  a branch-marked title). Assistant JSON parts shaped
+  `{tool_name, tool_call_id, args}` now restore as real `tool/call` +
+  `tool/result` (arguments kept as JSON strings, FIFO pairing, `sourceEventSeqs`
+  linkage) instead of degrading to text blocks.
+- **Reasonix V2 WAL merge + Claude compacted import (REQ-22)** —
+  `import_reasonix` automatically merges the `<stem>.events.jsonl` WAL with the
+  checkpoint (a `{type:'replace', messages:[…]}` event is the authoritative
+  snapshot, appended rows win; `walMerged` / `walRecords` reported).
+  `import_claude` gains `compacted: true` — imports only the last compression
+  summary + tail (summary restored as a leading `reasoning` block, title from
+  the summary record).
+- **cwd authoritative mapping + sandbox protection (REQ-39 full)** — new
+  `lib/cwd-map.mjs`: Claude `~/.claude.json` `projects` keys resolve the
+  project slug to the real path (exact / basename / underscore variants,
+  CJK-preserving slug encoding) with an ASCII slug-decode fallback, triggered
+  only when a transcript lacks a cwd (`cwdHint` hook — no per-file
+  `~/.claude.json` reads); Reasonix project slugs decode greedily against disk
+  existence (whole remainder → single segment → merge ≤3 segments, tolerant of
+  `-` in directory names); home-dir candidates are always skipped from
+  workspace attachment (dsh sandbox ACL would reject them), falling back to the
+  source directory.
+- **Imported sessions fully tool-enabled (REQ-43)** — session creation prefers
+  `ctx.agents.create` with a `setup` hook that mounts the default preset scope
+  (`agentPresets.mount`, so read/edit/glob/grep-style tools are visible and
+  tool calls are standard JSON) and binds the default model
+  (`provider`/`model`/`maxTokens` from `agentDefaultModel` + `llm`, so
+  auto-compaction can engage); agents service absent/failing falls back to the
+  plain `sessionPersistence` path without breaking imports.
+- **Source coverage — Reasonix desktop + Claude-3p (REQ-45)** — discovery
+  scans the Windows `%APPDATA%\reasonix` desktop layout
+  (`projects/<slug>/sessions/*.jsonl` with directory-level `.titles.json`
+  authoritative titles, sidecar files excluded) and `%LOCALAPPDATA%\Claude-3p\
+  claude-code-sessions` metadata (resolving `cliSessionId` to the matching
+  `~/.claude/projects` JSONL with a first-line sessionId check; metadata-only
+  fallback when no JSONL exists). Import reuses the existing converters;
+  desktop transcripts get `.titles.json` titles and greedy slug-decoded cwd.
+- **Hermes session lineage (REQ-51)** — `readHermesDb` exposes
+  `parent_session_id` (compaction fork links); `import_hermes` gains
+  `lineage: 'tail'` to import only leaf chain tails (parent sessions explicitly
+  skipped and annotated), and empty-parent skips are annotated with their
+  lineage reason.
+
+### Changed
+
+- **`makeImportTool` parameter convergence (REQ-09)** — the factory spec is
+  grouped into `io` / `derive` / `label` / `schema` / `registry` sub-objects
+  (identity fields stay flat); all 15 import-tool call sites and the panel's
+  `IMPORT_SPECS` consumer were updated to the grouped shape. Pure refactor —
+  zero behavior change, 440 tests green at the commit.
+- **Tool count 21 → 26** — `export_codex`, `export_kimi`, `export_bundle`,
+  `restore_bundle` and `verify_session` join the registration; `index.d.ts`
+  `ToolSurface` and `package.json` `files` (new `lib/restore.mjs`,
+  `lib/verify.mjs`, `lib/handoff.mjs`, `lib/resume-command.mjs`,
+  `lib/cwd-map.mjs`, `lib/export/bundle.mjs`, `lib/export/kimi.mjs`,
+  `docs/INTERCHANGE.md`) stay in sync.
+- **Idempotent import contract unchanged** — bundle restore, compacted imports
+  and branch imports all flow through the same registry / short-path /
+  append / force state machine as every other source.
+
+### Fixed
+
+- **`tool/result` degradation honesty in Codex exports** — the Codex serializer
+  now counts skipped non-text blocks (`skippedBlocks`) instead of silently
+  dropping them, feeding the REQ-21 degradation report.
+
 ## [0.4.0] - 2026-08-16
 
 ### Added
