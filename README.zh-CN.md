@@ -284,7 +284,7 @@ lib/
 
 ## 🤝 贡献
 
-欢迎贡献——fork 本仓库，新建 `feature/<name>` 分支，提交 PR。
+欢迎贡献——fork 本仓库，新建 `feature/<name>` 分支，提交 PR。完整指南见 [CONTRIBUTING.md](CONTRIBUTING.md)（开发环境、提交规范、安全与隐私）。
 
 - **测试：** `npm test` · **跨平台护栏：** `npm run check:linux`
 - 仓库规范见 [AGENTS.md](AGENTS.md)：conventional commit（中文）、双语 README 必须保持同步、插件只消费公开 dsh host 服务、多会话并发走文件认领协议。

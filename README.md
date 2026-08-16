@@ -284,7 +284,7 @@ Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6
 
 ## 🤝 Contributing
 
-Contributions are welcome — fork the repo, create a `feature/<name>` branch, and open a PR.
+Contributions are welcome — fork the repo, create a `feature/<name>` branch, and open a PR. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide (dev setup, conventions, security & privacy).
 
 - **Tests:** `npm test` · **Cross-platform guard:** `npm run check:linux`
 - Repo conventions live in [AGENTS.md](AGENTS.md): conventional commits (Chinese), bilingual README must stay in sync, plugin consumes only public dsh host services, multi-session coordination via the file-claim protocol.
