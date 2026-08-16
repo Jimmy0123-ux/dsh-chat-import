@@ -2643,6 +2643,76 @@ test('REQ-23 verify_session：平衡会话 ok、不平衡会话定位问题 + re
   assert.equal(persistence.sessions.get('sess-broken').events.length, 4)
 })
 
+// ---- REQ-43 导入会话工具完整可用（agentPresets.mount + 默认模型绑定） ----
+
+test('REQ-43 agents.create 路径：setup 挂 preset scope、agentOptions 绑定默认模型；无 agents 回退 sessionPersistence', async () => {
+  // 带 agents/agentPresets/agentDefaultModel/llm 服务的 ctx
+  const agentsCalls = []
+  const mounts = []
+  const services = {
+    agents: {
+      async create({ sessionId, meta, seed, agentOptions, setup }) {
+        agentsCalls.push({ sessionId, meta, seed, agentOptions, setup })
+        // 模拟 agents.create 内部也走 sessionPersistence（导入闭环仍可读）
+        await persistence.create(meta)
+        await persistence.append(sessionId, seed)
+      },
+    },
+    agentPresets: {
+      async mount(agentCtx) { mounts.push(agentCtx); return undefined },
+    },
+    agentDefaultModel: {
+      currentSelection() { return { provider: 'deepseek', model: 'deepseek-chat' } },
+    },
+    llm: {
+      async resolveModelInfo() { return { context: { contextWindow: 131072 }, defaultMaxTokens: 8192 } },
+    },
+  }
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence, attached } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple }, { services })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_claude')
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(value.status, 'imported')
+  // agents.create 被调用：meta/seed/agentOptions/setup 齐备
+  assert.equal(agentsCalls.length, 1)
+  const call = agentsCalls[0]
+  assert.equal(call.sessionId, 'import-sess-simple-001')
+  assert.equal(call.meta.cwd, 'D:\\demo\\proj')
+  assert.ok(Array.isArray(call.seed) && call.seed.length > 0)
+  // 默认模型绑定（provider/model/maxTokens）→ 自动压缩路径可触发
+  assert.deepEqual(call.agentOptions, { provider: 'deepseek', model: 'deepseek-chat', maxTokens: 8192 })
+  // setup 钩子执行 agentPresets.mount（preset 工具对导入会话可见）
+  await call.setup({})
+  assert.equal(mounts.length, 1)
+  // 会话确实落盘（agents.create 内部走 sessionPersistence）
+  assert.ok(persistence.sessions.has('import-sess-simple-001'))
+  assert.equal(attached.length, 1)
+
+  // 无 agents 服务 → 回退 sessionPersistence.create+append（旧路径，行为不变）
+  const { ctx: ctx2, persistence: p2 } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple })
+  apply(ctx2)
+  const def2 = registeredDef(ctx2, 'import_claude')
+  await def2.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.ok(p2.sessions.has('import-sess-simple-001'))
+})
+
+test('REQ-43 agents.create 失败（无 cwd 等）→ 回退 sessionPersistence 不静默', async () => {
+  const services = {
+    agents: {
+      async create() { throw new Error('agents.create: meta.cwd missing') },
+    },
+  }
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple }, { services })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_claude')
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(value.status, 'imported')
+  // 回退路径已落盘
+  assert.ok(persistence.sessions.has('import-sess-simple-001'))
+})
+
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）
 function registeredDef(ctx, toolName = 'import_claude') {
   return ctx.tools.registered(toolName)
