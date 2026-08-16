@@ -4,7 +4,7 @@ import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
@@ -2711,6 +2711,44 @@ test('REQ-43 agents.create 失败（无 cwd 等）→ 回退 sessionPersistence 
   assert.equal(value.status, 'imported')
   // 回退路径已落盘
   assert.ok(persistence.sessions.has('import-sess-simple-001'))
+})
+
+// ---- REQ-39 full：cwd 权威映射 + home-dir 沙箱防护 ----
+
+test('REQ-39 沙箱防护：transcript cwd = 主目录 → 归组回退源文件目录（绝不把主目录当 workspace）', async () => {
+  const home = homedir().replace(/[\\/]+$/, '')
+  const jsonl = [
+    JSON.stringify({ sessionId: 'sess-home-001', type: 'user', cwd: home, message: { role: 'user', content: 'hi' } }),
+    JSON.stringify({ sessionId: 'sess-home-001', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }),
+  ].join('\n')
+  const { ctx, attached } = makeCtx({ 'D:\\demo\\proj\\sess-home-001.jsonl': jsonl })
+  apply(ctx)
+  await registeredDef(ctx, 'import_claude').execute({ path: 'D:\\demo\\proj\\sess-home-001.jsonl' })
+  // 归组落在源文件目录，不是主目录
+  assert.equal(attached.length, 1)
+  assert.equal(attached[0].ws, 'D:\\demo\\proj')
+})
+
+test('REQ-39 Claude 权威映射：转录无 cwd → ~/.claude.json projects 命中真实路径', async () => {
+  const home = homedir().replace(/[\\/]+$/, '')
+  const jsonl = [
+    JSON.stringify({ sessionId: 'sess-nocwd-001', type: 'user', message: { role: 'user', content: 'hi' } }),
+    JSON.stringify({ sessionId: 'sess-nocwd-001', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }),
+  ].join('\n')
+  const root = 'D:\\demo\\claude\\projects\\D--work-my-proj'
+  const tree = {
+    [root]: 'dir',
+    [root + '\\sess-nocwd-001.jsonl']: jsonl,
+    [home + '\\.claude.json']: JSON.stringify({ projects: { 'D:\\work\\my-proj': { folderName: 'my-proj' } } }),
+  }
+  const { ctx, persistence } = makeCtx(tree)
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_claude')
+  const value = await def.execute({ path: root + '\\sess-nocwd-001.jsonl' })
+  assert.equal(value.status, 'imported')
+  // meta.cwd = 权威映射结果（真实路径），非 slug 目录名
+  const saved = persistence.sessions.get('import-sess-nocwd-001')
+  assert.equal(saved.meta.cwd, 'D:\\work\\my-proj')
 })
 
 // 辅助：从 ctx.tools 按名字取回定义（apply 内部调用 register）
