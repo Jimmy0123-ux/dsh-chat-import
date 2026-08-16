@@ -36,6 +36,8 @@
     "lib/toolkit.mjs",
     "lib/restore.mjs",
     "lib/verify.mjs",
+    "lib/handoff.mjs",
+    "lib/resume-command.mjs",
     "lib/export-tool.mjs",
     "lib/prompt-hint.mjs",
     "lib/retract.mjs",
