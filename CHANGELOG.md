@@ -9,9 +9,25 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
-## [Unreleased]
+## [0.4.0] - 2026-08-16
 
 ### Added
+
+- **Packaging compliance — `plugin_check` clean (issue #8)** — the v0.3.1
+  verdict (`missing-main-or-types` / `no-tsconfig` / `missing-peer` /
+  `no-build-script`) is addressed with honest zero-build artifacts: a
+  hand-written `index.d.ts` type surface (declared via `types` and the
+  `exports["."].types` condition; `ToolSurface` types all 21 registered
+  tools' parameters / results, aligned to the `makeImportTool` schemas),
+  `peerDependencies.cordis` (`^4.0.0`), a minimal `tsconfig.json`, and
+  `scripts.build` / `scripts.prepack` running `.github/scripts/
+  build-check.mjs` — a publish-surface self-check (files whitelist
+  completeness + `node --check` syntax over every shipped `.mjs`/`.js` +
+  lockfile root version match) that aborts the publish on any failure.
+- **Star History chart on the bilingual READMEs** — a dedicated `⭐ Star
+  History` section embeds the `api.star-history.com` chart
+  (linked to the interactive page), making the 35★-in-two-days growth
+  curve visible at a glance.
 
 - **Two-way incremental sync control panel** — sidebar panel gains a Sync tab
   (`GET/POST /api-import/sync`). Optional inbound watch (Claude / Codex / Grok
