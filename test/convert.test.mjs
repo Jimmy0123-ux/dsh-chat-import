@@ -703,6 +703,144 @@ test('convertChatgptJson: tool 节点降级为文本块，不再产生孤儿 too
   assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
 })
 
+// ---- REQ-19：分支还原 + 工具参数结构化 ----
+
+test('convertChatgptJson: branch:all 枚举全部分支会话（main = 最后 child 链）', () => {
+  // 合成多分支 mapping：root user → assistant A（children: n3 / n4 两条回复分支），
+  // n4 分支继续 n5（占位）→ n6（assistant 更正）
+  const raw = JSON.stringify([{
+    id: 'conv-branch-001',
+    title: 'Branch chat',
+    create_time: 1710010000,
+    mapping: {
+      'n1': {
+        id: 'n1',
+        message: { id: 'm1', author: { role: 'user' }, content: { content_type: 'text', parts: ['怎么煮意面？'] }, create_time: 1710010000 },
+        parent: null,
+        children: ['n2'],
+      },
+      'n2': {
+        id: 'n2',
+        message: { id: 'm2', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['两种做法：'] }, create_time: 1710010100 },
+        parent: 'n1',
+        children: ['n3', 'n4'],
+      },
+      'n3': {
+        id: 'n3',
+        message: { id: 'm3', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['做法 A：aglio e olio。'] }, create_time: 1710010200 },
+        parent: 'n2',
+        children: [],
+      },
+      'n4': {
+        id: 'n4',
+        message: { id: 'm4', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['做法 B：cacio e pepe。'] }, create_time: 1710010300 },
+        parent: 'n2',
+        children: ['n5'],
+      },
+      'n5': {
+        id: 'n5',
+        message: null, // 占位节点
+        parent: 'n4',
+        children: ['n6'],
+      },
+      'n6': {
+        id: 'n6',
+        message: { id: 'm6', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['更正：B 用 pecorino。'] }, create_time: 1710010400 },
+        parent: 'n5',
+        children: [],
+      },
+    },
+  }])
+
+  // main 模式：只导最后 child 链（n1→n2→n4→n6），n3 分支不出现
+  const main = convertChatgptJson(raw, {})
+  assert.equal(main.conversations.length, 1)
+  const cMain = main.conversations[0]
+  assert.equal(cMain.meta.id, 'import-conv-branch-001')
+  const mainTexts = cMain.events.filter((e) => e.type === 'assistant/message').map((e) => e.data.message.content[0].text)
+  assert.deepEqual(mainTexts, ['两种做法：', '做法 B：cacio e pepe。', '更正：B 用 pecorino。'])
+
+  // all 模式：两条 root→leaf 路径各成一会话
+  const all = convertChatgptJson(raw, { branch: 'all' })
+  assert.equal(all.conversations.length, 2)
+  const main2 = all.conversations.find((c) => c.meta.id === 'import-conv-branch-001')
+  const branch = all.conversations.find((c) => c.meta.id !== 'import-conv-branch-001')
+  assert.ok(main2)
+  assert.ok(branch)
+  // 主线程与 main 模式一致（最后 child 链）
+  const main2Texts = main2.events.filter((e) => e.type === 'assistant/message').map((e) => e.data.message.content[0].text)
+  assert.deepEqual(main2Texts, ['两种做法：', '做法 B：cacio e pepe。', '更正：B 用 pecorino。'])
+  // 分支会话：sourceId 带分支叶子尾缀（registry 幂等键不覆盖）、标题带分支标记
+  assert.match(branch.meta.sourceId, /^conv-branch-001-n\d+$/)
+  assert.match(branch.title, /Branch chat（分支 /)
+  const branchTexts = branch.events.filter((e) => e.type === 'assistant/message').map((e) => e.data.message.content[0].text)
+  assert.deepEqual(branchTexts, ['两种做法：', '做法 A：aglio e olio。'])
+  // 两会话都平衡
+  for (const c of all.conversations) {
+    const types = c.events.map((e) => e.type)
+    assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
+  }
+})
+
+test('convertChatgptJson: 工具消息还原 tool/call + tool/result（参数结构化 + sourceEventSeqs）', () => {
+  const raw = JSON.stringify([{
+    id: 'conv-tool2-001',
+    title: 'Tool chat 2',
+    create_time: 1710020000,
+    mapping: {
+      'n1': {
+        id: 'n1',
+        message: { id: 'm1', author: { role: 'user' }, content: { content_type: 'text', parts: ['算一下 1+1'] }, create_time: 1710020000 },
+        parent: null,
+        children: ['n2'],
+      },
+      'n2': {
+        id: 'n2',
+        message: {
+          id: 'm2',
+          author: { role: 'assistant' },
+          content: { content_type: 'text', parts: ['{"tool_name":"calculator","tool_call_id":"call_abc","args":{"expr":"1+1"}}'] },
+          create_time: 1710020100,
+        },
+        parent: 'n1',
+        children: ['n3'],
+      },
+      'n3': {
+        id: 'n3',
+        message: { id: 'm3', author: { role: 'tool' }, name: 'calculator', recipient: 'functions.calculator', content: { content_type: 'text', parts: ['2'] }, create_time: 1710020200 },
+        parent: 'n2',
+        children: ['n4'],
+      },
+      'n4': {
+        id: 'n4',
+        message: { id: 'm4', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['结果是 2。'] }, create_time: 1710020300 },
+        parent: 'n3',
+        children: [],
+      },
+    },
+  }])
+  const out = convertChatgptJson(raw, {})
+  assert.equal(out.conversations.length, 1)
+  const c = out.conversations[0]
+  // tool/call 结构化（arguments 保持 JSON 字符串，与 Claude/Codex 语义一致）
+  const calls = c.events.filter((e) => e.type === 'tool/call')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].data.callId, 'call_abc')
+  assert.equal(calls[0].data.name, 'calculator')
+  assert.equal(calls[0].data.arguments, '{"expr":"1+1"}')
+  assert.equal(c.toolCalls, 1)
+  // tool/result 配对（sourceEventSeqs 指向 call 的 seq）
+  const results = c.events.filter((e) => e.type === 'tool/result')
+  assert.equal(results.length, 1)
+  assert.equal(results[0].data.message.content[0].toolCallId, 'call_abc')
+  assert.equal(results[0].data.message.content[0].content[0].text, '2')
+  assert.deepEqual(results[0].sourceEventSeqs, [calls[0].seq])
+  // 工具调用内容块不进 assistant 文本（不重复）
+  const asst = c.events.find((e) => e.type === 'assistant/message').data.message
+  assert.ok(!asst.content.some((b) => b.type === 'text' && b.text.includes('tool_name')))
+  assertToolPairing(c.events)
+})
+
 // ---- Cursor agent transcript ----
 
 test('convertCursorJsonl: 简单问答、user_query 剥离、平衡回合', () => {

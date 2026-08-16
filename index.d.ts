@@ -34,7 +34,7 @@ export declare function exportClaudeSession(
 export interface ToolSurface {
   import_claude(options: ImportOptions): Promise<ImportResult>
   import_codex(options: ImportOptions): Promise<ImportResult>
-  import_chatgpt(options: ImportOptions): Promise<ImportResult>
+  import_chatgpt(options: ImportOptions & { branch?: 'main' | 'all' }): Promise<ImportResult>
   import_cursor(options: ImportOptions): Promise<ImportResult>
   import_gemini(options: ImportOptions): Promise<ImportResult>
   import_reasonix(options: ImportOptions): Promise<ImportResult>

@@ -673,6 +673,47 @@ test('import_chatgpt 幂等：重复导入同一文件只落盘一次', async ()
   assert.equal(persistence.sessions.size, 2)
 })
 
+test('REQ-19 import_chatgpt branch:all：多分支会话全部落盘、幂等、schema 校验', async () => {
+  const branchFixture = JSON.stringify([{
+    id: 'conv-branch-x',
+    title: 'Branch x',
+    create_time: 1710030000,
+    mapping: {
+      'a1': { id: 'a1', message: { id: 'ma1', author: { role: 'user' }, content: { content_type: 'text', parts: ['问'] }, create_time: 1710030000 }, parent: null, children: ['a2'] },
+      'a2': { id: 'a2', message: { id: 'ma2', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['两条路'] }, create_time: 1710030100 }, parent: 'a1', children: ['b1', 'b2'] },
+      'b1': { id: 'b1', message: { id: 'mb1', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['路 A'] }, create_time: 1710030200 }, parent: 'a2', children: [] },
+      'b2': { id: 'b2', message: { id: 'mb2', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['路 B'] }, create_time: 1710030300 }, parent: 'a2', children: [] },
+    },
+  }])
+  const { ctx, persistence } = makeCtx({
+    'D:\\demo\\chatgpt\\main.json': branchFixture,
+    'D:\\demo\\chatgpt\\branches.json': branchFixture,
+  })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_chatgpt')
+  // 默认 main：只有主线程（b2，最后 child）一个会话
+  const main = await def.execute({ path: 'D:\\demo\\chatgpt\\main.json' })
+  assert.equal(main.imported, 1)
+  assert.equal(persistence.sessions.size, 1)
+  assert.ok(persistence.sessions.has('import-conv-branch-x'))
+  // all：主会话 + 分支会话全部落盘（branch 参数进 schema）
+  const schemaBranch = def.parameters.properties.branch
+  assert.ok(schemaBranch)
+  assert.deepEqual(schemaBranch.enum, ['main', 'all'])
+  // 分支 fixture：a2 分叉 b1/b2——主线程 = 最后 child（b2），all = 主 + b1 共 2 会话
+  const all = await def.execute({ path: 'D:\\demo\\chatgpt\\branches.json', branch: 'all' })
+  assert.equal(all.imported, 2)
+  assert.equal(persistence.sessions.size, 3)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, all), [])
+  const branchIds = [...persistence.sessions.keys()].filter((id) => id !== 'import-conv-branch-x')
+  assert.equal(branchIds.length, 2)
+  assert.ok(branchIds.every((id) => id.startsWith('import-conv-branch-x')))
+  // 幂等：all 再导全部 already-imported
+  const again = await def.execute({ path: 'D:\\demo\\chatgpt\\branches.json', branch: 'all' })
+  assert.equal(again.imported, 0)
+  assert.equal(again.alreadyImported, 2)
+})
+
 test('REQ-55 multi 源归档重导：部分会话归档 → 重导只对归档会话建后缀新副本，其余幂等', async () => {
   const file = 'D:\\demo\\chatgpt\\conversations.json'
   const { ctx, persistence } = makeCtx({ [file]: load('chatgpt-export.json') })
