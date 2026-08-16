@@ -78,7 +78,7 @@
 | REQ-47 | P1 | 新源：OpenClaw 适配（第 10 源） | ✅ |
 | REQ-48 | P1 | 新源：Hermes 适配（第 11 源） | ✅ |
 | REQ-49 | P1 | 缺陷：trimTurns L2 锚点收缩静默丢轮 | ✅ |
-| REQ-50 | P2 | Hermes-agent（NousResearch）变体 tool_calls / reasoning 独立列 | ☐ |
+| REQ-50 | P2 | Hermes-agent（NousResearch）变体 tool_calls / reasoning 独立列 | ✅ |
 | REQ-51 | P3 | Hermes 会话 lineage（parent_session_id 压缩分叉） | ☐ |
 | REQ-52 | P2 | Codex 官方 App Server API 路线侦察 | ✅ 维持 rollout |
 | REQ-53 | P2 | 新会话开始迁移提示（per-project 记忆） | ✅ |
@@ -104,7 +104,6 @@
 - **REQ-30 — 交接摘要续聊**：`/resume-claude` / `/resume-codex`，把外部 transcript 当不可信静态历史生成交接摘要。
 - **REQ-39 — cwd 权威映射 + 沙箱防护（full）**：Claude `.claude.json` 权威映射 + Reasonix slug 贪心解码 + home-dir 沙箱防护。
 - **REQ-43 — 导入会话工具完整可用**：导入会话加入默认 preset scope（工具与正常会话一致）+ 绑定默认模型。
-- **REQ-50 — Hermes-agent 变体 schema**：支持独立 `tool_calls` / `reasoning` 列的变体。
 - **REQ-56 — DSH 会话通用导出/备份**：interchange bundle + SHA-256 指纹 + 还原预览（与 REQ-18 联动，跨机器用例见 REQ-62）。
 - **REQ-61 — Claude 资产持久化导入**：`import_agents` 扩展 Claude 源（memory / CLAUDE.md / skills 落盘为 DSH 资产），对齐 dsh-claude-move 卖点。
 - **REQ-62 — 便携 bundle 跨机器移动**：`.codexbundle` 式导出（A 机 → B 机还原 0 skipped，cwd 不可达走 REQ-39-lite 回退归组），对标 codex-claude-transfer；可选 LAN sync。
