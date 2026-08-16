@@ -1,14 +1,14 @@
 // sync.test.mjs — 双向增量同步：配置、Codex/Grok 往返、入站巡检、出站写回
 import { test, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, readdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, readdirSync, appendFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serializeCodexJsonl } from '../lib/export/codex.mjs'
 import { serializeGrokbuildJsonl, buildGrokSummary } from '../lib/export/grokbuild.mjs'
 import { convertCodexJsonl, convertGrokbuildJson } from '../convert.mjs'
 import { loadSyncConfig, saveSyncConfig, DEFAULT_INTERVAL_MS } from '../lib/sync-config.mjs'
-import { runSyncOnce, stopSyncTimer } from '../lib/sync-loop.mjs'
+import { runSyncOnce, stopSyncTimer, lazyInboundCheck } from '../lib/sync-loop.mjs'
 import { registerSyncRoutes } from '../lib/sync-panel.mjs'
 import { clearScanCache } from '../lib/discovery.mjs'
 
@@ -354,4 +354,95 @@ test('grok 回写真实源目录：summary.json 保留既有 info.id（不破坏
   const chat = readFileSync(join(grokDir, 'chat_history.jsonl'), 'utf8')
   assert.match(chat, /既有问题/)
   assert.match(chat, /新问题/)
+})
+
+// ── REQ-54 watch 懒检查（mtime 门控，无常驻监听）──────────────────────────
+
+test('sync 配置：watch 默认关闭，保存后读回', async () => {
+  const dir = join(process.env.DSH_HOME, 'dsh-chat-import')
+  const fresh = await loadSyncConfig(dir)
+  assert.equal(fresh.watch.enabled, false)
+  const saved = await saveSyncConfig(dir, { watch: { enabled: true } })
+  assert.equal(saved.watch.enabled, true)
+  const again = await loadSyncConfig(dir)
+  assert.equal(again.watch.enabled, true)
+})
+
+test('watch 懒检查：mtime 未越过 importedAt → 扫描不续写；源长大且 mtime 越过 → appended', async () => {
+  const home = process.env.DSH_HOME
+  const srcDir = join(home, 'claude-watch')
+  mkdirSync(srcDir, { recursive: true })
+  const file = join(srcDir, 'sess-watch-001.jsonl')
+  writeFileSync(file, [
+    JSON.stringify({ sessionId: 'sess-watch-001', type: 'user', cwd: join(home, 'proj'), message: { role: 'user', content: 'watch 问题' } }),
+    JSON.stringify({ sessionId: 'sess-watch-001', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'watch 回答' }] } }),
+  ].join('\n') + '\n')
+  const { ctx } = makeRealCtx(home)
+  const registryDir = join(home, 'dsh-chat-import')
+  await saveSyncConfig(registryDir, {
+    inbound: { enabled: true, formats: ['claude'] },
+    outbound: { enabled: false, targets: [] },
+    watch: { enabled: true },
+  })
+  // 先完整导入一轮（registry 记录 importedAt）
+  const first = await runSyncOnce(ctx, registryDir, { path: srcDir })
+  assert.equal(first.ok, true)
+  assert.equal(first.inbound.imported, 1)
+  const rec = JSON.parse(readFileSync(join(registryDir, 'imports.json'), 'utf8')).imports[file]
+  assert.equal(typeof rec.importedAt, 'number')
+
+  // mtime 未越过 importedAt → 只扫描不续写（mtime 比较门控）
+  utimesSync(file, new Date(rec.importedAt - 1000), new Date(rec.importedAt - 1000))
+  const cold = await lazyInboundCheck(ctx, registryDir, { path: srcDir })
+  assert.equal(cold.triggered, true)
+  assert.equal(cold.scanned, 1)
+  assert.equal(cold.checked, 1)
+  assert.equal(cold.imported, 0)
+  assert.equal(cold.appended, 0)
+
+  // 源长大（完整新轮 user+assistant）+ mtime 越过 importedAt → 续写 appended
+  appendFileSync(file, [
+    JSON.stringify({ sessionId: 'sess-watch-001', type: 'user', cwd: join(home, 'proj'), message: { role: 'user', content: 'watch 第二问' } }),
+    JSON.stringify({ sessionId: 'sess-watch-001', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'watch 第二答' }] } }),
+  ].join('\n') + '\n')
+  utimesSync(file, new Date(rec.importedAt + 5000), new Date(rec.importedAt + 5000))
+  const hot = await lazyInboundCheck(ctx, registryDir, { path: srcDir })
+  assert.equal(hot.appended, 1)
+  assert.equal(hot.imported, 0)
+})
+
+test('watch 懒检查：未开启 / 入站关闭 → 零扫描零续写', async () => {
+  const home = process.env.DSH_HOME
+  const { ctx } = makeRealCtx(home)
+  const registryDir = join(home, 'dsh-chat-import')
+  await saveSyncConfig(registryDir, {
+    inbound: { enabled: true, formats: ['claude'] },
+    outbound: { enabled: false, targets: [] },
+    watch: { enabled: false },
+  })
+  const off = await lazyInboundCheck(ctx, registryDir)
+  assert.equal(off.scanned, 0)
+  assert.equal(off.checked, 0)
+})
+
+test('面板 GET 打开（watch 开启）→ 触发懒检查并返回 lazyCheck', async () => {
+  const home = process.env.DSH_HOME
+  const { ctx, webRoutes } = makeRealCtx(home)
+  const registryDir = join(home, 'dsh-chat-import')
+  await saveSyncConfig(registryDir, {
+    inbound: { enabled: true, formats: ['claude'] },
+    outbound: { enabled: false, targets: [] },
+    watch: { enabled: true },
+  })
+  registerSyncRoutes(ctx, ctx.webServer, registryDir)
+  const route = webRoutes.find((r) => r.path === '/api-import/sync')
+  const chunks = []
+  const req = { method: 'GET', async *[Symbol.asyncIterator]() {} }
+  const res = { writeHead() {}, end(body) { chunks.push(body) } }
+  await route.handler(req, res)
+  const data = JSON.parse(chunks[0])
+  assert.equal(data.ok, true)
+  assert.ok(data.lazyCheck, 'watch 开启时 GET 返回 lazyCheck')
+  assert.equal(data.lazyCheck.triggered, true)
+  assert.equal(typeof data.lazyCheck.scanned, 'number')
 })

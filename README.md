@@ -103,6 +103,7 @@ import_claude({ path: "~/.claude/projects" })
 - **External → DSH**: periodically scan Claude / Codex / Grok for new or grown sessions and import incrementally (same idempotent append state machine).
 - **DSH → External**: write new complete DSH turns back. Imported sessions append to their source file; native DSH sessions get a copy under that agent's default root.
 - Both directions are **off by default**. Turn them on in the panel, or click **Sync now**. Config lives in `$DSH_HOME/dsh-chat-import/sync.json`.
+- **Watch (lazy) mode** — when enabled, opening the panel checks the mtimes of already-imported sources and incrementally appends any that grew (idempotent, no resident watcher).
 
 <details>
 <summary><b>Uninstall</b></summary>

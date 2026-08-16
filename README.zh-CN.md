@@ -103,6 +103,7 @@ import_claude({ path: "~/.claude/projects" })
 - **外部 → DSH**：按间隔巡检 Claude / Codex / Grok 的新增或增长会话，走既有幂等续写。
 - **DSH → 外部**：把 DSH 新增完整轮次写回对应 agent。导入源追加到原文件；原生 DSH 会话在该 agent 默认根下落一份副本。
 - 两个方向**默认关闭**，必须在面板里打开开关，或点「立即同步」。配置在 `$DSH_HOME/dsh-chat-import/sync.json`。
+- **Watch 懒检查模式** — 开启后，打开面板即按 mtime 检查已导入源，增长者增量续写（幂等，无常驻监听）。
 
 <details>
 <summary><b>卸载</b></summary>
