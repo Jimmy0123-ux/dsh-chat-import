@@ -33,6 +33,7 @@ export {
   SOURCE_CAPABILITIES,
   DEGRADATION_RULES,
   summarizeDegradations,
+  exportDegradations,
 } from './lib/convert/interchange.mjs'
 
 export {

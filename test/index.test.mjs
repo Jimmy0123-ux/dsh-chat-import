@@ -2346,6 +2346,22 @@ test('export_claude 注入会话：非人类 user/message 跳过并计数', asyn
   assert.equal(lines[2].parentUuid, null) // 首个真实 user 成为链头
 })
 
+test('REQ-21 export_claude 降级报告：附件块跳过 + 注入跳过逐条列出（不静默）', async () => {
+  const { ctx, persistence, writes } = makeCtx({})
+  await seedSession(persistence, 'sess-degrade', { version: 0, id: 'sess-degrade', createdAt: 1786000000000, cwd: 'D:\\demo\\proj' }, [
+    mkEvent('user/message', 0, 1786000000000, { id: 'u1', role: 'user', content: [{ type: 'text', text: '看图' }], source: { kind: 'user' } }, { surfaceOp: 'append' }),
+    mkEvent('assistant/message', 1, 1786000000000, { id: 'a1', message: { role: 'assistant', content: [{ type: 'text', text: '这是图' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } }] }, source: { kind: 'model', provider: 'dsh' } }, { surfaceOp: 'append' }),
+  ])
+  apply(ctx)
+  const def = registeredDef(ctx, 'export_claude')
+  const value = await def.execute({ sessionId: 'sess-degrade', outputDir: OUT })
+  // image 块无法表达 → attachment-skipped 1 条；无注入/孤儿结果
+  assert.deepEqual(value.degradations, [{ id: 'attachment-skipped', kind: 'attachmentSkipped', strategy: 'skip-placeholder', count: 1 }])
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+  const line = writes[0].content.slice(0, -1).split('\n').map((l) => JSON.parse(l))[3]
+  assert.deepEqual(line.message.content, [{ type: 'text', text: '这是图' }]) // 图片块被跳过
+})
+
 test('export_claude 中断会话：末尾补发空 tool_result，会话日志只读不被触碰', async () => {
   const { ctx, persistence, writes } = makeCtx({})
   const events = [

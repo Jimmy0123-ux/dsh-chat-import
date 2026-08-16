@@ -87,6 +87,8 @@
 | `branch-collapsed` | branches | text-fallback | 目标会话无分支概念 → 分支会话只导主线程 |
 | `attachment-skipped` | attachments | skip-placeholder | 非文本内容块无法表达 → 跳过并计数 |
 | `compacted-unavailable` | compacted | text-fallback | 无压缩摘要 → 超长会话由预算三层保护被动截断 |
+| `injection-skipped` | — | skip-placeholder | 非人类注入消息（system-reminder 等）不进入会话 → 跳过并计数 |
+| `orphan-tool-result` | toolResults | skip-placeholder | 源日志无对应 tool/call 的工具结果（中途开始的 transcript）→ 丢弃并计数 |
 
 ## 4. 便携 bundle（REQ-56/62）
 

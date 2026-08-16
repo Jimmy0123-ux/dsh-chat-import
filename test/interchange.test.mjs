@@ -11,6 +11,7 @@ import {
   SOURCE_CAPABILITIES,
   DEGRADATION_RULES,
   summarizeDegradations,
+  exportDegradations,
 } from '../convert.mjs'
 import { validateSessionEvents } from '../convert.mjs'
 import { synthesizeSession, SESSION_FORMAT_VERSION } from '../lib/convert/core.mjs'
@@ -124,4 +125,14 @@ test('DEGRADATION_RULES: 规则 id 唯一、kind 唯一、策略三态合法', (
     kinds.add(rule.kind)
     assert.ok(['lossless', 'text-fallback', 'skip-placeholder'].includes(rule.strategy), rule.id)
   }
+})
+
+test('exportDegradations: 序列化器计数 → 结构化降级清单（REQ-21 导出结果字段）', () => {
+  const out = exportDegradations({ droppedToolResults: 2, skippedInjections: 1, skippedBlocks: 0 })
+  assert.deepEqual(out.map((d) => d.id), ['injection-skipped', 'orphan-tool-result'])
+  assert.equal(out[1].strategy, 'skip-placeholder')
+  assert.equal(out[1].count, 2)
+  // 全零 → undefined（不占结果键）
+  assert.equal(exportDegradations({ droppedToolResults: 0, skippedInjections: 0, skippedBlocks: 0 }), undefined)
+  assert.equal(exportDegradations({}), undefined)
 })
