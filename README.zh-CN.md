@@ -171,7 +171,7 @@ import_agents({ apply: true })     // 写入 $DSH_AGENTS_HOME/skills/<name>/SKIL
 
 ### scan_discover — 只读会话发现
 
-`scan_discover` 扫描全部 14 种格式的已知数据根，返回结构化会话索引（标题、项目、路径、导入状态），供批导入前预览。零副作用：
+`scan_discover` 扫描全部 14 种格式的已知数据根，返回结构化会话索引（标题、项目、cwd、路径、导入状态，源目录为 git 仓库时附分支/dirty），供批导入前预览。零副作用：
 
 ```
 scan_discover()

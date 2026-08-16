@@ -4,8 +4,11 @@
 // query 过滤、multi 源 partial 状态、chatgpt 显式路径、目录探测格式自拒。
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { join } from 'node:path'
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import {
   discoverSessions, createScanCache, clearScanCache, FORMATS, TITLE_MAX_LEN,
   isInjectedTitle, normalizeTitle, layoutProject, resolveImportStatus,
@@ -541,4 +544,53 @@ test('isInjectedTitle / normalizeTitle / layoutProject 纯函数', () => {
 test('FORMATS 与工具 schema enum 一致（14 种）', () => {
   assert.equal(FORMATS.length, 14)
   assert.deepEqual([...FORMATS].sort(), ['chatgpt', 'claude', 'codex', 'cursor', 'dsh', 'gemini', 'grokbuild', 'hermes', 'kimi', 'openclaw', 'opencode', 'pi', 'reasonix', 'zcode'])
+})
+
+// ── git 状态（REQ-58）──────────────────────────────────────────────────────
+
+test('git 状态：cwd 为真实 git 仓库 → 分支/dirty 正确；非仓库目录 → null 不报错', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-git-'))
+  try {
+    // 真实 git 仓库 fixture（git 不可用时整段跳过——git 增强是发现层的可选信息）
+    const run = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+    try {
+      run(['init', '-q'], repo)
+      run(['config', 'user.email', 'tester@example.invalid'], repo)
+      run(['config', 'user.name', 'tester'], repo)
+      writeFileSync(join(repo, 'a.txt'), 'v1\n')
+      run(['add', '.'], repo)
+      run(['commit', '-q', '-m', 'init'], repo)
+    } catch {
+      return // git 缺失/异常：跳过该用例（CI 与本机均有 git）
+    }
+    const expectedBranch = run(['branch', '--show-current'], repo)
+
+    const transPath = join(repo, 'sess.jsonl')
+    const files = new Map([
+      [repo, { type: 'dir' }],
+      [transPath, { type: 'file', text: j({ sessionId: 'sess', type: 'user', cwd: repo, message: { role: 'user', content: 'hi' } }), mtimeMs: 1 }],
+    ])
+    const clean = await discoverSessions({ path: repo, format: 'claude', host: mockHost(files), imports: {}, cache: createScanCache() })
+    assert.equal(clean.sessions.length, 1)
+    assert.equal(clean.sessions[0].gitBranch, expectedBranch)
+    assert.equal(clean.sessions[0].gitDirty, false)
+
+    // 工作树变更 → dirty=true；条目命中 TTL 缓存，git 状态仍按当次扫描重算（不入缓存）
+    appendFileSync(join(repo, 'a.txt'), 'v2\n')
+    const dirty = await discoverSessions({ path: repo, format: 'claude', host: mockHost(files), imports: {}, cache: createScanCache() })
+    assert.equal(dirty.sessions[0].gitBranch, expectedBranch)
+    assert.equal(dirty.sessions[0].gitDirty, true)
+
+    // 仓库外的不存在目录（mock 树服务即可，无需真实存在）→ 字段 null、不报错
+    const plainCwd = join(dirname(repo), 'dsh-missing-project')
+    const files2 = new Map([
+      [plainCwd, { type: 'dir' }],
+      [join(plainCwd, 'sess2.jsonl'), { type: 'file', text: j({ sessionId: 'sess2', type: 'user', cwd: plainCwd, message: { role: 'user', content: 'hi' } }), mtimeMs: 1 }],
+    ])
+    const plain = await discoverSessions({ path: plainCwd, format: 'claude', host: mockHost(files2), imports: {}, cache: createScanCache() })
+    assert.equal(plain.sessions[0].gitBranch, null)
+    assert.equal(plain.sessions[0].gitDirty, null)
+  } finally {
+    rmSync(repo, { recursive: true, force: true })
+  }
 })

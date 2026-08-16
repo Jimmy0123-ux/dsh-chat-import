@@ -372,10 +372,13 @@ export interface DiscoveredSession {
   sessionId: string
   title?: string | null
   project?: string | null
+  cwd?: string | null
   createdAt?: number | null
   lastActiveAt?: number | null
   messageCount?: number | null
   sourcePath: string
+  gitBranch?: string | null
+  gitDirty?: boolean | null
   importStatus: ImportStatusLabel
 }
 

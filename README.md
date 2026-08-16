@@ -171,7 +171,7 @@ Semantics: same-name conflicts across sources get a `-pi` / `-opencode` suffix; 
 
 ### scan_discover — read-only session discovery
 
-`scan_discover` scans the known data roots of all 14 formats and returns a structured session index (title, project, path, import status) so you can preview before a batch import. Zero side effects:
+`scan_discover` scans the known data roots of all 14 formats and returns a structured session index (title, project, cwd, path, import status, and git branch/dirty when the source directory is a git repo) so you can preview before a batch import. Zero side effects:
 
 ```
 scan_discover()
