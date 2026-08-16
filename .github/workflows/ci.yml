@@ -20,6 +20,9 @@ jobs:
       # 严格按 package-lock.json 复现依赖树（与 npm install 不同，lockfile 与 package.json 不一致时直接失败）
       - run: npm ci --no-audit --no-fund
       - run: npm test
+      # REQ-13：覆盖率护栏——line ≥ 75%（基线 81.48%，宽松下限防显著回归）。
+      # --test-coverage-lines 阈值 flag 需 node >= 22.7（CI 用 latest 22.x）。
+      - run: npm run coverage
       # REQ-10：eslint flat config（无插件），与 test 同机跑，违规即红
       - run: npm run lint
       # 跨平台路径纪律护栏（check-linux-compat）：mock 树查找必须分隔符归一、node:path
