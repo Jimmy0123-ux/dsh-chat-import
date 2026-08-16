@@ -183,7 +183,7 @@ test('REQ-59 runAgentsImport: dry-run 预览零副作用 + apply 落盘 + proven
   const ctx = { fs: fsLike }
 
   // 1) dry-run：plan 返回但零写盘
-  const dry = await runAgentsImport(ctx, { piRoot, opencodeRoot: ocRoot, agentsHome })
+  const dry = await runAgentsImport(ctx, { piRoot, opencodeRoot: ocRoot, codexRoot: join(root, 'codex'), agentsHome })
   assert.equal(dry.total, 3)
   assert.equal(dry.planned, 3)
   assert.equal(dry.applied, 0)
@@ -193,7 +193,7 @@ test('REQ-59 runAgentsImport: dry-run 预览零副作用 + apply 落盘 + proven
   assert.ok(!existsSync(join(agentsHome, 'skills')))
 
   // 2) apply：落盘 + frontmatter provenance
-  const applied = await runAgentsImport(ctx, { piRoot, opencodeRoot: ocRoot, agentsHome, apply: true })
+  const applied = await runAgentsImport(ctx, { piRoot, opencodeRoot: ocRoot, codexRoot: join(root, 'codex'), agentsHome, apply: true })
   assert.equal(applied.applied, 3)
   const skillsRoot = join(agentsHome, 'skills')
   assert.ok(existsSync(join(skillsRoot, 'reviewer', 'SKILL.md')))
@@ -207,7 +207,7 @@ test('REQ-59 runAgentsImport: dry-run 预览零副作用 + apply 落盘 + proven
   assert.ok(reviewerSkill.includes('review body'))
 
   // 3) 幂等：内容未变 → 全部 skip
-  const again = await runAgentsImport(ctx, { piRoot, opencodeRoot: ocRoot, agentsHome, apply: true })
+  const again = await runAgentsImport(ctx, { piRoot, opencodeRoot: ocRoot, codexRoot: join(root, 'codex'), agentsHome, apply: true })
   assert.equal(again.planned, 3)
   assert.equal(again.applied, 0)
   assert.equal(again.skipped, 3)
@@ -224,12 +224,12 @@ test('REQ-59 runAgentsImport: kind:dsh 源过滤 + 缺目录静默空清单', as
 
   const ctx = { fs: realFs(root) }
   // 源带 kind:dsh → 0 候选；缺 opencode 目录 → 静默空
-  const r1 = await runAgentsImport(ctx, { piRoot, opencodeRoot: ocRoot, agentsHome })
+  const r1 = await runAgentsImport(ctx, { piRoot, opencodeRoot: ocRoot, codexRoot: join(root, 'codex'), agentsHome })
   assert.equal(r1.total, 0)
   assert.equal(r1.planned, 0)
 
   // 全缺目录 → 空清单不报错
-  const r2 = await runAgentsImport(ctx, { piRoot: join(root, 'missing-pi'), opencodeRoot: join(root, 'missing-oc'), agentsHome })
+  const r2 = await runAgentsImport(ctx, { piRoot: join(root, 'missing-pi'), opencodeRoot: join(root, 'missing-oc'), codexRoot: join(root, 'missing-codex'), agentsHome })
   assert.equal(r2.total, 0)
   assert.equal(r2.planned, 0)
 })
@@ -245,7 +245,7 @@ test('REQ-59 runAgentsImport: 同名跨源冲突落盘为 -source 后缀', async
   writeFileSync(join(ocRoot, 'agents', 'shared.md'), '---\nname: shared\n---\noc body')
 
   const ctx = { fs: realFs(root) }
-  const r = await runAgentsImport(ctx, { piRoot, opencodeRoot: ocRoot, agentsHome, apply: true })
+  const r = await runAgentsImport(ctx, { piRoot, opencodeRoot: ocRoot, codexRoot: join(root, 'codex'), agentsHome, apply: true })
   assert.equal(r.applied, 2)
   const skillsRoot = join(agentsHome, 'skills')
   assert.ok(existsSync(join(skillsRoot, 'shared', 'SKILL.md')))
@@ -270,7 +270,7 @@ test('REQ-61 runAgentsImport: Claude memory/skills/CLAUDE.md 落盘 + provenance
 
   const ctx = { fs: realFs(root) }
   // 1) dry-run：4 个候选（2 memory + 1 skill + 1 CLAUDE.md），零写盘
-  const dry = await runAgentsImport(ctx, { claudeRoot, claudeProjectRoot: projectRoot, agentsHome })
+  const dry = await runAgentsImport(ctx, { piRoot: join(root, 'no-pi'), opencodeRoot: join(root, 'no-oc'), codexRoot: join(root, 'no-codex'), claudeRoot, claudeProjectRoot: projectRoot, agentsHome })
   assert.equal(dry.total, 4)
   assert.equal(dry.planned, 4)
   assert.equal(dry.applied, 0)
@@ -279,7 +279,7 @@ test('REQ-61 runAgentsImport: Claude memory/skills/CLAUDE.md 落盘 + provenance
   assert.ok(!existsSync(join(agentsHome, 'skills')))
 
   // 2) apply：落盘 + provenance（source: claude）
-  const applied = await runAgentsImport(ctx, { claudeRoot, claudeProjectRoot: projectRoot, agentsHome, apply: true })
+  const applied = await runAgentsImport(ctx, { piRoot: join(root, 'no-pi'), opencodeRoot: join(root, 'no-oc'), codexRoot: join(root, 'no-codex'), claudeRoot, claudeProjectRoot: projectRoot, agentsHome, apply: true })
   assert.equal(applied.applied, 4)
   const skillsRoot = join(agentsHome, 'skills')
   const projectSkill = readFileSync(join(skillsRoot, 'project-api', 'SKILL.md'), 'utf8')
@@ -291,7 +291,7 @@ test('REQ-61 runAgentsImport: Claude memory/skills/CLAUDE.md 落盘 + provenance
   assert.ok(claudeMd.includes('project instructions'))
 
   // 3) 幂等：内容未变 → 全部 skip
-  const again = await runAgentsImport(ctx, { claudeRoot, claudeProjectRoot: projectRoot, agentsHome, apply: true })
+  const again = await runAgentsImport(ctx, { piRoot: join(root, 'no-pi'), opencodeRoot: join(root, 'no-oc'), codexRoot: join(root, 'no-codex'), claudeRoot, claudeProjectRoot: projectRoot, agentsHome, apply: true })
   assert.equal(again.planned, 4)
   assert.equal(again.applied, 0)
   assert.equal(again.skipped, 4)
@@ -305,9 +305,62 @@ test('REQ-61: Claude 源带 kind:skill frontmatter 过滤 + 缺目录静默空�
   writeFileSync(join(claudeRoot, 'skills', 'native-skill', 'SKILL.md'), '---\nname: native\nkind: skill\n---\nbody')
   const ctx = { fs: realFs(root) }
   // 已是 DSH 技能（kind:skill）→ 0 候选
-  const r = await runAgentsImport(ctx, { claudeRoot, agentsHome })
+  const r = await runAgentsImport(ctx, { piRoot: join(root, 'no-pi'), opencodeRoot: join(root, 'no-oc'), codexRoot: join(root, 'no-codex'), claudeRoot, agentsHome })
   assert.equal(r.total, 0)
   // 缺 Claude 目录 → 静默空清单不报错
-  const r2 = await runAgentsImport(ctx, { claudeRoot: join(root, 'no-claude'), agentsHome })
+  const r2 = await runAgentsImport(ctx, { piRoot: join(root, 'no-pi'), opencodeRoot: join(root, 'no-oc'), codexRoot: join(root, 'no-codex'), claudeRoot: join(root, 'no-claude'), agentsHome })
   assert.equal(r2.total, 0)
+})
+
+// ── REQ-64：Codex 资产（skills / instructions.md / AGENTS.md / config.toml）────
+
+test('REQ-64 runAgentsImport: Codex skills/instructions/AGENTS/config 落盘 + provenance + 幂等', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agents-'))
+  const codexRoot = join(root, 'codex')
+  const agentsHome = join(root, 'agents-home')
+  mkdirSync(join(codexRoot, 'skills', 'codex-search'), { recursive: true })
+  writeFileSync(join(codexRoot, 'skills', 'codex-search', 'SKILL.md'), '---\nname: Codex Search\ndescription: codex search skill\n---\nsearch body')
+  writeFileSync(join(codexRoot, 'instructions.md'), '# Instructions\nfollow these')
+  writeFileSync(join(codexRoot, 'AGENTS.md'), '# Codex AGENTS\nagents body')
+  writeFileSync(join(codexRoot, 'config.toml'), 'model = "gpt-5"\n[extra]\nkey = "value"')
+
+  const ctx = { fs: realFs(root) }
+  // 1) dry-run：4 个候选，零写盘
+  const dry = await runAgentsImport(ctx, {
+    piRoot: join(root, 'no-pi'), opencodeRoot: join(root, 'no-oc'),
+    claudeRoot: join(root, 'no-claude'), codexRoot,
+    agentsHome,
+  })
+  assert.equal(dry.total, 4)
+  assert.equal(dry.planned, 4)
+  assert.equal(dry.applied, 0)
+  const names = dry.results.map((r) => r.name).sort()
+  assert.deepEqual(names, ['Codex Search', 'codex-agents', 'codex-config', 'codex-instructions'].sort())
+  assert.ok(!existsSync(join(agentsHome, 'skills')))
+
+  // 2) apply：落盘 + provenance（source: codex）
+  const applied = await runAgentsImport(ctx, {
+    piRoot: join(root, 'no-pi'), opencodeRoot: join(root, 'no-oc'),
+    claudeRoot: join(root, 'no-claude'), codexRoot,
+    agentsHome, apply: true,
+  })
+  assert.equal(applied.applied, 4)
+  const skillsRoot = join(agentsHome, 'skills')
+  const configSkill = readFileSync(join(skillsRoot, 'codex-config', 'SKILL.md'), 'utf8')
+  assert.ok(configSkill.includes('source: codex'))
+  assert.ok(configSkill.includes('kind: config'))
+  assert.ok(configSkill.includes('model = "gpt-5"'))
+  const instructionsSkill = readFileSync(join(skillsRoot, 'codex-instructions', 'SKILL.md'), 'utf8')
+  assert.ok(instructionsSkill.includes('kind: instruction'))
+  assert.ok(instructionsSkill.includes('follow these'))
+
+  // 3) 幂等：内容未变 → 全部 skip
+  const again = await runAgentsImport(ctx, {
+    piRoot: join(root, 'no-pi'), opencodeRoot: join(root, 'no-oc'),
+    claudeRoot: join(root, 'no-claude'), codexRoot,
+    agentsHome, apply: true,
+  })
+  assert.equal(again.planned, 4)
+  assert.equal(again.applied, 0)
+  assert.equal(again.skipped, 4)
 })

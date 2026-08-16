@@ -215,3 +215,55 @@ test('REQ-29 /import-all：仅路径（全部格式探测）+ 未知来源提示
   assert.equal(typo.kind, 'error')
   assert.ok(typo.text.includes('未知来源'), typo.text)
 })
+
+// ── REQ-65 /attach-workspaces ──────────────────────────────────────────────
+
+test('REQ-65 /attach-workspaces：命令注册 + 按 imports registry 回填', async () => {
+  const env = makeCtx()
+  registerTools(env.ctx, env.registryDir)
+  registerImportCommand(env.ctx, env.registryDir)
+  const cmd = env.getCommand('attach-workspaces')
+  assert.ok(cmd, 'attach-workspaces 命令应注册')
+  assert.ok(cmd.description.includes('workspace'))
+
+  // 先导入一个 Claude 会话，产生 imports registry 记录
+  const file = join(mkdtempSync(join(tmpdir(), 'dsh-attach-src-')), 'attach-sess.jsonl')
+  writeFileSync(file, simpleClaudeJsonl('attach-sess'), 'utf8')
+  const importCmd = env.getCommand('import')
+  const imported = await importCmd.handler({ rawInput: 'claude ' + file })
+  assert.equal(imported.kind, 'success', imported.text)
+
+  const before = env.attached.length
+  const out = await cmd.handler({ rawInput: '' })
+  assert.equal(out.kind, 'success', out.text)
+  assert.ok(out.text.includes('扫描 1 条导入记录'), out.text)
+  assert.ok(out.text.includes('已挂接 1'), out.text)
+  assert.ok(env.attached.length >= before, 'attach 应被再次调用/回填')
+})
+
+// ── REQ-66 /doctor ─────────────────────────────────────────────────────────
+
+test('REQ-66 /doctor：命令注册 + 导入后健康检查通过', async () => {
+  const env = makeCtx()
+  registerTools(env.ctx, env.registryDir)
+  registerImportCommand(env.ctx, env.registryDir)
+  const cmd = env.getCommand('doctor')
+  assert.ok(cmd, 'doctor 命令应注册')
+  assert.ok(cmd.description.includes('健康检查'))
+
+  // 未导入时 registry 为空：会报 issue，但命令仍可执行
+  const empty = await cmd.handler({ rawInput: '' })
+  assert.equal(empty.kind, 'error', empty.text)
+  assert.ok(empty.text.includes('registry 为空'), empty.text)
+
+  // 导入一个会话后：registry 有记录、会话存在、workspaceRegistry 可用 → 健康
+  const file = join(mkdtempSync(join(tmpdir(), 'dsh-doctor-src-')), 'doctor-sess.jsonl')
+  writeFileSync(file, simpleClaudeJsonl('doctor-sess'), 'utf8')
+  const importCmd = env.getCommand('import')
+  const imported = await importCmd.handler({ rawInput: 'claude ' + file })
+  assert.equal(imported.kind, 'success', imported.text)
+
+  const out = await cmd.handler({ rawInput: '' })
+  assert.equal(out.kind, 'success', out.text)
+  assert.ok(out.text.includes('会话 1 个'), out.text)
+})

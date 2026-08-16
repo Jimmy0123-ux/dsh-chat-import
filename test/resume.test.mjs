@@ -83,11 +83,15 @@ function makeResumeCtx(tree, commands) {
     },
     async listDir(target) {
       const entries = []
-      const prefix = target.targetKey.endsWith('\\') ? target.targetKey : target.targetKey + '\\'
+      // 跨平台：tree 键可能用 join() 的正斜杠（Linux）或写死的反斜杠（Windows），统一归一为 / 做前缀匹配
+      const normPath = (p) => String(p).replace(/\\/g, '/')
+      const prefix = normPath(target.targetKey)
+      const base = prefix.endsWith('/') ? prefix : prefix + '/'
       for (const [path, v] of Object.entries(tree)) {
-        if (path.startsWith(prefix) && path !== prefix) {
-          const rest = path.slice(prefix.length)
-          if (!rest.includes('\\')) entries.push({ name: rest, type: v === 'dir' ? 'directory' : 'file', target: { targetKey: path, displayPath: path } })
+        const n = normPath(path)
+        if (n.startsWith(base) && n !== base) {
+          const rest = n.slice(base.length)
+          if (!rest.includes('/')) entries.push({ name: rest, type: v === 'dir' ? 'directory' : 'file', target: { targetKey: path, displayPath: path } })
         }
       }
       return entries.sort((a, b) => a.name.localeCompare(b.name))
@@ -122,7 +126,7 @@ test('resume-claude 命令：留空 = 最近会话（时间戳降序）；id: �
   process.env.HOME = home
   const commands = []
   const ctx = makeResumeCtx(resumeFixtureTree(home), commands)
-  registerResumeCommands(ctx, process.env.DSH_HOME + '\\dsh-chat-import')
+  registerResumeCommands(ctx, join(process.env.DSH_HOME, 'dsh-chat-import'))
   assert.equal(commands.length, 2)
   const resumeClaude = commands.find((c) => c.name === 'resume-claude')
   const resumeCodex = commands.find((c) => c.name === 'resume-codex')
@@ -154,7 +158,7 @@ test('resume-claude 命令：关键词多匹配列候选不猜测；单匹配直
   process.env.HOME = home
   const commands = []
   const ctx = makeResumeCtx(resumeFixtureTree(home), commands)
-  registerResumeCommands(ctx, process.env.DSH_HOME + '\\dsh-chat-import')
+  registerResumeCommands(ctx, join(process.env.DSH_HOME, 'dsh-chat-import'))
   const resumeClaude = commands.find((c) => c.name === 'resume-claude')
 
   // 多匹配：「修登录」命中 sess-new / sess-similar-a / sess-similar-b → 列候选不猜测

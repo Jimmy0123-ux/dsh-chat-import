@@ -56,7 +56,10 @@
 | 备份 | **便携 bundle** | `export_bundle` 产出带双重 SHA-256 指纹的 interchange bundle；`restore_bundle` 本机或跨机器还原（cwd 不可达回退有报告，不静默）。 |
 | 反向 | **反向同步** | `sync_to_claude` 把会话新增完整轮次追加回 Claude Code 文件——带守卫、绝不覆盖。 |
 | 交接 | **外部历史续聊** | `/resume-claude` / `/resume-codex` 把外部 transcript 当不可信历史生成交接摘要（目标 / 文件 / 停止点 / 下一步）注入当前会话；多匹配列候选不猜测。 |
+| 资产 | **agent/skill/config 迁移** | `import_agents` 把 pi / opencode / Claude / Codex 的 agent、prompt、skill、指令与配置参考转换为持久化 DSH skills。 |
+| 修复 | **回填工作区** | `/attach-workspaces` 按 imports registry 把已导入会话重新挂到 cwd 匹配的工作区。 |
 | 质量 | **校验** | `verify_session` 只读结构审计（seq / 事件白名单 / surfaceOp / 回合平衡 / 工具配对），按 kind 给 repair 提示。 |
+| 质量 | **doctor 体检** | `doctor` / `/doctor` 只读检查 registry、导入会话存在性、skills 落盘与 workspaceRegistry 可用性。 |
 | 保护 | **幂等 + 增量** | 重复导入未变化的源直接跳过；增长的源只追加新增轮次。 |
 | 保护 | **上下文预算保护** | 超长会话按安全上下文预算裁剪，裁剪结果显式上报；`compacted: true` 还原 Claude 压缩摘要。 |
 
@@ -166,18 +169,19 @@ import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl"
 
 每次导入结果都会上报 `status` 与任何异常——畸形行、疑似敏感信息、逐源丢弃——绝不静默吞掉。
 
-### import_agents — 把 pi/opencode/Claude 的 agent、prompt 与 skills 转换为 DSH skills
+### import_agents — 把 pi/opencode/Claude/Codex 的 agent、prompt、skill、指令与配置参考转换为 DSH skills
 
-`import_agents` 把 **pi**（`~/.pi/agent/{agents,prompts}/*.md`）、**opencode**（`~/.config/opencode/{agents,skill}/*.md`）与 **Claude**（`~/.claude/memory/<group>/*.md`、`~/.claude/skills/<skill>/SKILL.md`，或经 `claudeProjectRoot` 显式指定的项目根 `CLAUDE.md`）的自定义 agent、mode prompt、skill 转换为**持久化 DSH skill 资产**——`$DSH_AGENTS_HOME/skills/<name>/SKILL.md`（`$DSH_AGENTS_HOME` 缺省 `~/.agents`），成为任意会话里可发现的技能。这与运行时只读的 Claude 桥（`context-bridge`，默认关）互补：后者把 Claude 的 memory/CLAUDE.md/skills 临时注入；本工具把 pi/opencode/Claude 资产持久落盘。
+`import_agents` 把 **pi**（`~/.pi/agent/{agents,prompts}/*.md`）、**opencode**（`~/.config/opencode/{agents,skill}/*.md`）、**Claude**（`~/.claude/memory/<group>/*.md`、`~/.claude/skills/<skill>/SKILL.md`，或经 `claudeProjectRoot` 显式指定的项目根 `CLAUDE.md`）与 **Codex**（`~/.codex/skills/<skill>/SKILL.md`、`~/.codex/instructions.md`、`~/.codex/AGENTS.md`、`~/.codex/config.toml`）的自定义 agent、mode prompt、skill、指令与配置参考转换为**持久化 DSH skill 资产**——`$DSH_AGENTS_HOME/skills/<name>/SKILL.md`（`$DSH_AGENTS_HOME` 缺省 `~/.agents`），成为任意会话里可发现的技能。这与运行时只读的 Claude 桥（`context-bridge`，默认关）互补：后者把 Claude 的 memory/CLAUDE.md/skills 临时注入；本工具把 pi/opencode/Claude/Codex 资产持久落盘。
 
 默认 **dry-run**（只返回 write/complete/skip 规划清单，零副作用）；传 `apply: true` 才真正写盘：
 
 ```
 import_agents()                    // dry-run：仅规划
 import_agents({ apply: true })     // 写入 $DSH_AGENTS_HOME/skills/<name>/SKILL.md
+import_agents({ codexRoot: "~/.codex", apply: true })  // 显式包含 Codex 资产
 ```
 
-语义：跨源同名冲突加 `-pi` / `-opencode` 后缀消歧；内容相同幂等跳过；已带 `kind: dsh`/`kind: skill` frontmatter 的源不重复导入；bundle 目录缺 `SKILL.md` 时原地补全（保留既有 `scripts/` 等）；嵌套 YAML（如 `permission:`）原样保留。
+语义：跨源同名冲突加 `-<source>` 后缀消歧（如 `-pi` / `-opencode` / `-codex`）；内容相同幂等跳过；已带 `kind: dsh`/`kind: skill` frontmatter 的源不重复导入；bundle 目录缺 `SKILL.md` 时原地补全（保留既有 `scripts/` 等）；嵌套 YAML（如 `permission:`）原样保留。
 
 ### scan_discover — 只读会话发现
 
@@ -227,6 +231,16 @@ restore_bundle({ path: "D:\backup\bundle-dir", preview: true })      // dry-run
 verify_session({ sessionId: "import-019f5f27-…" })
 ```
 
+### doctor — 只读迁移健康检查
+
+`doctor()` 做一次只读迁移后体检：imports registry 是否可读、每个已导入会话是否仍存在于 `sessionPersistence`、`import_agents` 的 skills 是否落盘、`workspaceRegistry` 是否可用。绝不写文件、不导入、不同步、不删除：
+
+```
+doctor()
+```
+
+返回 `{ ok, checks, issues, totals }`——适合大批量导入后，或 DSH 数据跨机器搬运前后使用。
+
 ### sync_to_claude — 增量写回
 
 `sync_to_claude({ sessionId })` 把会话的**新增完整轮次**追加回其 Claude Code 文件——`target: "source"`（默认，写回导入源文件）或 `"copy"`（最近一次 `export_claude` 副本）。文件被外部修改或缩小时一律上报、绝不覆盖；`force: true` 越过外部修改重锚定（被覆盖的守卫仍会上报）：
@@ -249,6 +263,10 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 插件还注册了一个 **`/import <source> <path>`** 斜杠命令（在挂载了 dsh `commands` 服务的环境下可用）：直接在会话里输入即可导入，不占模型轮次——与 `import_*` 工具同一管线、同一幂等 / 增量 / force / 上下文预算语义。`<source>` 接受短名（`claude`、`codex`…）、客户端来源 id（`claude-code`）或工具全名（`import_claude`）；`<path>` 为 transcript 文件或会话目录 / 数据根（单文件导入 / 目录批量照常判定）。
 
 **`/import-all [source] [path]`** 一键扫描默认数据根（或单一来源 / 显式路径）并批量导入所有未导入会话——同一管线，幂等跳过 / 增量续写，归档会话跳过，失败逐条上报。
+
+**`/attach-workspaces`** 按 imports registry 把已导入会话重新挂到 cwd 匹配的工作区——适合修复早期落在「未分组」或之前 workspace 挂载失败的导入；幂等，可重复执行。
+
+**`/doctor`** 运行与 `doctor` 工具相同的只读健康检查，并输出简洁报告。
 
 **`/resume-claude [id:<会话id> | 关键词]`** 与 **`/resume-codex`** 从外部 transcript 生成**交接摘要**（目标 + 最后请求、涉及文件/产物、最近工具调用、精确停止点、最安全下一步）并注入当前会话，让你在 DSH 里接着干——把 transcript 当**不可信静态历史**（不复述 system/developer/thinking；旧工具输出视为过期证据需复核）。留空取最近会话，`id:<会话id>` 精确指定，或用标题关键词——**多匹配列候选不猜测**：
 
@@ -297,12 +315,13 @@ lib/
 ├── import-core.mjs   # 共享导入状态机（agents.create + cwdHint + 主目录防护）
 ├── toolkit.mjs       # makeImportTool 工厂 + IMPORT_SPECS
 ├── panel.mjs         # 浏览器面板 JSON 路由
-├── command.mjs       # /import + /import-all 斜杠命令
+├── command.mjs       # /import + /import-all + /attach-workspaces + /doctor 斜杠命令
 ├── resume-command.mjs # /resume-claude /resume-codex 交接（REQ-30）
 ├── handoff.mjs       # 交接摘要纯函数（REQ-30）
 ├── cwd-map.mjs       # cwd 权威映射 + slug 解码 + 主目录防护（REQ-39）
 ├── restore.mjs       # restore_bundle 编排（REQ-56/62）
 ├── verify.mjs        # verify_session 结构审计（REQ-23）
+├── doctor.mjs        # 只读迁移健康检查（REQ-66）
 ├── prompt-hint.mjs   # 会话启动迁移提示（REQ-53）
 └── context-bridge.mjs # Claude memory / CLAUDE.md / skills 桥接（REQ-28）
 ```

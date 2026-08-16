@@ -11,6 +11,19 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ## [Unreleased]
 
+### Added
+
+- **Codex asset migration (REQ-64)** — `import_agents` now also collects
+  `~/.codex/skills/<skill>/SKILL.md`, `~/.codex/instructions.md`,
+  `~/.codex/AGENTS.md`, and `~/.codex/config.toml` into persistent DSH skill
+  assets, with `codexRoot` override support.
+- **`/attach-workspaces` (REQ-65)** — a new slash command that re-attaches
+  already-imported sessions to cwd-matched workspaces from the imports
+  registry, fixing early imports that landed in “未分组”.
+- **`doctor` / `/doctor` (REQ-66)** — a read-only migration health check that
+  verifies imports registry readability, imported session existence,
+  `import_agents` skills persistence, and workspace registry availability.
+
 ### Fixed
 
 - **Kimi Code standalone (`~/.kimi-code`) import support** — `import_kimi`

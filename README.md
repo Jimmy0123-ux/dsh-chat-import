@@ -56,7 +56,10 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | Backup | **Portable bundle** | `export_bundle` writes a fingerprint-verified interchange bundle; `restore_bundle` restores it on this machine or another (cwd-unreachable fallback is reported, not silent). |
 | Reverse | **Sync back** | `sync_to_claude` appends a session's new complete turns to its Claude Code file — guarded, never overwriting. |
 | Handoff | **Resume from external history** | `/resume-claude` / `/resume-codex` generate a handoff summary (untrusted history → goal, files, stop point, next step) into the current session; multi-match lists candidates without guessing. |
+| Assets | **Agents/skills/config migration** | `import_agents` converts pi / opencode / Claude / Codex agents, prompts, skills, instructions and config references into persistent DSH skills. |
+| Repair | **Attach workspaces retroactively** | `/attach-workspaces` re-attaches already-imported sessions to cwd-matched workspaces from the imports registry. |
 | Quality | **Verify** | `verify_session` runs a read-only structural audit (seq / event whitelist / surfaceOp / balance / tool pairing) with per-kind repair hints. |
+| Quality | **Doctor** | `doctor` / `/doctor` run a read-only migration health check (registry, session existence, skills, workspace registry). |
 | Protection | **Idempotent + incremental** | Re-importing an unchanged source skips it; a grown source appends only its new turns. |
 | Protection | **Context budget protection** | Oversized sessions are trimmed to fit a safe context budget, and the trim is reported; `compacted: true` restores Claude compression summaries. |
 
@@ -166,18 +169,19 @@ import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl"
 
 Every import result reports its `status` and any anomalies — malformed lines, suspected secrets, per-source drops — nothing is silently swallowed.
 
-### import_agents — convert pi/opencode/Claude agents & prompts into DSH skills
+### import_agents — convert pi/opencode/Claude/Codex agents, prompts, skills & config into DSH skills
 
-`import_agents` converts custom agents, mode prompts and skills from **pi** (`~/.pi/agent/{agents,prompts}/*.md`), **opencode** (`~/.config/opencode/{agents,skill}/*.md`) and **Claude** (`~/.claude/memory/<group>/*.md`, `~/.claude/skills/<skill>/SKILL.md`, or an explicit project-root `CLAUDE.md` via `claudeProjectRoot`) into **persistent DSH skill assets** — `$DSH_AGENTS_HOME/skills/<name>/SKILL.md` (`$DSH_AGENTS_HOME` defaults to `~/.agents`), so they become discoverable skills in any session. This complements the runtime-only Claude bridge (`context-bridge`, off by default): that one injects Claude memory/CLAUDE.md/skills transiently; this one persists them (plus pi/opencode assets).
+`import_agents` converts custom agents, mode prompts, skills, instructions and config references from **pi** (`~/.pi/agent/{agents,prompts}/*.md`), **opencode** (`~/.config/opencode/{agents,skill}/*.md`), **Claude** (`~/.claude/memory/<group>/*.md`, `~/.claude/skills/<skill>/SKILL.md`, or an explicit project-root `CLAUDE.md` via `claudeProjectRoot`) and **Codex** (`~/.codex/skills/<skill>/SKILL.md`, `~/.codex/instructions.md`, `~/.codex/AGENTS.md`, `~/.codex/config.toml`) into **persistent DSH skill assets** — `$DSH_AGENTS_HOME/skills/<name>/SKILL.md` (`$DSH_AGENTS_HOME` defaults to `~/.agents`), so they become discoverable skills in any session. This complements the runtime-only Claude bridge (`context-bridge`, off by default): that one injects Claude memory/CLAUDE.md/skills transiently; this one persists them (plus pi/opencode/Codex assets).
 
 By default it **dry-runs** (returns the write/complete/skip plan with zero side effects); pass `apply: true` to actually write:
 
 ```
 import_agents()                    // dry-run: plan only
 import_agents({ apply: true })     // write $DSH_AGENTS_HOME/skills/<name>/SKILL.md
+import_agents({ codexRoot: "~/.codex", apply: true })  // include Codex assets explicitly
 ```
 
-Semantics: same-name conflicts across sources get a `-pi` / `-opencode` suffix; identical content is skipped (idempotent); sources already carrying `kind: dsh`/`kind: skill` frontmatter are not re-imported; a bundle directory that lacks `SKILL.md` is completed in place (preserving existing `scripts/` etc.); nested YAML (e.g. `permission:`) is preserved.
+Semantics: same-name conflicts across sources get a `-<source>` suffix (e.g. `-pi` / `-opencode` / `-codex`); identical content is skipped (idempotent); sources already carrying `kind: dsh`/`kind: skill` frontmatter are not re-imported; a bundle directory that lacks `SKILL.md` is completed in place (preserving existing `scripts/` etc.); nested YAML (e.g. `permission:`) is preserved.
 
 ### scan_discover — read-only session discovery
 
@@ -227,6 +231,16 @@ restore_bundle({ path: "D:\backup\bundle-dir", preview: true })      // dry-run
 verify_session({ sessionId: "import-019f5f27-…" })
 ```
 
+### doctor — read-only migration health check
+
+`doctor()` runs a read-only health check after migration: imports registry readability, whether every imported session still exists in `sessionPersistence`, whether `import_agents` skills were persisted, and whether `workspaceRegistry` is available. It never writes, imports, syncs, or deletes anything:
+
+```
+doctor()
+```
+
+It returns `{ ok, checks, issues, totals }` — useful after a large batch import or before/after moving DSH data between machines.
+
 ### sync_to_claude — incremental write-back
 
 `sync_to_claude({ sessionId })` appends a session's **new complete turns** back to its Claude Code file — `target: "source"` by default (the import source) or `"copy"` (the last `export_claude` copy). Guards report an externally modified or shrunken file instead of overwriting it; `force: true` re-anchors past external edits (the overridden guard is still reported):
@@ -249,6 +263,10 @@ Each row supports **single import**, and the checkboxes enable **multi-select im
 The plugin also registers a **`/import <source> <path>`** slash command (available where the dsh `commands` service is mounted): type it directly in a session to import without a model round-trip — the same pipeline and the same idempotent / incremental / `force` / context-budget semantics as the `import_*` tools. `<source>` accepts the short name (`claude`, `codex`, …), the client source id (`claude-code`), or the full tool name (`import_claude`); `<path>` is a transcript file or a session directory / data root (single-file import vs. directory batch as usual).
 
 **`/import-all [source] [path]`** scans the default data roots (or one source / explicit path) and imports every not-yet-imported session in one shot — same pipeline, idempotent skip / incremental append, archived sessions skipped, failures reported individually.
+
+**`/attach-workspaces`** re-attaches already-imported sessions to their cwd-matched workspaces from the imports registry — useful for fixing early imports that landed in “未分组” or whose workspace attach previously failed. It is idempotent and safe to re-run.
+
+**`/doctor`** runs the same read-only health check as the `doctor` tool and prints a concise report.
 
 **`/resume-claude [id:<sessionId> | keyword]`** and **`/resume-codex`** generate a **handoff summary** from an external transcript (goal + last request, involved files/artifacts, last tool call, exact stop point, safest next step) and inject it into the current session so you can continue the work in DSH — treating the transcript as untrusted static history (no system/developer/thinking content is reproduced; old tool output is flagged as stale evidence). Leave the argument empty for the most recent session, use `id:<sessionId>` for an exact one, or a title keyword — **multiple matches list candidates without guessing**:
 
@@ -297,12 +315,13 @@ lib/
 ├── import-core.mjs   # shared import state machine (agents.create + cwdHint + home guard)
 ├── toolkit.mjs       # makeImportTool factory + IMPORT_SPECS
 ├── panel.mjs         # browser panel JSON routes
-├── command.mjs       # /import + /import-all slash commands
+├── command.mjs       # /import + /import-all + /attach-workspaces + /doctor commands
 ├── resume-command.mjs # /resume-claude /resume-codex handoff (REQ-30)
 ├── handoff.mjs       # handoff summary pure functions (REQ-30)
 ├── cwd-map.mjs       # cwd authoritative mapping + slug decode + home guard (REQ-39)
 ├── restore.mjs       # restore_bundle orchestration (REQ-56/62)
 ├── verify.mjs        # verify_session structural audit (REQ-23)
+├── doctor.mjs        # read-only migration health check (REQ-66)
 ├── prompt-hint.mjs   # session-start migration hint (REQ-53)
 └── context-bridge.mjs # Claude memory / CLAUDE.md / skills bridge (REQ-28)
 ```

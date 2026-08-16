@@ -259,15 +259,15 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册二十六个工具（15 导入 + import_agents + scan_discover + export_claude/codex/kimi + sync_to_claude + REQ-33 识别/撤回 + REQ-56 bundle 导出/还原 + verify_session）', () => {
+test('apply 注册二十七个工具（15 导入 + import_agents + doctor + scan_discover + export_claude/codex/kimi + sync_to_claude + REQ-33 识别/撤回 + REQ-56 bundle 导出/还原 + verify_session）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 26)
+  assert.equal(registered.length, 27)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['export_bundle', 'export_claude', 'export_codex', 'export_kimi', 'import_agents', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_dsh', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_local_jsonl', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'restore_bundle', 'retract_import', 'scan_discover', 'sync_to_claude', 'verify_session'])
+  assert.deepEqual(names, ['doctor', 'export_bundle', 'export_claude', 'export_codex', 'export_kimi', 'import_agents', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_dsh', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_local_jsonl', 'import_openclaw', 'import_opencode', 'import_pi', 'import_reasonix', 'import_zcode', 'list_imported_sessions', 'restore_bundle', 'retract_import', 'scan_discover', 'sync_to_claude', 'verify_session'])
   for (const def of registered) {
-    if (['export_claude', 'export_codex', 'export_kimi', 'export_bundle', 'restore_bundle', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import', 'verify_session'].includes(def.name)) {
-      // 导出 / bundle / 写回 / 发现 / 识别 / 撤回 / 校验工具：单对象输出 schema（非 oneOf）
+    if (['doctor', 'export_claude', 'export_codex', 'export_kimi', 'export_bundle', 'restore_bundle', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import', 'verify_session'].includes(def.name)) {
+      // doctor / 导出 / bundle / 写回 / 发现 / 识别 / 撤回 / 校验工具：单对象输出 schema（非 oneOf）
       assert.equal(def.output.schema.type, 'object')
       assert.ok(!Array.isArray(def.output.schema.oneOf))
     } else if (def.name === 'import_agents') {
@@ -2536,8 +2536,8 @@ test('REQ-56 bundle 闭环：export_bundle 落盘 → restore_bundle 还原 0 sk
   assert.equal(writes[0].path, bundlePath)
   assert.equal(writes[0].options.kind, 'createIfAbsent')
 
-  // 还原（bundle 在 mock 树里）
-  const tree2 = { [bundlePath]: writes[0].content }
+  // 还原（bundle 在 mock 树里）；同机语义需要 originalCwd 在 fs 树中可达
+  const tree2 = { [bundlePath]: writes[0].content, 'D:\\demo\\proj': 'dir' }
   const { ctx: ctx2, persistence: p2 } = makeCtx(tree2)
   apply(ctx2)
   const rst = registeredDef(ctx2, 'restore_bundle')
@@ -2809,9 +2809,9 @@ test('REQ-39 沙箱防护：transcript cwd = 主目录 → 归组回退源文件
   const { ctx, attached } = makeCtx({ 'D:\\demo\\proj\\sess-home-001.jsonl': jsonl })
   apply(ctx)
   await registeredDef(ctx, 'import_claude').execute({ path: 'D:\\demo\\proj\\sess-home-001.jsonl' })
-  // 归组落在源文件目录，不是主目录
+  // 归组落在源文件目录，不是主目录（跨平台：Linux 下 dirname 为 '.'，Windows 为 D:\demo\proj）
   assert.equal(attached.length, 1)
-  assert.equal(attached[0].ws, 'D:\\demo\\proj')
+  assert.equal(attached[0].ws, dirname('D:\\demo\\proj\\sess-home-001.jsonl'))
 })
 
 test('REQ-39 Claude 权威映射：转录无 cwd → ~/.claude.json projects 命中真实路径', async () => {
@@ -3765,16 +3765,16 @@ test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-im
   assert.equal(imp.kind, 'exact')
   assert.equal(typeof sessions.handler, 'function')
   assert.equal(typeof imp.handler, 'function')
-  // 只加路由，不加工具：15 导入 + import_agents + scan/export×3/sync/list/retract + bundle 导出/还原 + verify = 26，注册数不变
-  assert.equal(registered.length, 26)
+  // 只加路由，不加工具：15 导入 + import_agents + doctor + scan/export×3/sync/list/retract + bundle 导出/还原 + verify = 27，注册数不变
+  assert.equal(registered.length, 27)
 })
 
-test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、26 工具照常注册、无路由', () => {
+test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、27 工具照常注册、无路由', () => {
   const { ctx, webRoutes, registered } = makeCtx({}, { noWebServer: true })
   apply(ctx)
   // 缺 webServer 只是不注册面板路由，导入工具不受影响（CI headless 冒烟场景）
   assert.equal(webRoutes.length, 0)
-  assert.equal(registered.length, 26)
+  assert.equal(registered.length, 27)
 })
 
 test('REQ-41 /api-import/sessions handler：合成夹具经 discoverSessions 返回会话、未知来源 400', async () => {
