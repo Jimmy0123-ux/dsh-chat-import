@@ -251,3 +251,63 @@ test('REQ-59 runAgentsImport: 同名跨源冲突落盘为 -source 后缀', async
   assert.ok(existsSync(join(skillsRoot, 'shared', 'SKILL.md')))
   assert.ok(existsSync(join(skillsRoot, 'shared-opencode', 'SKILL.md')))
 })
+
+// ── REQ-61：Claude 资产（memory 分组 / skills bundle / 项目 CLAUDE.md）──────
+
+test('REQ-61 runAgentsImport: Claude memory/skills/CLAUDE.md 落盘 + provenance + 幂等', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agents-'))
+  const claudeRoot = join(root, 'claude')
+  const projectRoot = join(root, 'proj')
+  const agentsHome = join(root, 'agents-home')
+  mkdirSync(join(claudeRoot, 'memory', 'project'), { recursive: true })
+  mkdirSync(join(claudeRoot, 'memory', 'feedback'), { recursive: true })
+  mkdirSync(join(claudeRoot, 'skills', 'my-skill'), { recursive: true })
+  mkdirSync(projectRoot, { recursive: true })
+  writeFileSync(join(claudeRoot, 'memory', 'project', 'api.md'), '---\ndescription: project api notes\n---\napi body')
+  writeFileSync(join(claudeRoot, 'memory', 'feedback', 'prefer-x.md'), 'prefer x body')
+  writeFileSync(join(claudeRoot, 'skills', 'my-skill', 'SKILL.md'), '---\nname: My Skill\ndescription: does things\n---\nskill body')
+  writeFileSync(join(projectRoot, 'CLAUDE.md'), '# CLAUDE.md\nproject instructions')
+
+  const ctx = { fs: realFs(root) }
+  // 1) dry-run：4 个候选（2 memory + 1 skill + 1 CLAUDE.md），零写盘
+  const dry = await runAgentsImport(ctx, { claudeRoot, claudeProjectRoot: projectRoot, agentsHome })
+  assert.equal(dry.total, 4)
+  assert.equal(dry.planned, 4)
+  assert.equal(dry.applied, 0)
+  const names = dry.results.map((r) => r.name).sort()
+  assert.deepEqual(names, ['My Skill', 'claude-md', 'feedback-prefer-x', 'project-api'].sort())
+  assert.ok(!existsSync(join(agentsHome, 'skills')))
+
+  // 2) apply：落盘 + provenance（source: claude）
+  const applied = await runAgentsImport(ctx, { claudeRoot, claudeProjectRoot: projectRoot, agentsHome, apply: true })
+  assert.equal(applied.applied, 4)
+  const skillsRoot = join(agentsHome, 'skills')
+  const projectSkill = readFileSync(join(skillsRoot, 'project-api', 'SKILL.md'), 'utf8')
+  assert.ok(projectSkill.includes('source: claude'))
+  assert.ok(projectSkill.includes('kind: memory'))
+  assert.ok(projectSkill.includes('api body'))
+  const claudeMd = readFileSync(join(skillsRoot, 'claude-md', 'SKILL.md'), 'utf8')
+  assert.ok(claudeMd.includes('kind: project'))
+  assert.ok(claudeMd.includes('project instructions'))
+
+  // 3) 幂等：内容未变 → 全部 skip
+  const again = await runAgentsImport(ctx, { claudeRoot, claudeProjectRoot: projectRoot, agentsHome, apply: true })
+  assert.equal(again.planned, 4)
+  assert.equal(again.applied, 0)
+  assert.equal(again.skipped, 4)
+})
+
+test('REQ-61: Claude 源带 kind:skill frontmatter 过滤 + 缺目录静默空清单', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agents-'))
+  const claudeRoot = join(root, 'claude')
+  const agentsHome = join(root, 'agents-home')
+  mkdirSync(join(claudeRoot, 'skills', 'native-skill'), { recursive: true })
+  writeFileSync(join(claudeRoot, 'skills', 'native-skill', 'SKILL.md'), '---\nname: native\nkind: skill\n---\nbody')
+  const ctx = { fs: realFs(root) }
+  // 已是 DSH 技能（kind:skill）→ 0 候选
+  const r = await runAgentsImport(ctx, { claudeRoot, agentsHome })
+  assert.equal(r.total, 0)
+  // 缺 Claude 目录 → 静默空清单不报错
+  const r2 = await runAgentsImport(ctx, { claudeRoot: join(root, 'no-claude'), agentsHome })
+  assert.equal(r2.total, 0)
+})

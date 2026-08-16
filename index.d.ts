@@ -224,6 +224,10 @@ export interface AgentsImportOptions {
   piRoot?: string
   /** opencode 配置根（默认 ~/.config/opencode）。 */
   opencodeRoot?: string
+  /** Claude 配置根（默认 ~/.claude），收集 memory/<group>/*.md 与 skills/<skill>/SKILL.md。 */
+  claudeRoot?: string
+  /** 项目根目录（含 CLAUDE.md 时落为 claude-md 资产；不指定则跳过）。 */
+  claudeProjectRoot?: string
   /** DSH user-agents 根（默认 $DSH_AGENTS_HOME 或 ~/.agents），skills 写到其下 skills/。 */
   agentsHome?: string
   /** dry-run 别名。 */

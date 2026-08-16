@@ -157,9 +157,9 @@ import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl"
 
 每次导入结果都会上报 `status` 与任何异常——畸形行、疑似敏感信息、逐源丢弃——绝不静默吞掉。
 
-### import_agents — 把 pi/opencode 的 agent 与 prompt 转换为 DSH skills
+### import_agents — 把 pi/opencode/Claude 的 agent、prompt 与 skills 转换为 DSH skills
 
-`import_agents` 把 **pi**（`~/.pi/agent/{agents,prompts}/*.md`）与 **opencode**（`~/.config/opencode/{agents,skill}/*.md`）的自定义 agent、mode prompt、skill 转换为**持久化 DSH skill 资产**——`$DSH_AGENTS_HOME/skills/<name>/SKILL.md`（`$DSH_AGENTS_HOME` 缺省 `~/.agents`），成为任意会话里可发现的技能。这与运行时只读的 Claude 桥（`context-bridge`，默认关）互补：后者把 Claude 的 memory/CLAUDE.md/skills 临时注入；本工具把 pi/opencode 资产持久落盘。
+`import_agents` 把 **pi**（`~/.pi/agent/{agents,prompts}/*.md`）、**opencode**（`~/.config/opencode/{agents,skill}/*.md`）与 **Claude**（`~/.claude/memory/<group>/*.md`、`~/.claude/skills/<skill>/SKILL.md`，或经 `claudeProjectRoot` 显式指定的项目根 `CLAUDE.md`）的自定义 agent、mode prompt、skill 转换为**持久化 DSH skill 资产**——`$DSH_AGENTS_HOME/skills/<name>/SKILL.md`（`$DSH_AGENTS_HOME` 缺省 `~/.agents`），成为任意会话里可发现的技能。这与运行时只读的 Claude 桥（`context-bridge`，默认关）互补：后者把 Claude 的 memory/CLAUDE.md/skills 临时注入；本工具把 pi/opencode/Claude 资产持久落盘。
 
 默认 **dry-run**（只返回 write/complete/skip 规划清单，零副作用）；传 `apply: true` 才真正写盘：
 

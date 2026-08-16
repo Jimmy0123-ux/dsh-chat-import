@@ -159,7 +159,7 @@ Every import result reports its `status` and any anomalies — malformed lines, 
 
 ### import_agents — convert pi/opencode agents & prompts into DSH skills
 
-`import_agents` converts custom agents, mode prompts and skills from **pi** (`~/.pi/agent/{agents,prompts}/*.md`) and **opencode** (`~/.config/opencode/{agents,skill}/*.md`) into **persistent DSH skill assets** — `$DSH_AGENTS_HOME/skills/<name>/SKILL.md` (`$DSH_AGENTS_HOME` defaults to `~/.agents`), so they become discoverable skills in any session. This complements the runtime-only Claude bridge (`context-bridge`, off by default): that one injects Claude memory/CLAUDE.md/skills transiently; this one persists pi/opencode assets.
+`import_agents` converts custom agents, mode prompts and skills from **pi** (`~/.pi/agent/{agents,prompts}/*.md`), **opencode** (`~/.config/opencode/{agents,skill}/*.md`) and **Claude** (`~/.claude/memory/<group>/*.md`, `~/.claude/skills/<skill>/SKILL.md`, or an explicit project-root `CLAUDE.md` via `claudeProjectRoot`) into **persistent DSH skill assets** — `$DSH_AGENTS_HOME/skills/<name>/SKILL.md` (`$DSH_AGENTS_HOME` defaults to `~/.agents`), so they become discoverable skills in any session. This complements the runtime-only Claude bridge (`context-bridge`, off by default): that one injects Claude memory/CLAUDE.md/skills transiently; this one persists them (plus pi/opencode assets).
 
 By default it **dry-runs** (returns the write/complete/skip plan with zero side effects); pass `apply: true` to actually write:
 
