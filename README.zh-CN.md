@@ -61,6 +61,7 @@
 | MCP | **MCP 镜像计划** | `import_mcp` 读取 Claude/Codex 的 MCP server 并生成可人工审阅的 DSH MCP client YAML 片段；`/mcp-status` 列出发现的 server。 |
 | 配置 | **settings 翻译建议** | `import_settings` / `/settings-suggest` 读取 Claude settings.json 与 Codex config.toml，给出 DSH 迁移建议（模型 / 权限 / hooks / env / provider）。 |
 | 修复 | **回填工作区** | `/attach-workspaces` 按 imports registry 把已导入会话重新挂到 cwd 匹配的工作区；`--mode dedicated` 可统一挂到单个工作区。 |
+| 工作区 | **导入时 workspace 模式** | 导入工具支持 `workspaceMode: auto\|dedicated\|per-project` 与 `workspaceDir`，在导入阶段控制归组方式。 |
 | 修复 | **重置扫描缓存** | `/import-reset` 清空进程内扫描缓存与 `scan-cache.json` 书签，不影响已导入会话。 |
 | CLI | **独立 CLI** | `dsh-chat-import export-md <会话>` 把 DSH 会话日志渲染为 Markdown；`dsh-chat-import doctor` 做轻量本地体检——无需启动 DSH。 |
 | 质量 | **校验** | `verify_session` 只读结构审计（seq / 事件白名单 / surfaceOp / 回合平衡 / 工具配对），按 kind 给 repair 提示。 |

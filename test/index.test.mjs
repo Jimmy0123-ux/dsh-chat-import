@@ -1633,6 +1633,23 @@ test('REQ-72 restamp: 时间戳平移到当前，保持相对间隔', () => {
   assert.equal(out.events[1].time - out.events[0].time, 1000, '相对间隔保持不变')
 })
 
+// ---- REQ-70 导入时 workspaceMode（dedicated） ----
+
+test('REQ-70 import_claude workspaceMode=dedicated: 导入会话挂到专用工作区', async () => {
+  const raw = [
+    JSON.stringify({ sessionId: 'sess-ws-001', type: 'user', cwd: 'D:\\demo\\proj', message: { role: 'user', content: '你好' } }),
+    JSON.stringify({ sessionId: 'sess-ws-001', type: 'assistant', message: { role: 'assistant', content: '好的' } }),
+  ].join('\n') + '\n'
+  const path = 'D:\\demo\\proj\\sess-ws-001.jsonl'
+  const { ctx, attached } = makeCtx({ [path]: raw })
+  apply(ctx)
+  const dedicatedDir = join(mkdtempSync(join(tmpdir(), 'dsh-ws-mode-')), 'workspace')
+  const def = registeredDef(ctx, 'import_claude')
+  const value = await def.execute({ path, workspaceMode: 'dedicated', workspaceDir: dedicatedDir })
+  assert.equal(value.status, 'imported')
+  assert.ok(attached.some((a) => a.ws === dedicatedDir), '挂到 dedicated workspace: ' + JSON.stringify(attached))
+})
+
 // ---- import_kimi 集成（会话目录：wire.jsonl + state.json + kimi.json 映射） ----
 
 // 合成 Kimi wire.jsonl：首行 metadata + 记录（timestamp 秒级递增）。

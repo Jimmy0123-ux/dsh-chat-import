@@ -61,6 +61,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | MCP | **MCP mirror plan** | `import_mcp` reads Claude/Codex MCP servers and generates a reviewable DSH MCP client YAML snippet; `/mcp-status` lists discovered servers. |
 | Config | **Settings translation suggestions** | `import_settings` / `/settings-suggest` read Claude settings.json and Codex config.toml and produce DSH migration suggestions (model, permissions, hooks, env, provider). |
 | Repair | **Attach workspaces retroactively** | `/attach-workspaces` re-attaches already-imported sessions to cwd-matched workspaces; `--mode dedicated` groups them into one workspace. |
+| Workspace | **Import-time workspace modes** | Import tools accept `workspaceMode: auto\|dedicated\|per-project` and `workspaceDir` to control grouping at import time. |
 | Repair | **Reset scan cache** | `/import-reset` clears the in-memory scan cache and `scan-cache.json` bookmarks without touching imported sessions. |
 | CLI | **Standalone CLI** | `dsh-chat-import export-md <session>` renders a DSH session log as Markdown; `dsh-chat-import doctor` does a lightweight local health check — no DSH host needed. |
 | Quality | **Verify** | `verify_session` runs a read-only structural audit (seq / event whitelist / surfaceOp / balance / tool pairing) with per-kind repair hints. |

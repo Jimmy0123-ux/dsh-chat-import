@@ -51,6 +51,9 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 - **`restamp` timestamps (REQ-72 part)** — all import tools now accept
   `restamp: true` to shift session timestamps to now while preserving relative
   intervals.
+- **Import-time workspaceMode (REQ-70)** — all import tools now accept
+  `workspaceMode: auto|dedicated|per-project` and `workspaceDir`; `dedicated`
+  groups imported sessions into a single workspace at import time.
 
 ### Fixed
 
