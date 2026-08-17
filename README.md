@@ -57,6 +57,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | Reverse | **Sync back** | `sync_to_claude` appends a session's new complete turns to its Claude Code file — guarded, never overwriting. |
 | Handoff | **Resume from external history** | `/resume-claude` / `/resume-codex` generate a handoff summary (untrusted history → goal, files, stop point, next step) into the current session; multi-match lists candidates without guessing. |
 | Assets | **Agents/skills/config migration** | `import_agents` converts pi / opencode / Claude / Codex agents, prompts, skills, instructions and config references into persistent DSH skills. |
+| MCP | **MCP mirror plan** | `import_mcp` reads Claude/Codex MCP servers and generates a reviewable DSH MCP client YAML snippet; `/mcp-status` lists discovered servers. |
 | Repair | **Attach workspaces retroactively** | `/attach-workspaces` re-attaches already-imported sessions to cwd-matched workspaces from the imports registry. |
 | CLI | **Standalone CLI** | `dsh-chat-import export-md <session>` renders a DSH session log as Markdown; `dsh-chat-import doctor` does a lightweight local health check — no DSH host needed. |
 | Quality | **Verify** | `verify_session` runs a read-only structural audit (seq / event whitelist / surfaceOp / balance / tool pairing) with per-kind repair hints. |
@@ -254,6 +255,16 @@ npx dsh-chat-import doctor
 
 `export-md` renders a DSH session log as readable Markdown (session header, title, user/assistant text, thinking, tool calls and results). `doctor` reads `$DSH_HOME/dsh-chat-import/imports.json` and the local `sessions` tree for a lightweight health summary.
 
+### import_mcp — MCP mirror plan
+
+`import_mcp` reads MCP servers from **Claude** (`~/.claude.json` / `.mcp.json`) and **Codex** (`~/.codex/config.toml`) and generates a reviewable **DSH MCP client YAML snippet**. By default it dry-runs; `apply: true` writes the snippet to `$DSH_HOME/dsh-chat-import/mcp-mirror.cordis.yml` (or `outPath`) — it never edits your profile automatically:
+
+```
+import_mcp()                                  // dry-run: list servers + YAML snippet
+import_mcp({ apply: true })                   // write generated snippet
+/mcp-status                                   // list discovered servers
+```
+
 ### sync_to_claude — incremental write-back
 
 `sync_to_claude({ sessionId })` appends a session's **new complete turns** back to its Claude Code file — `target: "source"` by default (the import source) or `"copy"` (the last `export_claude` copy). Guards report an externally modified or shrunken file instead of overwriting it; `force: true` re-anchors past external edits (the overridden guard is still reported):
@@ -280,6 +291,8 @@ The plugin also registers a **`/import <source> <path>`** slash command (availab
 **`/attach-workspaces`** re-attaches already-imported sessions to their cwd-matched workspaces from the imports registry — useful for fixing early imports that landed in “未分组” or whose workspace attach previously failed. It is idempotent and safe to re-run.
 
 **`/doctor`** runs the same read-only health check as the `doctor` tool and prints a concise report.
+
+**`/mcp-status`** lists MCP servers discovered from Claude/Codex configs (read-only); use `import_mcp` to generate a DSH MCP client snippet.
 
 **`/resume-claude [id:<sessionId> | keyword]`** and **`/resume-codex`** generate a **handoff summary** from an external transcript (goal + last request, involved files/artifacts, last tool call, exact stop point, safest next step) and inject it into the current session so you can continue the work in DSH — treating the transcript as untrusted static history (no system/developer/thinking content is reproduced; old tool output is flagged as stale evidence). Leave the argument empty for the most recent session, use `id:<sessionId>` for an exact one, or a title keyword — **multiple matches list candidates without guessing**:
 
@@ -335,6 +348,7 @@ lib/
 ├── restore.mjs       # restore_bundle orchestration (REQ-56/62)
 ├── verify.mjs        # verify_session structural audit (REQ-23)
 ├── doctor.mjs        # read-only migration health check (REQ-66)
+├── mcp.mjs           # Claude/Codex MCP mirror plan (REQ-68)
 ├── prompt-hint.mjs   # session-start migration hint (REQ-53)
 └── context-bridge.mjs # Claude memory / CLAUDE.md / skills bridge (REQ-28)
 ```

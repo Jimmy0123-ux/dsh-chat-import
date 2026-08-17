@@ -26,6 +26,10 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 - **Standalone CLI + Markdown export (REQ-67)** — the package now ships a
   `dsh-chat-import` bin with `export-md` (DSH session log → Markdown) and a
   lightweight `doctor`, usable without starting DSH.
+- **MCP mirror plan (REQ-68)** — `import_mcp` reads Claude/Codex MCP servers
+  and generates a reviewable DSH MCP client YAML snippet (dry-run by default;
+  `apply` writes only to a generated file, never editing the profile).
+  `/mcp-status` lists discovered servers.
 
 ### Fixed
 
