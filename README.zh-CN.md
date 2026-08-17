@@ -307,7 +307,7 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 两个可选钩子在 DSH 会话启动时运行（host `agent/session-start` 事件），均为 agent 级作用域、绝不触碰你的 transcript：
 
 - **迁移提示（默认开）**——当会话工作区存在可发现的（已导入或可导入）外部聊天历史时，注入一行 `PromptContext`，告诉模型如何继续（`/import <source> <path>` 命令或侧边栏面板）。per-project 记忆保证同一工作区只提示一次；设 `DSH_IMPORT_SESSION_HINT=0` 关闭。
-- **Claude 上下文桥接（默认关）**——设 `DSH_IMPORT_CONTEXT_BRIDGE=1` 把 Claude Code 的上下文资产桥进会话：`~/.claude/memory/*.md`（按 `feedback` > `project` > `reference` > `user` 分组、8 KiB 上限、mtime 缓存重读）、项目根 `CLAUDE.md`、以及 `~/.claude/skills/*/SKILL.md`（注册为该 agent 独有的 `claude-<name>` 技能）。
+- **Claude 上下文桥接（默认关）**——设 `DSH_IMPORT_CONTEXT_BRIDGE=1` 把 Claude Code 的上下文资产桥进会话：`~/.claude/memory/*.md`（按 `feedback` > `project` > `reference` > `user` 分组、8 KiB 上限、mtime 缓存重读）、项目根 `CLAUDE.md` **与全局 `~/.claude/CLAUDE.md`**、以及 `~/.claude/skills/*/SKILL.md`（注册为该 agent 独有的 `claude-<name>` 技能）。
 
 ---
 

@@ -33,6 +33,9 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 - **opencode tool name mapping (REQ-74 part)** — opencode tool names such as
   `websearch`, `webfetch`, `question`, `todowrite`, and `task` are mapped to
   DSH standard names during import.
+- **Global `~/.claude/CLAUDE.md` bridge (REQ-74 part)** — the optional Claude
+  context bridge now also injects the global Claude Code `CLAUDE.md` in
+  addition to the project-root one.
 
 ### Fixed
 

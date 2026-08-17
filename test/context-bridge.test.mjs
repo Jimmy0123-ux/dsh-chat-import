@@ -40,6 +40,7 @@ function seedClaudeHome(claudeHome, cwd) {
   writeFileSync(join(claudeHome, 'memory', 'user-preferences.md'), '用户偏好中文回复。', 'utf8')
   mkdirSync(join(claudeHome, 'skills', 'code-review'), { recursive: true })
   writeFileSync(join(claudeHome, 'skills', 'code-review', 'SKILL.md'), '# Code Review\n审查代码时关注边界条件。', 'utf8')
+  writeFileSync(join(claudeHome, 'CLAUDE.md'), '# 全局说明\n这是全局 CLAUDE.md。', 'utf8')
   mkdirSync(cwd, { recursive: true })
   writeFileSync(join(cwd, 'CLAUDE.md'), '# 项目说明\n这是一个演示项目。', 'utf8')
 }
@@ -72,15 +73,18 @@ test('REQ-28 桥接：memory + CLAUDE.md 注册 PromptContext、skills 注册 pr
   const names = contexts.map((c) => c.name)
   assert.ok(names.includes('claude-bridge-memory'), 'memory context: ' + names)
   assert.ok(names.includes('claude-bridge-claude-md'), 'CLAUDE.md context: ' + names)
+  assert.ok(names.includes('claude-bridge-global-claude-md'), 'global CLAUDE.md context: ' + names)
   // memory text provider（同步）返回拼接内容（feedback 组在 user 组前）
   const memDef = contexts.find((c) => c.name === 'claude-bridge-memory')
   const memText = memDef.text()
   assert.ok(memText.includes('feedback-code-style'), 'memory 含 feedback 文件: ' + memText)
   assert.ok(memText.includes('user-preferences'), 'memory 含 user 文件: ' + memText)
   assert.ok(memText.indexOf('feedback-code-style') < memText.indexOf('user-preferences'), 'feedback 排序在 user 前')
-  // CLAUDE.md context provider 返回项目说明
+  // CLAUDE.md context provider 返回项目说明 + 全局说明
   const mdDef = contexts.find((c) => c.name === 'claude-bridge-claude-md')
   assert.ok(mdDef.text().includes('演示项目'), 'CLAUDE.md 内容: ' + mdDef.text())
+  const globalMdDef = contexts.find((c) => c.name === 'claude-bridge-global-claude-md')
+  assert.ok(globalMdDef.text().includes('全局 CLAUDE.md'), '全局 CLAUDE.md 内容: ' + globalMdDef.text())
 
   // skills provider：list 返回 1 个 claude- 前缀候选，get 返回 SKILL.md 内容
   assert.equal(providers.length, 1, 'skills.registerProvider 被调')
