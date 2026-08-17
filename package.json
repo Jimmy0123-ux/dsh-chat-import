@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./index.mjs",
   "types": "./index.d.ts",
+  "bin": {
+    "dsh-chat-import": "./bin/dsh-chat-import.mjs"
+  },
   "exports": {
     ".": {
       "types": "./index.d.ts",
@@ -27,6 +30,7 @@
     "lib/*.js",
     "lib/convert",
     "lib/export",
+    "bin",
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",

@@ -23,6 +23,9 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 - **`doctor` / `/doctor` (REQ-66)** — a read-only migration health check that
   verifies imports registry readability, imported session existence,
   `import_agents` skills persistence, and workspace registry availability.
+- **Standalone CLI + Markdown export (REQ-67)** — the package now ships a
+  `dsh-chat-import` bin with `export-md` (DSH session log → Markdown) and a
+  lightweight `doctor`, usable without starting DSH.
 
 ### Fixed
 

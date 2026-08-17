@@ -58,6 +58,7 @@
 | 交接 | **外部历史续聊** | `/resume-claude` / `/resume-codex` 把外部 transcript 当不可信历史生成交接摘要（目标 / 文件 / 停止点 / 下一步）注入当前会话；多匹配列候选不猜测。 |
 | 资产 | **agent/skill/config 迁移** | `import_agents` 把 pi / opencode / Claude / Codex 的 agent、prompt、skill、指令与配置参考转换为持久化 DSH skills。 |
 | 修复 | **回填工作区** | `/attach-workspaces` 按 imports registry 把已导入会话重新挂到 cwd 匹配的工作区。 |
+| CLI | **独立 CLI** | `dsh-chat-import export-md <会话>` 把 DSH 会话日志渲染为 Markdown；`dsh-chat-import doctor` 做轻量本地体检——无需启动 DSH。 |
 | 质量 | **校验** | `verify_session` 只读结构审计（seq / 事件白名单 / surfaceOp / 回合平衡 / 工具配对），按 kind 给 repair 提示。 |
 | 质量 | **doctor 体检** | `doctor` / `/doctor` 只读检查 registry、导入会话存在性、skills 落盘与 workspaceRegistry 可用性。 |
 | 保护 | **幂等 + 增量** | 重复导入未变化的源直接跳过；增长的源只追加新增轮次。 |
@@ -240,6 +241,18 @@ doctor()
 ```
 
 返回 `{ ok, checks, issues, totals }`——适合大批量导入后，或 DSH 数据跨机器搬运前后使用。
+
+### 独立 CLI — export-md / doctor
+
+npm 包还附带一个小的独立 CLI（无需启动 DSH）：
+
+```
+npx dsh-chat-import export-md ~/.dsh/sessions/<workspace>/<session>/session.jsonl
+npx dsh-chat-import export-md <会话目录> --out session.md
+npx dsh-chat-import doctor
+```
+
+`export-md` 把 DSH 会话日志渲染为可读 Markdown（会话头、标题、user/assistant 文本、thinking、工具调用与结果）。`doctor` 读取 `$DSH_HOME/dsh-chat-import/imports.json` 与本地 `sessions` 树，做轻量健康汇总。
 
 ### sync_to_claude — 增量写回
 

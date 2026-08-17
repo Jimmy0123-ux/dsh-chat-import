@@ -58,6 +58,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | Handoff | **Resume from external history** | `/resume-claude` / `/resume-codex` generate a handoff summary (untrusted history → goal, files, stop point, next step) into the current session; multi-match lists candidates without guessing. |
 | Assets | **Agents/skills/config migration** | `import_agents` converts pi / opencode / Claude / Codex agents, prompts, skills, instructions and config references into persistent DSH skills. |
 | Repair | **Attach workspaces retroactively** | `/attach-workspaces` re-attaches already-imported sessions to cwd-matched workspaces from the imports registry. |
+| CLI | **Standalone CLI** | `dsh-chat-import export-md <session>` renders a DSH session log as Markdown; `dsh-chat-import doctor` does a lightweight local health check — no DSH host needed. |
 | Quality | **Verify** | `verify_session` runs a read-only structural audit (seq / event whitelist / surfaceOp / balance / tool pairing) with per-kind repair hints. |
 | Quality | **Doctor** | `doctor` / `/doctor` run a read-only migration health check (registry, session existence, skills, workspace registry). |
 | Protection | **Idempotent + incremental** | Re-importing an unchanged source skips it; a grown source appends only its new turns. |
@@ -240,6 +241,18 @@ doctor()
 ```
 
 It returns `{ ok, checks, issues, totals }` — useful after a large batch import or before/after moving DSH data between machines.
+
+### standalone CLI — export-md / doctor
+
+The npm package also ships a small standalone CLI (no DSH host required):
+
+```
+npx dsh-chat-import export-md ~/.dsh/sessions/<workspace>/<session>/session.jsonl
+npx dsh-chat-import export-md <session-dir> --out session.md
+npx dsh-chat-import doctor
+```
+
+`export-md` renders a DSH session log as readable Markdown (session header, title, user/assistant text, thinking, tool calls and results). `doctor` reads `$DSH_HOME/dsh-chat-import/imports.json` and the local `sessions` tree for a lightweight health summary.
 
 ### sync_to_claude — incremental write-back
 
