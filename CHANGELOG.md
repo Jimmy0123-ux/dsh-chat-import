@@ -92,6 +92,19 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ## [Unreleased]
 
+### Fixed
+
+- **YAML-escaped skill descriptions (issue #13)** — `skillFrontmatter` now
+  single-quotes the `description` value (escaping `'` as `''`), so skills whose
+  descriptions contain `: ` (e.g. `Deploy: production helper`) no longer
+  produce invalid YAML plain scalars that made DSH silently drop the SKILL.md.
+- **MCP mirror plan hardening (issue #14)** — `renderMcpPlan` now single-quotes
+  env values (no more broken YAML from `: ` / `#`, and no silent secret
+  inlining), generates unique component ids as `mcp-mirror-<source>-<name>`
+  with a numeric suffix for collisions, and adds file-header notes telling users
+  to verify `dsh-mcp-client` is installed and to replace copied env secrets with
+  `${VAR}` references before merging.
+
 ## [0.5.1] - 2026-08-16
 
 First patch release — fixes both findings from [issue #10](https://github.com/Nwflower/dsh-chat-import/issues/10)
