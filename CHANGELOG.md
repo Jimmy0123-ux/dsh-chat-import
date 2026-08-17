@@ -42,6 +42,9 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   provider). Read-only, never auto-applied.
 - **`/import-reset` (REQ-74 part)** — clears the in-memory scan cache and the
   persistent `scan-cache.json` bookmarks without touching imported sessions.
+- **`/attach-workspaces --mode dedicated` (REQ-70 part)** — supports grouping
+  all imported sessions into a single dedicated workspace via `--mode dedicated
+  --dir <path>`.
 
 ### Fixed
 

@@ -288,3 +288,26 @@ test('REQ-74 /import-reset：清空扫描缓存与持久书签，不影响导入
   assert.ok(out.text.includes('扫描缓存已清空'), out.text)
   assert.ok(!existsSync(cacheFile), 'scan-cache.json 已删除')
 })
+
+// ── REQ-70 workspaceMode：/attach-workspaces --mode dedicated ────────────────
+
+test('REQ-70 /attach-workspaces：dedicated 模式把所有导入会话挂到单个工作区', async () => {
+  const env = makeCtx()
+  registerTools(env.ctx, env.registryDir)
+  registerImportCommand(env.ctx, env.registryDir)
+  const cmd = env.getCommand('attach-workspaces')
+  assert.ok(cmd, 'attach-workspaces 命令应注册')
+
+  const file = join(mkdtempSync(join(tmpdir(), 'dsh-dedicated-src-')), 'dedicated-sess.jsonl')
+  writeFileSync(file, simpleClaudeJsonl('dedicated-sess'), 'utf8')
+  const importCmd = env.getCommand('import')
+  const imported = await importCmd.handler({ rawInput: 'claude ' + file })
+  assert.equal(imported.kind, 'success', imported.text)
+
+  const dedicatedDir = join(mkdtempSync(join(tmpdir(), 'dsh-dedicated-ws-')), 'workspace')
+  const out = await cmd.handler({ rawInput: '--mode dedicated --dir ' + dedicatedDir })
+  assert.equal(out.kind, 'success', out.text)
+  assert.ok(out.text.includes('模式 dedicated'), out.text)
+  assert.ok(out.text.includes('已挂接 1'), out.text)
+  assert.ok(env.attached.some((a) => a.ws === dedicatedDir), '会话挂到 dedicated workspace: ' + JSON.stringify(env.attached))
+})

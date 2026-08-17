@@ -60,7 +60,7 @@
 | 资产 | **agent/skill/config 迁移** | `import_agents` 把 pi / opencode / Claude / Codex 的 agent、prompt、skill、指令与配置参考转换为持久化 DSH skills。 |
 | MCP | **MCP 镜像计划** | `import_mcp` 读取 Claude/Codex 的 MCP server 并生成可人工审阅的 DSH MCP client YAML 片段；`/mcp-status` 列出发现的 server。 |
 | 配置 | **settings 翻译建议** | `import_settings` / `/settings-suggest` 读取 Claude settings.json 与 Codex config.toml，给出 DSH 迁移建议（模型 / 权限 / hooks / env / provider）。 |
-| 修复 | **回填工作区** | `/attach-workspaces` 按 imports registry 把已导入会话重新挂到 cwd 匹配的工作区。 |
+| 修复 | **回填工作区** | `/attach-workspaces` 按 imports registry 把已导入会话重新挂到 cwd 匹配的工作区；`--mode dedicated` 可统一挂到单个工作区。 |
 | 修复 | **重置扫描缓存** | `/import-reset` 清空进程内扫描缓存与 `scan-cache.json` 书签，不影响已导入会话。 |
 | CLI | **独立 CLI** | `dsh-chat-import export-md <会话>` 把 DSH 会话日志渲染为 Markdown；`dsh-chat-import doctor` 做轻量本地体检——无需启动 DSH。 |
 | 质量 | **校验** | `verify_session` 只读结构审计（seq / 事件白名单 / surfaceOp / 回合平衡 / 工具配对），按 kind 给 repair 提示。 |
@@ -300,7 +300,7 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 
 **`/import-all [source] [path]`** 一键扫描默认数据根（或单一来源 / 显式路径）并批量导入所有未导入会话——同一管线，幂等跳过 / 增量续写，归档会话跳过，失败逐条上报。
 
-**`/attach-workspaces`** 按 imports registry 把已导入会话重新挂到 cwd 匹配的工作区——适合修复早期落在「未分组」或之前 workspace 挂载失败的导入；幂等，可重复执行。
+**`/attach-workspaces`** 按 imports registry 把已导入会话重新挂到 cwd 匹配的工作区——适合修复早期落在「未分组」或之前 workspace 挂载失败的导入；幂等，可重复执行。参数：`--mode auto|dedicated|per-project` 与 `--dir <path>`（dedicated 用）。
 
 **`/doctor`** 运行与 `doctor` 工具相同的只读健康检查，并输出简洁报告。
 

@@ -60,7 +60,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | Assets | **Agents/skills/config migration** | `import_agents` converts pi / opencode / Claude / Codex agents, prompts, skills, instructions and config references into persistent DSH skills. |
 | MCP | **MCP mirror plan** | `import_mcp` reads Claude/Codex MCP servers and generates a reviewable DSH MCP client YAML snippet; `/mcp-status` lists discovered servers. |
 | Config | **Settings translation suggestions** | `import_settings` / `/settings-suggest` read Claude settings.json and Codex config.toml and produce DSH migration suggestions (model, permissions, hooks, env, provider). |
-| Repair | **Attach workspaces retroactively** | `/attach-workspaces` re-attaches already-imported sessions to cwd-matched workspaces from the imports registry. |
+| Repair | **Attach workspaces retroactively** | `/attach-workspaces` re-attaches already-imported sessions to cwd-matched workspaces; `--mode dedicated` groups them into one workspace. |
 | Repair | **Reset scan cache** | `/import-reset` clears the in-memory scan cache and `scan-cache.json` bookmarks without touching imported sessions. |
 | CLI | **Standalone CLI** | `dsh-chat-import export-md <session>` renders a DSH session log as Markdown; `dsh-chat-import doctor` does a lightweight local health check — no DSH host needed. |
 | Quality | **Verify** | `verify_session` runs a read-only structural audit (seq / event whitelist / surfaceOp / balance / tool pairing) with per-kind repair hints. |
@@ -300,7 +300,7 @@ The plugin also registers a **`/import <source> <path>`** slash command (availab
 
 **`/import-all [source] [path]`** scans the default data roots (or one source / explicit path) and imports every not-yet-imported session in one shot — same pipeline, idempotent skip / incremental append, archived sessions skipped, failures reported individually.
 
-**`/attach-workspaces`** re-attaches already-imported sessions to their cwd-matched workspaces from the imports registry — useful for fixing early imports that landed in “未分组” or whose workspace attach previously failed. It is idempotent and safe to re-run.
+**`/attach-workspaces`** re-attaches already-imported sessions to their cwd-matched workspaces from the imports registry — useful for fixing early imports that landed in “未分组” or whose workspace attach previously failed. It is idempotent and safe to re-run. Options: `--mode auto|dedicated|per-project` and `--dir <path>` (for `dedicated`).
 
 **`/doctor`** runs the same read-only health check as the `doctor` tool and prints a concise report.
 
