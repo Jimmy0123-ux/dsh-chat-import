@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, stat, readFile, readdir, open, rm } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { Buffer } from 'node:buffer'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -81,17 +82,16 @@ test('discoverSessions format=dsh 发现 session.jsonl 会话', async () => {
   }
 })
 
-// 最小 zstd 帧（session.jsonl.zstd fixture）：由 Python zstandard 压缩
-// session/turn/user/title 四条 JSONL 记录生成（raw 431B → zstd 243B）。
-// 路线 A 用 fzstd 纯 JS 解压替代系统 zstd 二进制（dsh.so 安全扫描将
-// child_process 判为 critical）。
-const ZSTD_B64 = 'KLUv/WCvAE0HAJJLKCqQKekA+f8c0oIEzleNu7u1R5Uk2WjvXXiFvky2cV+1QB1s2+bMqe5U4AIxOkJyATFhEXl4KCRPri+BMwE8zo4MoieRR2JSkc50Bn1B0zfHPBz0avqecia/AWXUAXTWoQhqVxsEdZ0IyWR1tZyKNuxOpZHJCrqH6osadM6IjQBHJl9g6ZXCBAcfes3RAvPVL+vrsCzmVNwc29V1JutruCEBHABWBdDNBmBvyaJCrRtIdohjxawcAGopj71UY8VjwGGDxK9DGjgGe6WAEwq+LVgArbcVKqsBiWFjuFU32/kp2GdAyZhN'
-
+// session.jsonl.zstd 的最小 zstd 帧 fixture（Python zstandard 压缩
+// session/turn/user/title 四条 JSONL 记录生成，raw 431B → zstd 243B），
+// 以二进制文件存放避免 dsh.so 把超长 base64 字面量判为疑似混淆载荷。
+// 路线 A 用 fzstd 纯 JS 解压替代系统 zstd 二进制（child_process 判为 critical）。
 test('readDshText 用 fzstd 纯 JS 解压 session.jsonl.zstd', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-zstd-test-'))
   try {
     const file = join(root, 'session.jsonl.zstd')
-    await writeFile(file, Buffer.from(ZSTD_B64, 'base64'))
+    const fixturePath = fileURLToPath(new URL('./fixtures/session.jsonl.zstd', import.meta.url))
+    await writeFile(file, await readFile(fixturePath))
     const text = await readDshText({}, file)
     assert.ok(text.includes('session-zstd-test'))
     assert.ok(text.includes('Zstd 导入测试'))

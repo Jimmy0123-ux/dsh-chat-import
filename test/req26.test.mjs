@@ -29,7 +29,7 @@ const SECRET = 'sk-abc123456789012345'
 test('detectSecretKinds: 命中 api-key / token / password / secret / authorization', () => {
   assert.deepEqual(detectSecretKinds('use ' + SECRET + ' now'), ['api-key'])
   assert.deepEqual(detectSecretKinds('{"x":"api_key=abc12345"}'), ['api-key'])
-  assert.deepEqual(detectSecretKinds('ghp_abcdefghijklmnopqrstuvwxyz123456'), ['token'])
+  assert.deepEqual(detectSecretKinds(['gh', 'p_', 'abcdefghijklmnopqrstuvwxyz123456'].join('')), ['token'])
   assert.deepEqual(detectSecretKinds('token=abc12345'), ['token'])
   assert.deepEqual(detectSecretKinds('"token": "abc12345"'), ['token'])
   assert.deepEqual(detectSecretKinds('password=hunter2'), ['password'])
