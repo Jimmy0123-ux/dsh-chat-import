@@ -59,6 +59,7 @@
 | 交接 | **外部历史续聊** | `/resume-claude` / `/resume-codex` 把外部 transcript 当不可信历史生成交接摘要（目标 / 文件 / 停止点 / 下一步）注入当前会话；多匹配列候选不猜测。 |
 | 资产 | **agent/skill/config 迁移** | `import_agents` 把 pi / opencode / Claude / Codex 的 agent、prompt、skill、指令与配置参考转换为持久化 DSH skills。 |
 | MCP | **MCP 镜像计划** | `import_mcp` 读取 Claude/Codex 的 MCP server 并生成可人工审阅的 DSH MCP client YAML 片段；`/mcp-status` 列出发现的 server。 |
+| 配置 | **settings 翻译建议** | `import_settings` / `/settings-suggest` 读取 Claude settings.json 与 Codex config.toml，给出 DSH 迁移建议（模型 / 权限 / hooks / env / provider）。 |
 | 修复 | **回填工作区** | `/attach-workspaces` 按 imports registry 把已导入会话重新挂到 cwd 匹配的工作区。 |
 | CLI | **独立 CLI** | `dsh-chat-import export-md <会话>` 把 DSH 会话日志渲染为 Markdown；`dsh-chat-import doctor` 做轻量本地体检——无需启动 DSH。 |
 | 质量 | **校验** | `verify_session` 只读结构审计（seq / 事件白名单 / surfaceOp / 回合平衡 / 工具配对），按 kind 给 repair 提示。 |
@@ -266,6 +267,15 @@ import_mcp({ apply: true })                   // 写盘生成片段
 /mcp-status                                   // 列出发现的 server
 ```
 
+### import_settings — settings/config 翻译建议
+
+`import_settings` 读取 **Claude `~/.claude/settings.json`** 与 **Codex `~/.codex/config.toml`**，返回迁移到 DSH 的建议：模型绑定、权限规则、hooks、环境变量、模型 provider。只读，绝不自动应用：
+
+```
+import_settings()                             // 列出建议
+/settings-suggest                             // 斜杠命令同款
+```
+
 ### sync_to_claude — 增量写回
 
 `sync_to_claude({ sessionId })` 把会话的**新增完整轮次**追加回其 Claude Code 文件——`target: "source"`（默认，写回导入源文件）或 `"copy"`（最近一次 `export_claude` 副本）。文件被外部修改或缩小时一律上报、绝不覆盖；`force: true` 越过外部修改重锚定（被覆盖的守卫仍会上报）：
@@ -294,6 +304,8 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 **`/doctor`** 运行与 `doctor` 工具相同的只读健康检查，并输出简洁报告。
 
 **`/mcp-status`** 只读列出从 Claude/Codex 配置中发现的 MCP server；需要生成 DSH MCP client 片段时使用 `import_mcp`。
+
+**`/settings-suggest`** 只读列出 Claude/Codex 配置翻译建议；需要结构化工具输出时使用 `import_settings`。
 
 **`/resume-claude [id:<会话id> | 关键词]`** 与 **`/resume-codex`** 从外部 transcript 生成**交接摘要**（目标 + 最后请求、涉及文件/产物、最近工具调用、精确停止点、最安全下一步）并注入当前会话，让你在 DSH 里接着干——把 transcript 当**不可信静态历史**（不复述 system/developer/thinking；旧工具输出视为过期证据需复核）。留空取最近会话，`id:<会话id>` 精确指定，或用标题关键词——**多匹配列候选不猜测**：
 
@@ -350,6 +362,7 @@ lib/
 ├── verify.mjs        # verify_session 结构审计（REQ-23）
 ├── doctor.mjs        # 只读迁移健康检查（REQ-66）
 ├── mcp.mjs           # Claude/Codex MCP 镜像计划（REQ-68）
+├── settings.mjs      # Claude/Codex settings 翻译建议（REQ-71）
 ├── prompt-hint.mjs   # 会话启动迁移提示（REQ-53）
 └── context-bridge.mjs # Claude memory / CLAUDE.md / skills 桥接（REQ-28）
 ```

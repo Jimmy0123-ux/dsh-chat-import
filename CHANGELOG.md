@@ -36,6 +36,10 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 - **Global `~/.claude/CLAUDE.md` bridge (REQ-74 part)** — the optional Claude
   context bridge now also injects the global Claude Code `CLAUDE.md` in
   addition to the project-root one.
+- **Settings/config translation suggestions (REQ-71)** — `import_settings`
+  and `/settings-suggest` read Claude `settings.json` and Codex `config.toml`
+  and return DSH migration suggestions (model, permissions, hooks, env,
+  provider). Read-only, never auto-applied.
 
 ### Fixed
 

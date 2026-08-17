@@ -23,9 +23,9 @@
 //   lib/retract.mjs         REQ-33 导入识别 / 撤回（list_imported_sessions / retract_import）
 //   lib/discovery-host.mjs  REQ-25/40 scan_discover 的 host 适配（fs + SQLite 摘要）
 //   lib/panel.mjs           REQ-41 面板路由（POST /api-import/sessions + /api-import/import）
-//   lib/tools.mjs           28 个工具的注册（15 导入 + import_agents + doctor +
-//                           import_mcp + export×3 + bundle×2 + sync + 识别/撤回 +
-//                           发现 + verify）
+//   lib/tools.mjs           29 个工具的注册（15 导入 + import_agents + doctor +
+//                           import_mcp + import_settings + export×3 + bundle×2 +
+//                           sync + 识别/撤回 + 发现 + verify）
 //
 // 本文件只做组装：registerTools 注册工具；webServer 是可选且晚挂载的 host 服务，
 // 面板路由经 ctx.inject(['webServer']) 延迟注册（headless / 无 Web 的 profile 不挂载

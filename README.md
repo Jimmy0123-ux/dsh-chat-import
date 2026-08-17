@@ -59,6 +59,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | Handoff | **Resume from external history** | `/resume-claude` / `/resume-codex` generate a handoff summary (untrusted history → goal, files, stop point, next step) into the current session; multi-match lists candidates without guessing. |
 | Assets | **Agents/skills/config migration** | `import_agents` converts pi / opencode / Claude / Codex agents, prompts, skills, instructions and config references into persistent DSH skills. |
 | MCP | **MCP mirror plan** | `import_mcp` reads Claude/Codex MCP servers and generates a reviewable DSH MCP client YAML snippet; `/mcp-status` lists discovered servers. |
+| Config | **Settings translation suggestions** | `import_settings` / `/settings-suggest` read Claude settings.json and Codex config.toml and produce DSH migration suggestions (model, permissions, hooks, env, provider). |
 | Repair | **Attach workspaces retroactively** | `/attach-workspaces` re-attaches already-imported sessions to cwd-matched workspaces from the imports registry. |
 | CLI | **Standalone CLI** | `dsh-chat-import export-md <session>` renders a DSH session log as Markdown; `dsh-chat-import doctor` does a lightweight local health check — no DSH host needed. |
 | Quality | **Verify** | `verify_session` runs a read-only structural audit (seq / event whitelist / surfaceOp / balance / tool pairing) with per-kind repair hints. |
@@ -266,6 +267,15 @@ import_mcp({ apply: true })                   // write generated snippet
 /mcp-status                                   // list discovered servers
 ```
 
+### import_settings — settings/config translation suggestions
+
+`import_settings` reads **Claude `~/.claude/settings.json`** and **Codex `~/.codex/config.toml`** and returns migration suggestions for DSH: model binding, permission rules, hooks, environment variables, and model provider. It is read-only and never applies anything:
+
+```
+import_settings()                             // list suggestions
+/settings-suggest                             // same via slash command
+```
+
 ### sync_to_claude — incremental write-back
 
 `sync_to_claude({ sessionId })` appends a session's **new complete turns** back to its Claude Code file — `target: "source"` by default (the import source) or `"copy"` (the last `export_claude` copy). Guards report an externally modified or shrunken file instead of overwriting it; `force: true` re-anchors past external edits (the overridden guard is still reported):
@@ -294,6 +304,8 @@ The plugin also registers a **`/import <source> <path>`** slash command (availab
 **`/doctor`** runs the same read-only health check as the `doctor` tool and prints a concise report.
 
 **`/mcp-status`** lists MCP servers discovered from Claude/Codex configs (read-only); use `import_mcp` to generate a DSH MCP client snippet.
+
+**`/settings-suggest`** lists Claude/Codex config translation suggestions (read-only); use `import_settings` for the structured tool output.
 
 **`/resume-claude [id:<sessionId> | keyword]`** and **`/resume-codex`** generate a **handoff summary** from an external transcript (goal + last request, involved files/artifacts, last tool call, exact stop point, safest next step) and inject it into the current session so you can continue the work in DSH — treating the transcript as untrusted static history (no system/developer/thinking content is reproduced; old tool output is flagged as stale evidence). Leave the argument empty for the most recent session, use `id:<sessionId>` for an exact one, or a title keyword — **multiple matches list candidates without guessing**:
 
@@ -350,6 +362,7 @@ lib/
 ├── verify.mjs        # verify_session structural audit (REQ-23)
 ├── doctor.mjs        # read-only migration health check (REQ-66)
 ├── mcp.mjs           # Claude/Codex MCP mirror plan (REQ-68)
+├── settings.mjs      # Claude/Codex settings translation suggestions (REQ-71)
 ├── prompt-hint.mjs   # session-start migration hint (REQ-53)
 └── context-bridge.mjs # Claude memory / CLAUDE.md / skills bridge (REQ-28)
 ```
