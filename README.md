@@ -66,6 +66,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | Quality | **Verify** | `verify_session` runs a read-only structural audit (seq / event whitelist / surfaceOp / balance / tool pairing) with per-kind repair hints. |
 | Quality | **Doctor** | `doctor` / `/doctor` run a read-only migration health check (registry, session existence, skills, workspace registry). |
 | Protection | **Idempotent + incremental** | Re-importing an unchanged source skips it; a grown source appends only its new turns. |
+| Protection | **Expected-hash verification** | Any import tool accepts `expectedHash` (SHA-256) and fails loudly before persisting if the source file does not match. |
 | Protection | **Context budget protection** | Oversized sessions are trimmed to fit a safe context budget, and the trim is reported; `compacted: true` restores Claude compression summaries. |
 
 ---

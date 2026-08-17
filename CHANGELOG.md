@@ -45,6 +45,9 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 - **`/attach-workspaces --mode dedicated` (REQ-70 part)** — supports grouping
   all imported sessions into a single dedicated workspace via `--mode dedicated
   --dir <path>`.
+- **`expectedHash` source verification (REQ-72 part)** — all import tools now
+  accept an optional `expectedHash` (SHA-256 hex) and fail loudly before
+  persisting if the source file does not match.
 
 ### Fixed
 

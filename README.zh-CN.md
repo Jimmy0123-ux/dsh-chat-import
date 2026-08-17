@@ -66,6 +66,7 @@
 | 质量 | **校验** | `verify_session` 只读结构审计（seq / 事件白名单 / surfaceOp / 回合平衡 / 工具配对），按 kind 给 repair 提示。 |
 | 质量 | **doctor 体检** | `doctor` / `/doctor` 只读检查 registry、导入会话存在性、skills 落盘与 workspaceRegistry 可用性。 |
 | 保护 | **幂等 + 增量** | 重复导入未变化的源直接跳过；增长的源只追加新增轮次。 |
+| 保护 | **期望哈希校验** | 所有导入工具支持 `expectedHash`（SHA-256），不匹配时落盘前大声失败。 |
 | 保护 | **上下文预算保护** | 超长会话按安全上下文预算裁剪，裁剪结果显式上报；`compacted: true` 还原 Claude 压缩摘要。 |
 
 ---

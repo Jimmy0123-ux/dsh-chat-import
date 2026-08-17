@@ -1596,6 +1596,35 @@ test('import_hermes 单 .jsonl：db 之外的单会话源，mode single', async 
   assert.equal(persistence.sessions.size, 1)
 })
 
+// ---- REQ-72 expectedHash（源文件强校验） ----
+
+test('REQ-72 expectedHash: 正确哈希导入成功，错误哈希失败且不落盘', async () => {
+  const raw = [
+    JSON.stringify({ sessionId: 'sess-hash-001', type: 'user', cwd: 'D:\\demo\\proj', message: { role: 'user', content: '你好' } }),
+    JSON.stringify({ sessionId: 'sess-hash-001', type: 'assistant', message: { role: 'assistant', content: '好的' } }),
+  ].join('\n') + '\n'
+  const path = 'D:\\demo\\proj\\sess-hash-001.jsonl'
+  const { ctx, persistence } = makeCtx({ [path]: raw })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_claude')
+  const hash = createHash('sha256').update(raw).digest('hex')
+
+  const ok = await def.execute({ path, expectedHash: hash })
+  assert.equal(ok.status, 'imported')
+  assert.equal(persistence.sessions.size, 1)
+
+  // 错误哈希：抛错，不产生第二个会话
+  let thrown
+  try {
+    await def.execute({ path, expectedHash: '0'.repeat(64), force: true })
+  } catch (err) {
+    thrown = err
+  }
+  assert.ok(thrown, '错误哈希应抛错')
+  assert.match(String(thrown && thrown.message), /expectedHash mismatch/)
+  assert.equal(persistence.sessions.size, 1)
+})
+
 // ---- import_kimi 集成（会话目录：wire.jsonl + state.json + kimi.json 映射） ----
 
 // 合成 Kimi wire.jsonl：首行 metadata + 记录（timestamp 秒级递增）。
