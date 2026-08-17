@@ -40,6 +40,8 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   and `/settings-suggest` read Claude `settings.json` and Codex `config.toml`
   and return DSH migration suggestions (model, permissions, hooks, env,
   provider). Read-only, never auto-applied.
+- **`/import-reset` (REQ-74 part)** — clears the in-memory scan cache and the
+  persistent `scan-cache.json` bookmarks without touching imported sessions.
 
 ### Fixed
 

@@ -6,7 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readFileSync, statSync, mkdirSync, readdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, statSync, mkdirSync, readdirSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { registerTools } from '../lib/tools.mjs'
@@ -266,4 +266,25 @@ test('REQ-66 /doctor：命令注册 + 导入后健康检查通过', async () => 
   const out = await cmd.handler({ rawInput: '' })
   assert.equal(out.kind, 'success', out.text)
   assert.ok(out.text.includes('会话 1 个'), out.text)
+})
+
+// ── REQ-74（缓存重置）/import-reset ────────────────────────────────────────
+
+test('REQ-74 /import-reset：清空扫描缓存与持久书签，不影响导入', async () => {
+  const env = makeCtx()
+  registerTools(env.ctx, env.registryDir)
+  registerImportCommand(env.ctx, env.registryDir)
+  const cmd = env.getCommand('import-reset')
+  assert.ok(cmd, 'import-reset 命令应注册')
+  assert.ok(cmd.description.includes('扫描缓存'))
+
+  // 制造一个持久书签文件
+  const cacheFile = join(env.registryDir, 'scan-cache.json')
+  writeFileSync(cacheFile, JSON.stringify({ version: 1, bookmarks: {} }), 'utf8')
+  assert.ok(existsSync(cacheFile))
+
+  const out = await cmd.handler({ rawInput: '' })
+  assert.equal(out.kind, 'success', out.text)
+  assert.ok(out.text.includes('扫描缓存已清空'), out.text)
+  assert.ok(!existsSync(cacheFile), 'scan-cache.json 已删除')
 })

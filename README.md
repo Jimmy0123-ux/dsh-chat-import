@@ -61,6 +61,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | MCP | **MCP mirror plan** | `import_mcp` reads Claude/Codex MCP servers and generates a reviewable DSH MCP client YAML snippet; `/mcp-status` lists discovered servers. |
 | Config | **Settings translation suggestions** | `import_settings` / `/settings-suggest` read Claude settings.json and Codex config.toml and produce DSH migration suggestions (model, permissions, hooks, env, provider). |
 | Repair | **Attach workspaces retroactively** | `/attach-workspaces` re-attaches already-imported sessions to cwd-matched workspaces from the imports registry. |
+| Repair | **Reset scan cache** | `/import-reset` clears the in-memory scan cache and `scan-cache.json` bookmarks without touching imported sessions. |
 | CLI | **Standalone CLI** | `dsh-chat-import export-md <session>` renders a DSH session log as Markdown; `dsh-chat-import doctor` does a lightweight local health check — no DSH host needed. |
 | Quality | **Verify** | `verify_session` runs a read-only structural audit (seq / event whitelist / surfaceOp / balance / tool pairing) with per-kind repair hints. |
 | Quality | **Doctor** | `doctor` / `/doctor` run a read-only migration health check (registry, session existence, skills, workspace registry). |
@@ -306,6 +307,8 @@ The plugin also registers a **`/import <source> <path>`** slash command (availab
 **`/mcp-status`** lists MCP servers discovered from Claude/Codex configs (read-only); use `import_mcp` to generate a DSH MCP client snippet.
 
 **`/settings-suggest`** lists Claude/Codex config translation suggestions (read-only); use `import_settings` for the structured tool output.
+
+**`/import-reset`** clears the scan cache (in-memory TTL + persistent `scan-cache.json`) when discovery results look stale; imported sessions are untouched.
 
 **`/resume-claude [id:<sessionId> | keyword]`** and **`/resume-codex`** generate a **handoff summary** from an external transcript (goal + last request, involved files/artifacts, last tool call, exact stop point, safest next step) and inject it into the current session so you can continue the work in DSH — treating the transcript as untrusted static history (no system/developer/thinking content is reproduced; old tool output is flagged as stale evidence). Leave the argument empty for the most recent session, use `id:<sessionId>` for an exact one, or a title keyword — **multiple matches list candidates without guessing**:
 

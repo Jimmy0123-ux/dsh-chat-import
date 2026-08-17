@@ -61,6 +61,7 @@
 | MCP | **MCP 镜像计划** | `import_mcp` 读取 Claude/Codex 的 MCP server 并生成可人工审阅的 DSH MCP client YAML 片段；`/mcp-status` 列出发现的 server。 |
 | 配置 | **settings 翻译建议** | `import_settings` / `/settings-suggest` 读取 Claude settings.json 与 Codex config.toml，给出 DSH 迁移建议（模型 / 权限 / hooks / env / provider）。 |
 | 修复 | **回填工作区** | `/attach-workspaces` 按 imports registry 把已导入会话重新挂到 cwd 匹配的工作区。 |
+| 修复 | **重置扫描缓存** | `/import-reset` 清空进程内扫描缓存与 `scan-cache.json` 书签，不影响已导入会话。 |
 | CLI | **独立 CLI** | `dsh-chat-import export-md <会话>` 把 DSH 会话日志渲染为 Markdown；`dsh-chat-import doctor` 做轻量本地体检——无需启动 DSH。 |
 | 质量 | **校验** | `verify_session` 只读结构审计（seq / 事件白名单 / surfaceOp / 回合平衡 / 工具配对），按 kind 给 repair 提示。 |
 | 质量 | **doctor 体检** | `doctor` / `/doctor` 只读检查 registry、导入会话存在性、skills 落盘与 workspaceRegistry 可用性。 |
@@ -306,6 +307,8 @@ dsh web 侧边栏底部上方有一个「导入会话」浮动胶囊（`sidebar.
 **`/mcp-status`** 只读列出从 Claude/Codex 配置中发现的 MCP server；需要生成 DSH MCP client 片段时使用 `import_mcp`。
 
 **`/settings-suggest`** 只读列出 Claude/Codex 配置翻译建议；需要结构化工具输出时使用 `import_settings`。
+
+**`/import-reset`** 清空扫描缓存（进程内 TTL + 持久化 `scan-cache.json`），适合发现结果疑似过期时强制重扫；已导入会话不受影响。
 
 **`/resume-claude [id:<会话id> | 关键词]`** 与 **`/resume-codex`** 从外部 transcript 生成**交接摘要**（目标 + 最后请求、涉及文件/产物、最近工具调用、精确停止点、最安全下一步）并注入当前会话，让你在 DSH 里接着干——把 transcript 当**不可信静态历史**（不复述 system/developer/thinking；旧工具输出视为过期证据需复核）。留空取最近会话，`id:<会话id>` 精确指定，或用标题关键词——**多匹配列候选不猜测**：
 
