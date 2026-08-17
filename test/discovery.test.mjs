@@ -361,6 +361,38 @@ test('kimi：新 Kimi Code ~/.kimi-code agents/main/wire.jsonl 发现、state.js
   assert.equal(direct.sessions[0].sourcePath, sessDir)
 })
 
+test('qoder：~/.qoder/projects 发现、ai-title 标题、cwd 项目名、subagents 跳过', async () => {
+  const root = join(HOME, '.qoder', 'projects')
+  const proj = join(root, '-home-u-demo')
+  const s1 = join(proj, 'sess-q1.jsonl')
+  const sessDir = join(proj, 'sess-q1')
+  const subDir = join(sessDir, 'subagents')
+  const files = new Map([
+    [root, { type: 'dir' }],
+    [proj, { type: 'dir' }],
+    [s1, { type: 'file', mtimeMs: 1786000002000, text: [
+      j({ sessionId: 'sess-q1', type: 'user', cwd: '/home/u/demo', timestamp: '2026-01-02T03:04:05.000Z', message: { role: 'user', content: '帮我看看构建' } }),
+      j({ sessionId: 'sess-q1', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '好' }] } }),
+      j({ type: 'ai-title', aiTitle: '自定义标题', sessionId: 'sess-q1' }),
+    ].join('\n') }],
+    [sessDir, { type: 'dir' }],
+    [subDir, { type: 'dir' }],
+    [join(subDir, 'agent-a.jsonl'), { type: 'file', text: j({ sessionId: 'sess-q1', type: 'user', message: { role: 'user', content: '子代理' } }) }],
+  ])
+  const host = mockHost(files)
+
+  const { sessions, total } = await discoverSessions({ path: root, format: 'qoder', host, imports: {} })
+  assert.equal(total, 1)
+  const s = sessions[0]
+  assert.equal(s.format, 'qoder')
+  assert.equal(s.sessionId, 'sess-q1')
+  assert.equal(s.title, '自定义标题') // ai-title
+  assert.equal(s.project, 'demo') // 记录内 cwd basename
+  assert.equal(s.cwd, '/home/u/demo')
+  assert.equal(s.lastActiveAt, 1786000002000)
+  assert.equal(s.messageCount, null)
+})
+
 // ── 30s TTL 缓存（REQ-25/REQ-40：命中不重读，可观测计数断言）──────────────
 
 test('30s TTL 缓存：命中不重读、过期重扫（注入时钟）', async () => {
@@ -583,9 +615,9 @@ test('isInjectedTitle / normalizeTitle / layoutProject 纯函数', () => {
   assert.equal(layoutProject('/home/u/.cursor/projects/slug-c/agent-transcripts/abc/abc.jsonl', 'cursor'), 'slug-c')
 })
 
-test('FORMATS 与工具 schema enum 一致（14 种）', () => {
-  assert.equal(FORMATS.length, 14)
-  assert.deepEqual([...FORMATS].sort(), ['chatgpt', 'claude', 'codex', 'cursor', 'dsh', 'gemini', 'grokbuild', 'hermes', 'kimi', 'openclaw', 'opencode', 'pi', 'reasonix', 'zcode'])
+test('FORMATS 与工具 schema enum 一致（15 种）', () => {
+  assert.equal(FORMATS.length, 15)
+  assert.deepEqual([...FORMATS].sort(), ['chatgpt', 'claude', 'codex', 'cursor', 'dsh', 'gemini', 'grokbuild', 'hermes', 'kimi', 'openclaw', 'opencode', 'pi', 'qoder', 'reasonix', 'zcode'])
 })
 
 // ── git 状态（REQ-58）──────────────────────────────────────────────────────

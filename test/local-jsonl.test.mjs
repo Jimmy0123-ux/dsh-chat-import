@@ -37,3 +37,12 @@ test('import_local_jsonl format 参数强制指定解析器', async () => {
   const out = convertLocalJsonl(raw, { sourcePath: '/tmp/any-name.jsonl', format: 'codex' })
   assert.equal(out.detectedFormat, 'codex')
 })
+
+test('import_local_jsonl 自动识别 Qoder CLI transcript', async () => {
+  const raw = await readFile(new URL('./fixtures/qoder-simple.jsonl', import.meta.url), 'utf8')
+  const out = convertLocalJsonl(raw, { sourcePath: '/home/u/.qoder/projects/-home-u-demo/qoder-simple.jsonl' })
+  assert.equal(out.detectedFormat, 'qoder')
+  assert.equal(out.meta.id, 'import-qoder-simple')
+  assert.equal(out.title, '示例会话')
+  assert.equal(out.turns.length, 1)
+})

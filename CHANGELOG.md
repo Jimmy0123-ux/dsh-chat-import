@@ -54,6 +54,16 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 - **Import-time workspaceMode (REQ-70)** — all import tools now accept
   `workspaceMode: auto|dedicated|per-project` and `workspaceDir`; `dedicated`
   groups imported sessions into a single workspace at import time.
+- **Qoder CLI (`~/.qoder/projects`) import support** — new `import_qoder` tool
+  and `qoder` format. Qoder CLI stores per-session transcripts as Claude-style
+  JSONL (`~/.qoder/projects/<encoded-project>/<sessionId>.jsonl`, subagents in
+  `<sessionId>/subagents/*.jsonl`). The importer preserves text / thinking
+  (→ reasoning) / `tool_use` / `tool_result` blocks (paired by `tool_use_id`
+  with in-order fallback), the `ai-title` > `last-prompt` > first-user title
+  chain, record `cwd`, model and timestamps. Subagent transcripts are skipped
+  (only the main `<sessionId>.jsonl` becomes a session). `scan_discover` picks
+  up `~/.qoder/projects` by default, and `import_local_jsonl` auto-detects
+  Qoder files by their path layout.
 
 ### Fixed
 

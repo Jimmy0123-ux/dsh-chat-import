@@ -92,6 +92,10 @@ export {
 } from './lib/convert/kimi.mjs'
 
 export {
+  convertQoderJsonl,
+} from './lib/convert/qoder.mjs'
+
+export {
   convertDshJsonl,
 } from './lib/convert/dsh.mjs'
 

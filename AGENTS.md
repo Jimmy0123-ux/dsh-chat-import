@@ -7,16 +7,16 @@
 根目录只放发布到 GitHub / npm 的文件；本地工程文件一律收进 `dev/`（gitignore，永不提交）。
 
 ```
-index.mjs        插件入口（薄组合层，host 面）：只做组装——registerTools（lib/tools.mjs 注册 15 个
-                 导入工具（14 个来源 + import_local_jsonl） + scan_discover + export_claude + sync_to_claude + list_imported_sessions +
+index.mjs        插件入口（薄组合层，host 面）：只做组装——registerTools（lib/tools.mjs 注册 16 个
+                 导入工具（15 个来源 + import_local_jsonl） + scan_discover + export_claude + sync_to_claude + list_imported_sessions +
                  retract_import）+ ctx.inject(['webServer']) 延迟挂载面板路由
                  （POST /api-import/sessions 发现、POST /api-import/import 面板导入、
                  GET/POST /api-import/sync 双向增量控制台）
 index.d.ts       类型面（手写维护，随工具 schema 同步）：Cordis 入口 apply/inject/name + ToolSurface
-                 覆盖 21 个工具的参数/返回；package.json types 与 exports 的 types 条件引用，进 npm 包
+                 覆盖 22 个工具的参数/返回；package.json types 与 exports 的 types 条件引用，进 npm 包
 tsconfig.json    TS 工具链最小配置（仅 include index.d.ts；零构建、不进 npm 包）
 lib/             导入/同步驱动（按职责拆分，均消费 ctx、非纯函数）：imports.mjs（幂等 registry）、
-                 backfill.mjs（sync_to_claude 写回）、discovery.mjs（14 格式统一发现 + 30s TTL / 持久化
+                 backfill.mjs（sync_to_claude 写回）、discovery.mjs（15 格式统一发现 + 30s TTL / 持久化
                  书签）、budget.mjs（REQ-37 预算解析链）、import-core.mjs（共享导入编排：importTranscript
                  状态机 / importDirectory / runDecision 落盘 / 归组 / 标准预览）、import-variants.mjs
                  （chatgpt / grokbuild / hermes / kimi 编排 + opencode / zcode 等 dry-run 预览）、toolkit.mjs
@@ -33,7 +33,7 @@ lib/             导入/同步驱动（按职责拆分，均消费 ctx、非纯�
                  memory/CLAUDE.md/skills 桥进 scoped systemPrompt/skills，默认关 env 开关）、opencode.mjs / zcode.mjs / hermes.mjs
                  （SQLite 读取，node:sqlite）、convert/（转换核心按源拆分）、export/（反向序列化按目标
                  格式拆分：claude.mjs / codex.mjs / grokbuild.mjs）
-convert.mjs      转换核心 re-export shim（已按源拆到 lib/convert/{core,claude,codex,chatgpt,cursor,gemini,reasonix,opencode,zcode,grokbuild,openclaw,hermes,pi,kimi,dsh,local-jsonl}.mjs，纯函数、零 DSH 依赖、可独立单测）
+convert.mjs      转换核心 re-export shim（已按源拆到 lib/convert/{core,claude,codex,chatgpt,cursor,gemini,reasonix,opencode,zcode,grokbuild,openclaw,hermes,pi,kimi,qoder,dsh,local-jsonl}.mjs，纯函数、零 DSH 依赖、可独立单测）
 export.mjs       反向导出序列化器 re-export shim（实体在 lib/export/claude.mjs——DSH 会话日志 → Claude
                  Code JSONL，纯函数、零 DSH 依赖；`exports["./export.mjs"]` 子路径契约保持不变）
 cordis.patch.yml bundle 声明（insert import-claude）
@@ -59,7 +59,7 @@ npm run check:linux   # 跨平台路径纪律静态检查（.github/scripts/chec
 npm run build   # 零构建包的「build」：发布面自检（files 完整性 + node --check 语法 + lockfile 版本，prepack 自动跑）
 ```
 
-无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` / `export.mjs` / `lib/` 即发布产物（`lib/client.js` 是手写 CJS bundle，亦无构建；`npm run build` 是发布面自检而非编译）。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调任一 `import_*`（15 个）/ `scan_discover` / `export_claude` / `sync_to_claude` / `list_imported_sessions` / `retract_import`；Browser 侧验证：dsh web 侧边栏底部「导入会话」按钮 → 面板按工作区分组浏览 + 单选/多选导入。
+无构建步骤：纯 ESM，`index.mjs` / `convert.mjs` / `export.mjs` / `lib/` 即发布产物（`lib/client.js` 是手写 CJS bundle，亦无构建；`npm run build` 是发布面自检而非编译）。DSH 手工验证：`dsh plugin --profile web add -w link:<本仓库路径>` 后重启 dsh，在会话里调任一 `import_*`（16 个）/ `scan_discover` / `export_claude` / `sync_to_claude` / `list_imported_sessions` / `retract_import`；Browser 侧验证：dsh web 侧边栏底部「导入会话」按钮 → 面板按工作区分组浏览 + 单选/多选导入。
 
 ## 提交纪律（保持仓库干净）
 

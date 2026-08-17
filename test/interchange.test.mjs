@@ -99,7 +99,7 @@ test('interchange 文档可合成平衡 DSH 事件（round-trip 契约）', () =
   assert.equal(r.ok, true, JSON.stringify(r.problems))
 })
 
-test('SOURCE_CAPABILITIES: 全部 14 源覆盖且字段齐全', () => {
+test('SOURCE_CAPABILITIES: 全部 15 源覆盖且字段齐全', () => {
   const keys = ['toolResults', 'reasoning', 'cwd', 'branches', 'attachments', 'compacted']
   for (const [format, caps] of Object.entries(SOURCE_CAPABILITIES)) {
     for (const k of keys) {
