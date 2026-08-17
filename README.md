@@ -25,7 +25,7 @@
 
 <div align="center">
 
-<img src="./assets/image-20260814205401839.png" alt="Import sessions from multiple sources into the dsh sidebar panel" width="600" />
+<img src="./assets/qoder.png" alt="Qoder CLI" width="600" />
 
 **Changelog:** [CHANGELOG.md](CHANGELOG.md) · **Roadmap:** [ROADMAP.md](ROADMAP.md) · **Interchange protocol:** [docs/INTERCHANGE.md](docs/INTERCHANGE.md)
 
@@ -85,6 +85,8 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | **Any local JSONL** | any `.jsonl` file / directory (auto-detected) | `import_local_jsonl` |
 
 Each import preserves what the source actually records — session id, `cwd`, title, model, timestamps, tool calls & results, reasoning. Sources that record less import what exists; anything a format cannot preserve is explicitly flagged in the import report (e.g. Kimi sub-agent conversations mirrored into the parent wire as `SubagentEvent` are skipped — the parent's `Agent` tool call & result are kept, and a sub-agent's own `subagents/<agentId>/wire.jsonl` or new-layout `agents/<agentId>/wire.jsonl` can be imported directly). Reasonix V2 sessions merge their `*.events.jsonl` WAL automatically (`walMerged` reported); Claude sessions can be imported as their last compression summary + tail with `compacted: true`.
+
+**Qoder CLI** (`import_qoder`) reads `~/.qoder/projects/<encoded-project>/<sessionId>.jsonl` transcripts — Claude-style `user` / `assistant` records with `text` / `thinking` / `tool_use` / `tool_result` content blocks. Tool calls & results are preserved and paired by `tool_use_id` (with in-order fallback when the id is absent), thinking maps to reasoning, and the title follows the `ai-title` → `last-prompt` → first-user-message chain; `cwd`, model and timestamps carry over. Subagent transcripts (`<sessionId>/subagents/*.jsonl`) are skipped so only the main session becomes a DSH session — and both `scan_discover` and the import panel's source filter include `qoder`.
 
 ---
 

@@ -25,7 +25,7 @@
 
 <div align="center">
 
-<img src="./assets/image-20260814205401839.png" alt="从多个来源导入会话到侧边栏面板" width="600" />
+<img src="./assets/qoder.png" alt="Qoder CLI" width="600" />
 
 **更新日志（英文）：** [CHANGELOG.md](CHANGELOG.md) · **路线图：** [ROADMAP.md](ROADMAP.md) · **互转协议：** [docs/INTERCHANGE.md](docs/INTERCHANGE.md)
 
@@ -85,6 +85,8 @@
 | **任意本地 JSONL** | 任意 `.jsonl` 文件 / 目录（自动识别格式） | `import_local_jsonl` |
 
 每次导入都会保留源实际记录的内容——sessionId、`cwd`、标题、模型、时间戳、工具调用与结果、思考过程。数据较少的源导入其已有的内容；源格式无法保留的部分，会在导入报告里显式标注（如 Kimi 镜像进父 wire 的 `SubagentEvent` 子代理对话会跳过——父 `Agent` 工具调用与结果保留，子代理自己的 `subagents/<agentId>/wire.jsonl` 或新布局 `agents/<agentId>/wire.jsonl` 可直接导入）。Reasonix V2 会话自动合并 `*.events.jsonl` WAL（上报 `walMerged`）；Claude 会话可用 `compacted: true` 只导最后一次压缩摘要 + 尾部。
+
+**Qoder CLI**（`import_qoder`）读取 `~/.qoder/projects/<encoded-project>/<sessionId>.jsonl` 会话——Claude 同构的 `user` / `assistant` 记录与 `text` / `thinking` / `tool_use` / `tool_result` 内容块。工具调用与结果完整保留并按 `tool_use_id` 配对（缺省按未决调用顺序回退），thinking 映射为 reasoning，标题链为 `ai-title` → `last-prompt` → 首问；`cwd`、模型与时间戳一并保留。子代理 transcript（`<sessionId>/subagents/*.jsonl`）跳过，仅主会话成为 DSH 会话——`scan_discover` 与导入面板的来源筛选均含 `qoder`。
 
 ---
 
