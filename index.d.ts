@@ -1,7 +1,7 @@
 // index.d.ts — dsh-chat-import 类型面（手写维护，随工具 schema 变更同步）
 //
 // 本包是零构建纯 ESM 插件：index.mjs 只导出 Cordis 插件入口（apply/inject/name）
-// 与少量 host 面辅助函数；21 个工具由 apply 动态注册，不在此模块导出。
+// 与少量 host 面辅助函数；22 个工具由 apply 动态注册，不在此模块导出。
 // 因此本文件把「工具调用面」声明为一个类型化接口（ToolSurface），供 TS 调用方
 // 参考参数/返回结构，而不是伪装成真实的模块导出。
 //
@@ -45,6 +45,7 @@ export interface ToolSurface {
   import_pi(options: ImportOptions & { fullHistory?: boolean }): Promise<ImportResult>
   import_hermes(options: ImportOptions): Promise<ImportResult>
   import_kimi(options: ImportOptions): Promise<ImportResult>
+  import_qoder(options: ImportOptions): Promise<ImportResult>
   import_dsh(options: ImportOptions): Promise<ImportResult>
   import_local_jsonl(options: ImportOptions & { format?: LocalJsonlFormat }): Promise<ImportResult>
   import_agents(options?: AgentsImportOptions): Promise<AgentsImportResult>
@@ -92,7 +93,7 @@ export interface ZcodeExtraParams {
 }
 
 export type LocalJsonlFormat =
-  | 'dsh' | 'claude' | 'codex' | 'cursor' | 'reasonix' | 'pi' | 'openclaw' | 'hermes'
+  | 'dsh' | 'claude' | 'codex' | 'cursor' | 'reasonix' | 'pi' | 'openclaw' | 'hermes' | 'qoder'
 
 export type ImportStatus = 'imported' | 'already-imported' | 'appended' | 'skipped' | 'failed'
 
@@ -494,7 +495,7 @@ export interface RetractResult {
 export type ScanFormat =
   | 'claude' | 'codex' | 'cursor' | 'gemini' | 'reasonix' | 'opencode'
   | 'zcode' | 'grokbuild' | 'openclaw' | 'pi' | 'hermes' | 'kimi'
-  | 'chatgpt' | 'dsh'
+  | 'qoder' | 'chatgpt' | 'dsh'
 
 export type ImportStatusLabel = 'imported' | 'partial' | 'not-imported' | 'archived'
 

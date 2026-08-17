@@ -2,7 +2,7 @@
 
 # 📥 DSH Chat Import
 
-**Import 14 external agent conversation histories into DeepSeek Harness as full-fidelity, resumable sessions — and export / sync back to Claude Code, Codex, Kimi, or a portable interchange bundle.**
+**Import 15 external agent conversation histories into DeepSeek Harness as full-fidelity, resumable sessions — and export / sync back to Claude Code, Codex, Kimi, or a portable interchange bundle.**
 
 [![English](https://img.shields.io/badge/Language-English-blue?style=for-the-badge)](#)
 [![简体中文](https://img.shields.io/badge/Language-简体中文-blue?style=for-the-badge)](README.zh-CN.md)
@@ -21,7 +21,7 @@
 
 </div>
 
-> **14 agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, matrix interop / backup / handoff on the way out.
+> **15 agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, matrix interop / backup / handoff on the way out.
 
 <div align="center">
 
@@ -35,7 +35,7 @@
 
 ## 💡 Concept
 
-`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes, Kimi CLI / Kimi Code and DSH session logs** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd` (resolved via the authoritative `~/.claude.json` project mapping, greedy slug decoding for Reasonix, with a home-directory sandbox guard).
+`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes, Kimi CLI / Kimi Code, Qoder CLI and DSH session logs** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd` (resolved via the authoritative `~/.claude.json` project mapping, greedy slug decoding for Reasonix, with a home-directory sandbox guard).
 
 The reverse direction is covered too: `export_claude` serializes a DSH session back into a Claude Code JSONL transcript that Claude Code can load with `--resume` (read-only — your DSH log is never modified), `sync_to_claude` incrementally appends a session's new turns back to a Claude Code file — guarded, never silently overwriting — and the same matrix extends to **Codex rollouts** (`export_codex`) and **Kimi wire files** (`export_kimi`), plus a **portable interchange bundle** (`export_bundle` / `restore_bundle`, REQ-56/62) with SHA-256 fingerprints and cross-machine restore.
 
@@ -45,7 +45,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 
 | Category | Feature | Description |
 | --- | --- | --- |
-| Import | **14 sources + local JSONL, one plugin** | One tool per source — from Claude Code JSONL and Codex rollouts to SQLite databases and session directories, including the Reasonix desktop app and Claude-3p new client roots. |
+| Import | **15 sources + local JSONL, one plugin** | One tool per source — from Claude Code JSONL and Codex rollouts to SQLite databases and session directories, including the Reasonix desktop app and Claude-3p new client roots. |
 | Import | **Full fidelity** | Tool calls & results, thinking blocks, titles, models and timestamps carry over wherever the source records them. |
 | Import | **Batch import** | Point at a directory (or a whole database) and every file / conversation becomes its own session, with a per-file summary. |
 | Import | **ChatGPT branches** | `import_chatgpt({ branch: 'all' })` restores every root→leaf branch as its own session; tool messages become real `tool/call` + `tool/result`. |
@@ -80,6 +80,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | **Pi Coding Agent** | `~/.pi/agent/sessions/--<cwd>--/<timestamp>_<uuid>.jsonl` | `import_pi` |
 | **Hermes** | `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`) | `import_hermes` |
 | **Kimi CLI / Kimi Code** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` · `~/.kimi-code/sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl` | `import_kimi` |
+| **Qoder CLI** | `~/.qoder/projects/<encoded-project>/<sessionId>.jsonl` (subagents in `<sessionId>/subagents/*.jsonl`) | `import_qoder` |
 | **DSH session logs** | `~/.dsh/sessions/<encoded-workspace>/<sessionId>/session.jsonl(.zstd)` | `import_dsh` |
 | **Any local JSONL** | any `.jsonl` file / directory (auto-detected) | `import_local_jsonl` |
 
@@ -96,7 +97,7 @@ dsh plugin --profile web add dsh-chat-import                    # npm package
 dsh plugin --profile web add -w link:/path/to/dsh-chat-import   # local checkout (symlink)
 ```
 
-**2. Import** — in any DSH session, import a single file or a whole directory (the same call shape works for all 15 import tools — see the table above):
+**2. Import** — in any DSH session, import a single file or a whole directory (the same call shape works for all 16 import tools — see the table above):
 
 ```
 import_claude({ path: "~/.claude/projects" })
@@ -181,7 +182,7 @@ Semantics: same-name conflicts across sources get a `-pi` / `-opencode` suffix; 
 
 ### scan_discover — read-only session discovery
 
-`scan_discover` scans the known data roots of all 14 formats (including the Reasonix desktop app and Claude-3p roots on Windows) and returns a structured session index (title, project, cwd, path, import status, and git branch/dirty when the source directory is a git repo) so you can preview before a batch import. Zero side effects:
+`scan_discover` scans the known data roots of all 15 formats (including the Reasonix desktop app and Claude-3p roots on Windows) and returns a structured session index (title, project, cwd, path, import status, and git branch/dirty when the source directory is a git repo) so you can preview before a batch import. Zero side effects:
 
 ```
 scan_discover()
@@ -317,7 +318,7 @@ Targets the `dsh 0.1.x` line (`dsh-tools ^0.1.0-rc.6`, tested on `dsh 0.1.0-rc.6
 
 ## 🗺️ Roadmap
 
-- [x] 14 import sources + reverse export / sync back to Claude Code
+- [x] 15 import sources + reverse export / sync back to Claude Code
 - [x] Browser import panel + `/import` / `/import-all` slash commands + session-start migration hint & context bridge
 - [x] Interchange IR v1 + portable backup bundle + cross-machine restore (REQ-18 / REQ-56 / REQ-62)
 - [x] Matrix interop (Claude ↔ Codex ↔ Kimi ↔ DSH) + `verify_session` audit (REQ-23) + `/resume-claude` / `/resume-codex` handoff (REQ-30)

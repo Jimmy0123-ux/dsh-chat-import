@@ -151,6 +151,20 @@ test('REQ-42 /import：工具全名 import_claude 与客户端来源 id claude-c
   assert.equal(b.kind, 'success', b.text)
 })
 
+test('REQ-42 /import：qoder 短名与工具全名 import_qoder 均接受', async () => {
+  const { cmd } = setup()
+  const file = join(mkdtempSync(join(tmpdir(), 'dsh-cmd-src4-')), 'qoder-sess.jsonl')
+  writeFileSync(file, [
+    JSON.stringify({ sessionId: 'qoder-sess', type: 'user', cwd: 'D:\\no-such\\proj', message: { role: 'user', content: '你好' }, timestamp: '2026-08-01T10:00:00.000Z' }),
+    JSON.stringify({ sessionId: 'qoder-sess', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '好的' }] }, timestamp: '2026-08-01T10:00:01.000Z' }),
+  ].join('\n') + '\n', 'utf8')
+
+  const a = await cmd.handler({ rawInput: 'qoder ' + file })
+  assert.equal(a.kind, 'success', a.text)
+  const b = await cmd.handler({ rawInput: 'import_qoder ' + file })
+  assert.equal(b.kind, 'success', b.text)
+})
+
 test('REQ-42 /import：未知来源报错', async () => {
   const { cmd } = setup()
   const out = await cmd.handler({ rawInput: 'foobar C:\\x.jsonl' })

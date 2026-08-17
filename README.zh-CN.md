@@ -2,7 +2,7 @@
 
 # 📥 DSH Chat Import
 
-**把 14 种外部 Agent 聊天历史全保真导入 DeepSeek Harness 为可继续（resume）会话——并可导出 / 同步回 Claude Code、Codex、Kimi，或便携 interchange bundle。**
+**把 15 种外部 Agent 聊天历史全保真导入 DeepSeek Harness 为可继续（resume）会话——并可导出 / 同步回 Claude Code、Codex、Kimi，或便携 interchange bundle。**
 
 [![English](https://img.shields.io/badge/Language-English-blue?style=for-the-badge)](README.md)
 [![简体中文](https://img.shields.io/badge/Language-简体中文-blue?style=for-the-badge)](#)
@@ -21,7 +21,7 @@
 
 </div>
 
-> **一个插件，14 种来源** —— 全保真导入 DeepSeek Harness，无缝续聊，反向可互转 / 备份 / 交接。
+> **一个插件，15 种来源** —— 全保真导入 DeepSeek Harness，无缝续聊，反向可互转 / 备份 / 交接。
 
 <div align="center">
 
@@ -35,7 +35,7 @@
 
 ## 💡 概念
 
-`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw、Pi Coding Agent、Hermes、Kimi CLI / Kimi Code 与 DSH 会话日志** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区（经 `~/.claude.json` projects 权威映射 / Reasonix slug 贪心解码解析，带主目录沙箱防护）。
+`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、ZCode、Grok Build、OpenClaw、Pi Coding Agent、Hermes、Kimi CLI / Kimi Code、Qoder CLI 与 DSH 会话日志** 导入聊天历史——工具调用、思考过程一应俱全——成为**全保真、可继续（resume）的 DeepSeek Harness 会话**。源文件**只读**读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区（经 `~/.claude.json` projects 权威映射 / Reasonix slug 贪心解码解析，带主目录沙箱防护）。
 
 反向方向同样覆盖：`export_claude` 把 DSH 会话序列化回 Claude Code JSONL（只读——绝不修改你的 DSH 日志），Claude Code 可用 `--resume` 加载续聊；`sync_to_claude` 再把会话新增轮次增量写回 Claude Code 文件——带守卫、绝不静默覆盖；同一矩阵延伸到 **Codex rollout**（`export_codex`）与 **Kimi wire**（`export_kimi`），外加带 SHA-256 指纹与跨机器还原的**便携 interchange bundle**（`export_bundle` / `restore_bundle`，REQ-56/62）。
 
@@ -45,7 +45,7 @@
 
 | 分类 | 特性 | 说明 |
 | --- | --- | --- |
-| 导入 | **14 种来源 + 本地 JSONL，一个插件** | 每种来源一条命令——从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录，含 Reasonix 桌面版与 Claude-3p 新端根。 |
+| 导入 | **15 种来源 + 本地 JSONL，一个插件** | 每种来源一条命令——从 Claude Code JSONL、Codex rollout 到 SQLite 数据库与会话目录，含 Reasonix 桌面版与 Claude-3p 新端根。 |
 | 导入 | **全保真** | 工具调用与结果、思考块、标题、模型与时间戳，源有记录就原样保留。 |
 | 导入 | **批量导入** | 指向一个目录（或整个数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。 |
 | 导入 | **ChatGPT 分支还原** | `import_chatgpt({ branch: 'all' })` 把每条 root→leaf 分支还原为独立会话；工具消息还原为真正的 `tool/call` + `tool/result`。 |
@@ -80,6 +80,7 @@
 | **Pi Coding Agent** | `~/.pi/agent/sessions/--<cwd>--/<timestamp>_<uuid>.jsonl` | `import_pi` |
 | **Hermes** | `~/.hermes/`（Windows `%LOCALAPPDATA%\hermes`） | `import_hermes` |
 | **Kimi CLI / Kimi Code** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` · `~/.kimi-code/sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl` | `import_kimi` |
+| **Qoder CLI** | `~/.qoder/projects/<encoded-project>/<sessionId>.jsonl`（子代理在 `<sessionId>/subagents/*.jsonl`） | `import_qoder` |
 | **DSH 会话日志** | `~/.dsh/sessions/<encoded-workspace>/<sessionId>/session.jsonl(.zstd)` | `import_dsh` |
 | **任意本地 JSONL** | 任意 `.jsonl` 文件 / 目录（自动识别格式） | `import_local_jsonl` |
 
@@ -96,7 +97,7 @@ dsh plugin --profile web add dsh-chat-import                    # npm 包
 dsh plugin --profile web add -w link:/path/to/dsh-chat-import   # 本地源码（符号链接）
 ```
 
-**2. 导入** — 在任意 DSH 会话里导入单个文件或整个目录（15 个导入工具调用方式一致——见上方来源表）：
+**2. 导入** — 在任意 DSH 会话里导入单个文件或整个目录（16 个导入工具调用方式一致——见上方来源表）：
 
 ```
 import_claude({ path: "~/.claude/projects" })
@@ -181,7 +182,7 @@ import_agents({ apply: true })     // 写入 $DSH_AGENTS_HOME/skills/<name>/SKIL
 
 ### scan_discover — 只读会话发现
 
-`scan_discover` 扫描全部 14 种格式的已知数据根（Windows 上含 Reasonix 桌面版与 Claude-3p 根），返回结构化会话索引（标题、项目、cwd、路径、导入状态，源目录为 git 仓库时附分支/dirty），供批导入前预览。零副作用：
+`scan_discover` 扫描全部 15 种格式的已知数据根（Windows 上含 Reasonix 桌面版与 Claude-3p 根），返回结构化会话索引（标题、项目、cwd、路径、导入状态，源目录为 git 仓库时附分支/dirty），供批导入前预览。零副作用：
 
 ```
 scan_discover()
@@ -317,7 +318,7 @@ lib/
 
 ## 🗺️ 路线图
 
-- [x] 14 种来源导入 + 反向导出 / 同步回 Claude Code
+- [x] 15 种来源导入 + 反向导出 / 同步回 Claude Code
 - [x] 浏览器导入面板 + `/import` / `/import-all` 斜杠命令 + 会话启动迁移提示与上下文桥接
 - [x] Interchange IR v1 + 便携备份 bundle + 跨机器还原（REQ-18 / REQ-56 / REQ-62）
 - [x] 矩阵化互转（Claude ↔ Codex ↔ Kimi ↔ DSH）+ `verify_session` 审计（REQ-23）+ `/resume-claude` / `/resume-codex` 交接（REQ-30）

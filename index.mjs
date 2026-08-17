@@ -1,7 +1,7 @@
 // index.mjs — dsh-chat-import 插件入口（薄组合层）
 //
 // 外部聊天记录（Claude Code / Codex-ChatGPT / ChatGPT / Cursor / Gemini / Reasonix /
-// Pi Coding Agent / opencode / zcode / grokbuild / openclaw / hermes / kimi）→ DSH 会话
+// Pi Coding Agent / opencode / zcode / grokbuild / openclaw / hermes / kimi / qoder）→ DSH 会话
 // 导入器 + DSH → Claude Code JSONL 反向导出。消费 host 的 sessionPersistence / fs /
 // tools / workspaceRegistry 服务（webServer 可选，经 ctx.inject 延迟挂载）。
 //
@@ -23,12 +23,12 @@
 //   lib/retract.mjs         REQ-33 导入识别 / 撤回（list_imported_sessions / retract_import）
 //   lib/discovery-host.mjs  REQ-25/40 scan_discover 的 host 适配（fs + SQLite 摘要）
 //   lib/panel.mjs           REQ-41 面板路由（POST /api-import/sessions + /api-import/import）
-//   lib/tools.mjs           26 个工具的注册（15 导入 + import_agents + export×3 + bundle×2 +
+//   lib/tools.mjs           27 个工具的注册（16 导入 + import_agents + export×3 + bundle×2 +
 //                           sync + 识别/撤回 + 发现 + verify）
 //
 // 本文件只做组装：registerTools 注册工具；webServer 是可选且晚挂载的 host 服务，
 // 面板路由经 ctx.inject(['webServer']) 延迟注册（headless / 无 Web 的 profile 不挂载
-// 路由但照常 apply，15 个导入工具与 CLI 会话不受影响）。
+// 路由但照常 apply，16 个导入工具与 CLI 会话不受影响）。
 
 import { resolveRegistryDir } from './lib/imports.mjs'
 import { registerTools } from './lib/tools.mjs'
