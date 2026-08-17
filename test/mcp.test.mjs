@@ -55,6 +55,29 @@ test('buildMcpPlan/renderMcpPlan: 去重并生成 YAML 片段', () => {
   assert.match(plan, /fs:/)
 })
 
+test('renderMcpPlan: issue #14 env 值单引号转义（冒号/井号）且文件头含安全提醒', () => {
+  const rows = [{ source: 'claude', name: 'gh', command: 'npx', args: [], env: { GITHUB_TOKEN: 'ghp_realSecretValue1234567890', API_KEY: 'sk-abc: #def' } }]
+  const plan = renderMcpPlan(rows)
+  assert.ok(plan.includes("GITHUB_TOKEN: 'ghp_realSecretValue1234567890'"))
+  assert.ok(plan.includes("API_KEY: 'sk-abc: #def'"))
+  assert.match(plan, /dsh-mcp-client package installed before merging/)
+  assert.match(plan, /replace secrets with \$\{VAR\} references/)
+})
+
+test('renderMcpPlan: issue #14 组件 id 按 source+name 唯一（safeId 压缩撞名加后缀）', () => {
+  const rows = [
+    { source: 'claude', name: 'My Server', command: 'npx', args: [], env: {} },
+    { source: 'claude', name: 'my-server', command: 'npx', args: [], env: {} },
+    { source: 'codex', name: 'My Server', command: 'npx', args: [], env: {} },
+  ]
+  const plan = renderMcpPlan(rows)
+  const ids = [...plan.matchAll(/- id: (mcp-mirror-[^\n]+)/g)].map((m) => m[1])
+  assert.equal(ids.length, 3)
+  assert.equal(new Set(ids).size, 3) // 全部唯一
+  assert.ok(ids.some((id) => id.startsWith('mcp-mirror-claude-my-server')))
+  assert.ok(ids.some((id) => id.startsWith('mcp-mirror-codex-my-server')))
+})
+
 test('runMcpMirror: dry-run 零写盘 + apply 只写 outPath', async () => {
   const root = mkdtempSync(join(tmpdir(), 'mcp-'))
   const claudePath = join(root, 'claude-mcp.json')

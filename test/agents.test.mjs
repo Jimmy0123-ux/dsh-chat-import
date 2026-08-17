@@ -55,6 +55,21 @@ test('collectCandidates: nameFrom 覆盖（pi prompt 前缀）', () => {
   assert.equal(out[0].name, 'pi-prompt-refactor')
 })
 
+// ── 纯函数：skillFrontmatter（issue #13：description 含 `: ` 时 YAML 转义）──
+
+test('skillFrontmatter: description 含冒号空格时单引号转义，避免 DSH 静默丢弃', () => {
+  const out = skillFrontmatter({ name: 'deploy', source: 'claude', kind: 'skill', description: 'Deploy: production helper (use when: releasing)', body: 'x', extraFrontmatter: {} })
+  assert.ok(out.includes("description: 'Deploy: production helper (use when: releasing)'"))
+  // 单引号本身也要转义（YAML 单引号标量 '' = 字面单引号）
+  const withQuote = skillFrontmatter({ name: 'q', source: 'pi', kind: 'agent', description: "It's: tricky", body: 'x', extraFrontmatter: {} })
+  assert.ok(withQuote.includes("description: 'It''s: tricky'"))
+})
+
+test('skillFrontmatter: 缺省 description（Imported from ...）同样转义', () => {
+  const out = skillFrontmatter({ name: 'a', source: 'pi', kind: 'agent', description: '', body: 'x', extraFrontmatter: {} })
+  assert.ok(out.includes("description: 'Imported from pi (agent: a)'"))
+})
+
 // ── 纯函数：planSkillWrites ────────────────────────────────────────────────
 
 test('planSkillWrites: 全新 bundle → write', () => {
