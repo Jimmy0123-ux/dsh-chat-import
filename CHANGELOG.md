@@ -30,6 +30,9 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   and generates a reviewable DSH MCP client YAML snippet (dry-run by default;
   `apply` writes only to a generated file, never editing the profile).
   `/mcp-status` lists discovered servers.
+- **opencode tool name mapping (REQ-74 part)** — opencode tool names such as
+  `websearch`, `webfetch`, `question`, `todowrite`, and `task` are mapped to
+  DSH standard names during import.
 
 ### Fixed
 

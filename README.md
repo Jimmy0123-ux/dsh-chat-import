@@ -49,6 +49,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | Import | **Full fidelity** | Tool calls & results, thinking blocks, titles, models and timestamps carry over wherever the source records them. |
 | Import | **Batch import** | Point at a directory (or a whole database) and every file / conversation becomes its own session, with a per-file summary. |
 | Import | **ChatGPT branches** | `import_chatgpt({ branch: 'all' })` restores every root→leaf branch as its own session; tool messages become real `tool/call` + `tool/result`. |
+| Import | **Tool name mapping** | opencode tool names are mapped to DSH equivalents (`websearch → web_search`, `question → ask_user_question`, `task → subagent`, …) so resumed tool calls stay meaningful. |
 | Resume | **Seamlessly resumable** | Open an imported session and keep chatting exactly where the source left off — fully tool-enabled (default preset scope + bound default model). |
 | Resume | **Auto workspace grouping** | Sessions land in the workspace of their source `cwd` (authoritative mapping, then slug decode, with a home-directory sandbox guard; falling back to the source file's directory when that path does not exist locally) — no more "ungrouped". |
 | Interop | **Matrix export** | `export_claude` / `export_codex` / `export_kimi` serialize any DSH session into the target format — DSH↔Claude↔Codex↔Kimi four-way interop. |

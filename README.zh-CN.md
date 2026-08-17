@@ -49,6 +49,7 @@
 | 导入 | **全保真** | 工具调用与结果、思考块、标题、模型与时间戳，源有记录就原样保留。 |
 | 导入 | **批量导入** | 指向一个目录（或整个数据库），每个文件 / 每段对话都成为独立会话，并返回逐文件汇总。 |
 | 导入 | **ChatGPT 分支还原** | `import_chatgpt({ branch: 'all' })` 把每条 root→leaf 分支还原为独立会话；工具消息还原为真正的 `tool/call` + `tool/result`。 |
+| 导入 | **工具名映射** | opencode 工具名映射为 DSH 等价名（`websearch → web_search`、`question → ask_user_question`、`task → subagent` 等），续聊时工具调用更有意义。 |
 | 续聊 | **可无缝续聊** | 打开导入的会话，从源记录停下的地方继续对话——工具完整可用（默认 preset scope + 绑定默认模型）。 |
 | 续聊 | **自动归组工作区** | 会话按源 `cwd` 挂进对应工作区（权威映射 → slug 解码 → 主目录沙箱防护；本机无此路径时回退源文件所在目录）——不再「未分组」。 |
 | 互转 | **矩阵化导出** | `export_claude` / `export_codex` / `export_kimi` 把任意 DSH 会话序列化为目标格式——DSH↔Claude↔Codex↔Kimi 四向互通。 |
