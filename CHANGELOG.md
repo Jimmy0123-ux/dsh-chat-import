@@ -48,6 +48,9 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 - **`expectedHash` source verification (REQ-72 part)** — all import tools now
   accept an optional `expectedHash` (SHA-256 hex) and fail loudly before
   persisting if the source file does not match.
+- **`restamp` timestamps (REQ-72 part)** — all import tools now accept
+  `restamp: true` to shift session timestamps to now while preserving relative
+  intervals.
 
 ### Fixed
 

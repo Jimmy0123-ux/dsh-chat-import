@@ -13,6 +13,7 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { resolveRegistryDir, loadImports, rememberImport } from '../lib/imports.mjs'
 import { syncClaudeSession, evaluateWritebackGuards, readFileTailUuid } from '../lib/backfill.mjs'
 import { clearScanCache } from '../lib/discovery.mjs'
+import { restampSession } from '../lib/import-core.mjs'
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const load = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -1623,6 +1624,13 @@ test('REQ-72 expectedHash: 正确哈希导入成功，错误哈希失败且不�
   assert.ok(thrown, '错误哈希应抛错')
   assert.match(String(thrown && thrown.message), /expectedHash mismatch/)
   assert.equal(persistence.sessions.size, 1)
+})
+
+test('REQ-72 restamp: 时间戳平移到当前，保持相对间隔', () => {
+  const out = { meta: { createdAt: 1000 }, events: [{ time: 1000 }, { time: 2000 }] }
+  restampSession(out, { restamp: true })
+  assert.ok(out.meta.createdAt > 1000, 'createdAt 被平移: ' + out.meta.createdAt)
+  assert.equal(out.events[1].time - out.events[0].time, 1000, '相对间隔保持不变')
 })
 
 // ---- import_kimi 集成（会话目录：wire.jsonl + state.json + kimi.json 映射） ----

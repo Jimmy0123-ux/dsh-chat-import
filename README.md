@@ -67,6 +67,7 @@ The reverse direction is covered too: `export_claude` serializes a DSH session b
 | Quality | **Doctor** | `doctor` / `/doctor` run a read-only migration health check (registry, session existence, skills, workspace registry). |
 | Protection | **Idempotent + incremental** | Re-importing an unchanged source skips it; a grown source appends only its new turns. |
 | Protection | **Expected-hash verification** | Any import tool accepts `expectedHash` (SHA-256) and fails loudly before persisting if the source file does not match. |
+| Import | **Restamp timestamps** | Any import tool accepts `restamp: true` to shift all session timestamps to now while keeping relative intervals. |
 | Protection | **Context budget protection** | Oversized sessions are trimmed to fit a safe context budget, and the trim is reported; `compacted: true` restores Claude compression summaries. |
 
 ---
