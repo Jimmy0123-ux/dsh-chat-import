@@ -9,7 +9,7 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
-## [Unreleased]
+## [0.6.0] - 2026-08-17
 
 ### Added
 
@@ -89,6 +89,8 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   `state.json` providing `cwd` and title metadata. `scan_discover` includes
   `~/.kimi-code/sessions` by default and both layouts remain under the
   `kimi` format / `import_kimi` tool.
+
+## [Unreleased]
 
 ## [0.5.1] - 2026-08-16
 
