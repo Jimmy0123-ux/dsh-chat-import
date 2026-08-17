@@ -65,6 +65,18 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   up `~/.qoder/projects` by default, and `import_local_jsonl` auto-detects
   Qoder files by their path layout.
 
+### Security
+
+- **Removed `node:child_process` (dsh.so code-exec critical)** — the DSH
+  session reader (`import_dsh`) and `scan_discover` previously shelled out to
+  the system `zstd` binary and to `git` for branch/dirty detection, which
+  static security scanning flags as high-risk code execution. `session.jsonl.zstd`
+  decompression now uses `fzstd` (MIT, zero-dependency pure JS), and git branch
+  detection now parses `.git/HEAD` directly. As a consequence `scan_discover`'s
+  `gitDirty` field is downgraded to always `null` (it cannot be computed
+  reliably without invoking git); `gitBranch` keeps working for standard and
+  worktree checkouts.
+
 ### Fixed
 
 - **Kimi Code standalone (`~/.kimi-code`) import support** — `import_kimi`

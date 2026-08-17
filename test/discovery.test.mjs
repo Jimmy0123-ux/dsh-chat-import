@@ -5,8 +5,7 @@
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -622,22 +621,13 @@ test('FORMATS 与工具 schema enum 一致（15 种）', () => {
 
 // ── git 状态（REQ-58）──────────────────────────────────────────────────────
 
-test('git 状态：cwd 为真实 git 仓库 → 分支/dirty 正确；非仓库目录 → null 不报错', async () => {
+test('git 状态：cwd 为 git 仓库（纯 JS 解析 .git/HEAD）→ 分支正确；非仓库目录 → null 不报错', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'dsh-git-'))
   try {
-    // 真实 git 仓库 fixture（git 不可用时整段跳过——git 增强是发现层的可选信息）
-    const run = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
-    try {
-      run(['init', '-q'], repo)
-      run(['config', 'user.email', 'tester@example.invalid'], repo)
-      run(['config', 'user.name', 'tester'], repo)
-      writeFileSync(join(repo, 'a.txt'), 'v1\n')
-      run(['add', '.'], repo)
-      run(['commit', '-q', '-m', 'init'], repo)
-    } catch {
-      return // git 缺失/异常：跳过该用例（CI 与本机均有 git）
-    }
-    const expectedBranch = run(['branch', '--show-current'], repo)
+    // 手写 .git 目录结构（无需调用 git 命令——路线 A 已移除 child_process）
+    mkdirSync(join(repo, '.git', 'refs', 'heads'), { recursive: true })
+    writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    const expectedBranch = 'main'
 
     const transPath = join(repo, 'sess.jsonl')
     const files = new Map([
@@ -647,13 +637,13 @@ test('git 状态：cwd 为真实 git 仓库 → 分支/dirty 正确；非仓库�
     const clean = await discoverSessions({ path: repo, format: 'claude', host: mockHost(files), imports: {}, cache: createScanCache() })
     assert.equal(clean.sessions.length, 1)
     assert.equal(clean.sessions[0].gitBranch, expectedBranch)
-    assert.equal(clean.sessions[0].gitDirty, false)
+    assert.equal(clean.sessions[0].gitDirty, null) // gitDirty 降级为 null（无法纯 JS 可靠判断）
 
-    // 工作树变更 → dirty=true；条目命中 TTL 缓存，git 状态仍按当次扫描重算（不入缓存）
-    appendFileSync(join(repo, 'a.txt'), 'v2\n')
-    const dirty = await discoverSessions({ path: repo, format: 'claude', host: mockHost(files), imports: {}, cache: createScanCache() })
-    assert.equal(dirty.sessions[0].gitBranch, expectedBranch)
-    assert.equal(dirty.sessions[0].gitDirty, true)
+    // detached HEAD（直接写提交 hash）→ 短 hash 近似分支名
+    writeFileSync(join(repo, '.git', 'HEAD'), 'abc1234def5678\n')
+    const detached = await discoverSessions({ path: repo, format: 'claude', host: mockHost(files), imports: {}, cache: createScanCache() })
+    assert.equal(detached.sessions[0].gitBranch, 'abc1234')
+    assert.equal(detached.sessions[0].gitDirty, null)
 
     // 仓库外的不存在目录（mock 树服务即可，无需真实存在）→ 字段 null、不报错
     const plainCwd = join(dirname(repo), 'dsh-missing-project')

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { convertDshJsonl } from '../lib/convert/dsh.mjs'
 import { discoverSessions } from '../lib/discovery.mjs'
+import { readDshText } from '../lib/dsh.mjs'
 
 const SESSION_LINES = [
   { type: 'session', id: 'session-dsh-test', cwd: '/tmp/proj', createdAt: 1700000000000 },
@@ -79,3 +80,27 @@ test('discoverSessions format=dsh 发现 session.jsonl 会话', async () => {
     await rm(root, { recursive: true, force: true })
   }
 })
+
+// 最小 zstd 帧（session.jsonl.zstd fixture）：由 Python zstandard 压缩
+// session/turn/user/title 四条 JSONL 记录生成（raw 431B → zstd 243B）。
+// 路线 A 用 fzstd 纯 JS 解压替代系统 zstd 二进制（dsh.so 安全扫描将
+// child_process 判为 critical）。
+const ZSTD_B64 = 'KLUv/WCvAE0HAJJLKCqQKekA+f8c0oIEzleNu7u1R5Uk2WjvXXiFvky2cV+1QB1s2+bMqe5U4AIxOkJyATFhEXl4KCRPri+BMwE8zo4MoieRR2JSkc50Bn1B0zfHPBz0avqecia/AWXUAXTWoQhqVxsEdZ0IyWR1tZyKNuxOpZHJCrqH6osadM6IjQBHJl9g6ZXCBAcfes3RAvPVL+vrsCzmVNwc29V1JutruCEBHABWBdDNBmBvyaJCrRtIdohjxawcAGopj71UY8VjwGGDxK9DGjgGe6WAEwq+LVgArbcVKqsBiWFjuFU32/kp2GdAyZhN'
+
+test('readDshText 用 fzstd 纯 JS 解压 session.jsonl.zstd', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-zstd-test-'))
+  try {
+    const file = join(root, 'session.jsonl.zstd')
+    await writeFile(file, Buffer.from(ZSTD_B64, 'base64'))
+    const text = await readDshText({}, file)
+    assert.ok(text.includes('session-zstd-test'))
+    assert.ok(text.includes('Zstd 导入测试'))
+    const out = convertDshJsonl(text, { sourcePath: file })
+    assert.equal(out.meta.id, 'import-session-zstd-test')
+    assert.equal(out.title, 'Zstd 导入测试')
+    assert.equal(out.messages, 1)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
