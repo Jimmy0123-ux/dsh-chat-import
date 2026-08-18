@@ -104,6 +104,11 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   with a numeric suffix for collisions, and adds file-header notes telling users
   to verify `dsh-mcp-client` is installed and to replace copied env secrets with
   `${VAR}` references before merging.
+- **YAML-parse frontmatter scalars (issue #13 follow-up)** — `parseFrontmatter`
+  now understands quoted scalars (`'...'` / `"..."`) and block scalars (`|` /
+  `>`), so a source SKILL.md whose `description` uses quotes or a folded block no
+  longer carries the quote characters or block markers into the migrated value.
+  Test vectors borrowed from sjh9714/dsh-movein's skill-vanish shape list (MIT).
 
 ## [0.5.1] - 2026-08-16
 

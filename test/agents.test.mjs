@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdi
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  parseFrontmatter, collectCandidates, planSkillWrites, skillFrontmatter,
+  parseFrontmatter, yamlScalar, collectCandidates, planSkillWrites, skillFrontmatter,
   resolveAgentsHome, runAgentsImport,
 } from '../lib/agents.mjs'
 
@@ -30,6 +30,37 @@ test('parseFrontmatter: 嵌套 YAML 保留（permission: edit: deny）', () => {
 
 test('parseFrontmatter: 无 frontmatter 返回 null', () => {
   assert.equal(parseFrontmatter('plain text'), null)
+})
+
+// 全套 frontmatter 形态（借鉴 sjh9714/dsh-movein 的 skill-vanish 形态清单，MIT）：
+// 未引号 / 单双引号 / block scalar / 冒号后无空格。迁移后 description 不应把
+// 引号字符或 block 标记带进值——否则 DSH 完整 YAML 解析会静默丢弃技能（#1401）。
+test('parseFrontmatter: 全套 YAML 标量形态解析正确', () => {
+  const cases = [
+    ['未引号+冒号空格', 'Priority order: check the cache first', 'Priority order: check the cache first'],
+    ['单引号', "'Priority: check cache'", 'Priority: check cache'],
+    ['双引号', '"Priority: check cache"', 'Priority: check cache'],
+    ['冒号后无空格', '10:30', '10:30'],
+    ['单引号内转义', "'it''s-a-server'", "it's-a-server"],
+  ]
+  for (const [label, input, expected] of cases) {
+    const p = parseFrontmatter(`---\nname: s\ndescription: ${input}\n---\nbody`)
+    assert.equal(p.frontmatter.description, expected, label)
+  }
+})
+
+test('parseFrontmatter: block scalar 折叠（>）与保留换行（|）', () => {
+  const folded = parseFrontmatter('---\nname: s\ndescription: >-\n  Priority order:\n  check the cache first\n---\nbody')
+  assert.equal(folded.frontmatter.description, 'Priority order: check the cache first')
+  const literal = parseFrontmatter('---\nname: s\ndescription: |-\n  line one\n  line two\n---\nbody')
+  assert.equal(literal.frontmatter.description, 'line one\nline two')
+})
+
+test('yamlScalar: 引号去壳与转义还原', () => {
+  assert.equal(yamlScalar("'a: b'"), 'a: b')
+  assert.equal(yamlScalar('"a: b"'), 'a: b')
+  assert.equal(yamlScalar('plain'), 'plain')
+  assert.equal(yamlScalar("'it''s'"), "it's")
 })
 
 // ── 纯函数：collectCandidates ───────────────────────────────────────────────
