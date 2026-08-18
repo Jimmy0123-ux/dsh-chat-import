@@ -21,7 +21,7 @@
 
 </div>
 
-> **15+ agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, matrix interop / backup / handoff on the way out.
+> **16+ agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, matrix interop / backup / handoff on the way out.
 
 <div align="center">
 
@@ -35,7 +35,7 @@
 
 ## 💡 Intro
 
-`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes, Kimi CLI / Kimi Code, Qoder CLI and DSH session logs** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd`.
+`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, MiMo Code, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes, Kimi CLI / Kimi Code, Qoder CLI and DSH session logs** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd`.
 
 The reverse direction is covered too: `export_claude` serializes a DSH session back into a Claude Code JSONL transcript that Claude Code can load with `--resume` (read-only — your DSH log is never modified), `sync_to_claude` incrementally appends a session's new turns back to a Claude Code file — guarded, never silently overwriting — and the same matrix extends to **Codex rollouts** (`export_codex`) and **Kimi wire files** (`export_kimi`), plus a **portable interchange bundle** (`export_bundle` / `restore_bundle`) with SHA-256 fingerprints and cross-machine restore.
 
@@ -72,7 +72,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 
 | Capability | Entry points | Description |
 | --- | --- | --- |
-| Batch import from 15+ sources | `import_*` (16 tools) · `scan_discover` · sidebar panel · `/import` | A file, a directory or a whole database — each conversation becomes its own session |
+| Batch import from 16+ sources | `import_*` (17 tools) · `scan_discover` · sidebar panel · `/import` | A file, a directory or a whole database — each conversation becomes its own session |
 | Full-fidelity resume | Imported sessions | Tool calls & results, reasoning, titles, models and timestamps carry over; sessions group into the source `cwd` workspace |
 | Matrix export | `export_claude` / `export_codex` / `export_kimi` | Serialize DSH sessions back to Claude / Codex / Kimi formats; every lossy item is reported |
 | Portable backup | `export_bundle` / `restore_bundle` | Interchange bundle with dual SHA-256 fingerprints, restorable across machines |
@@ -99,6 +99,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 | **Gemini CLI** | `~/.gemini/history/<slot>/chats/session-*.json` | `import_gemini` |
 | **Reasonix** (CLI + desktop) | `~/.reasonix/sessions/desktop-*.jsonl` · `%APPDATA%\reasonix\projects\<slug>\sessions\*.jsonl` | `import_reasonix` |
 | **opencode** | `~/.local/share/opencode/opencode.db` | `import_opencode` |
+| **MiMo Code** (opencode fork) | `~/.local/share/mimocode/mimocode.db` | `import_mimocode` |
 | **ZCode** (z.ai CLI) | `~/.zcode/cli/db/db.sqlite` | `import_zcode` |
 | **Grok Build** | `~/.grok/sessions/<project>/<session_id>/` | `import_grokbuild` |
 | **OpenClaw** | `~/.openclaw/agents/<agent>/sessions/*.jsonl` | `import_openclaw` |

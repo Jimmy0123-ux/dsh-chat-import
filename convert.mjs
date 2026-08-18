@@ -72,6 +72,10 @@ export {
 } from './lib/convert/opencode.mjs'
 
 export {
+  convertMimocodeJson,
+} from './lib/convert/mimocode.mjs'
+
+export {
   convertZcodeJson,
 } from './lib/convert/zcode.mjs'
 

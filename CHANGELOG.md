@@ -13,6 +13,17 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Added
 
+- **MiMo Code source (`import_mimocode`)** — MiMo Code (XiaomiMiMo/MiMo-Code,
+  an opencode fork) stores sessions in a SQLite database at
+  `~/.local/share/mimocode/mimocode.db`. Its `session`/`message`/`part` schema
+  mirrors opencode except the `session` table has no `model` column, so
+  `readOpencodeDb` now probes `PRAGMA table_info(session)` and adapts the
+  `SELECT`. Import/preview/discovery reuse the opencode pipeline; mimocode
+  specifics live in `lib/mimocode.mjs` / `lib/convert/mimocode.mjs`
+  (provider label). MiMo's memory-consolidation background sessions
+  (`checkpoint-writer` / `AutoDream` / `AutoDistill`, identified by title
+  prefix + `message.data.agent`) are filtered out by default. Contributed by
+  @bobowsh in #15.
 - **Preset mode for imported sessions** — session creation now resolves the
   default agent preset id and writes it to `SessionHeader.agentPreset` (and
   passes it to `agentPresets.mount`), so imported sessions show the same
