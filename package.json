@@ -34,7 +34,7 @@
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",
-    "docs/INTERCHANGE.md",
+    "docs/*.md",
     "CONTRIBUTING.md",
     "ROADMAP.md",
     "CHANGELOG.md",
