@@ -2836,6 +2836,66 @@ test('REQ-43 agents.create 路径：setup 挂 preset scope、agentOptions 绑定
   assert.ok(p2.sessions.has('import-sess-simple-001'))
 })
 
+test('REQ-43 补录预设：agentPresets.resolve 返回默认 preset 时写进 meta.agentPreset', async () => {
+  const agentsCalls = []
+  const mounts = []
+  const services = {
+    agents: {
+      async create({ sessionId, meta, seed, agentOptions, setup }) {
+        agentsCalls.push({ sessionId, meta, seed, agentOptions, setup })
+        await persistence.create(meta)
+        await persistence.append(sessionId, seed)
+      },
+    },
+    agentPresets: {
+      async resolve() { return { id: 'standard' } },
+      async mount(agentCtx, id) { mounts.push(id); return undefined },
+    },
+    agentDefaultModel: {
+      currentSelection() { return { provider: 'deepseek', model: 'deepseek-chat' } },
+    },
+    llm: {
+      async resolveModelInfo() { return { context: { contextWindow: 131072 }, defaultMaxTokens: 8192 } },
+    },
+  }
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple }, { services })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_claude')
+  const value = await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(value.status, 'imported')
+  assert.equal(agentsCalls.length, 1)
+  assert.equal(agentsCalls[0].meta.agentPreset, 'standard')
+  await agentsCalls[0].setup({})
+  assert.deepEqual(mounts, ['standard'])
+  assert.ok(persistence.sessions.has('import-sess-simple-001'))
+})
+
+test('REQ-43 补录预设：agentPresets.resolve 抛错/缺 default 时保持现状（不落盘 agentPreset）', async () => {
+  const agentsCalls = []
+  const services = {
+    agents: {
+      async create({ sessionId, meta, seed, agentOptions, setup }) {
+        agentsCalls.push({ sessionId, meta, seed, agentOptions, setup })
+        await persistence.create(meta)
+        await persistence.append(sessionId, seed)
+      },
+    },
+    agentPresets: {
+      async resolve() { throw new Error('no default preset') },
+      async mount() { return undefined },
+    },
+  }
+  const simple = load('sess-simple-001.jsonl')
+  const { ctx, persistence } = makeCtx({ 'D:\\demo\\proj\\sess-simple-001.jsonl': simple }, { services })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_claude')
+  await def.execute({ path: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
+  assert.equal(agentsCalls.length, 1)
+  assert.equal(agentsCalls[0].meta.agentPreset, undefined)
+  assert.ok(persistence.sessions.has('import-sess-simple-001'))
+})
+
 test('REQ-43 agents.create 失败（无 cwd 等）→ 回退 sessionPersistence 不静默', async () => {
   const services = {
     agents: {

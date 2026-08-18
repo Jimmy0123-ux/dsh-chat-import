@@ -449,6 +449,27 @@ test('convertCodexJsonl: 注入块被过滤、reasoning 加密被跳过、custom
   assert.deepEqual(result.sourceEventSeqs, [call.seq])
 })
 
+test('convertCodexJsonl: importSystemPrompt 开关收集 developer 为上下文注入', () => {
+  const raw = [
+    '{"timestamp":"2026-05-18T13:21:30.751Z","type":"session_meta","payload":{"id":"codex-sp","timestamp":"2026-05-18T13:21:10.510Z","cwd":"D:\\\\demo\\\\codex-proj"}}',
+    '{"timestamp":"2026-05-18T13:21:30.754Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"You are Codex."}]}}',
+    '{"timestamp":"2026-05-18T13:21:30.754Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}',
+    '{"timestamp":"2026-05-18T13:21:31.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}}',
+  ].join('\n')
+  // 默认关：developer 过滤，仅一条真实 user/message、无注入
+  const off = convertCodexJsonl(raw, { sessionId: 'codex-sp' })
+  assert.equal(off.events.filter((e) => e.type === 'user/message').length, 1)
+  assert.ok(!off.events.some((e) => e.data && e.data.source && e.data.source.kind !== 'user'))
+  // 开：developer 作为上下文注入 user/message（source.kind='plugin'，plugin='chat-import'）钉在最前
+  const on = convertCodexJsonl(raw, { sessionId: 'codex-sp', importSystemPrompt: true })
+  const first = on.events.find((e) => e.type === 'user/message')
+  assert.equal(first.data.source.kind, 'plugin')
+  assert.equal(first.data.source.plugin, 'chat-import')
+  assert.ok(first.data.content[0].text.includes('You are Codex.'))
+  assert.ok(first.data.content[0].text.includes('DeepSeek Harness'))
+  assert.ok(first.seq < on.events.find((e) => e.type === 'turn/start').seq)
+})
+
 test('convertCodexJsonl: function_call 无 function_call_output 补发空 tool/result', () => {
   // 工具调用后会话结束/输出缺失：call_id 无对应 output → 合成空 result 保证配对
   const raw = [
@@ -658,6 +679,29 @@ test('convertChatgptJson: 无 cwd（ChatGPT 是聊天，不归组工作区）', 
   const out = convertChatgptJson(load('chatgpt-export.json'))
   const c1 = out.conversations.find((c) => c.meta.id === 'import-conv-001')
   assert.equal(c1.meta.cwd, undefined)
+})
+
+test('convertChatgptJson: importSystemPrompt 开关收集 system 角色为上下文注入', () => {
+  const conv = {
+    id: 'conv-sp-001',
+    title: 'System prompt chat',
+    create_time: 1710000000,
+    mapping: {
+      s1: { id: 's1', parent: null, children: ['u1'], message: { id: 'm0', author: { role: 'system' }, content: { content_type: 'text', parts: ['You are a helpful assistant.'] } } },
+      u1: { id: 'u1', parent: 's1', children: ['a1'], message: { id: 'm1', author: { role: 'user' }, content: { content_type: 'text', parts: ['hi'] } } },
+      a1: { id: 'a1', parent: 'u1', children: [], message: { id: 'm2', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['hello'] } } },
+    },
+  }
+  const off = convertChatgptJson(JSON.stringify([conv]))
+  assert.equal(off.conversations.length, 1)
+  assert.ok(!off.conversations[0].events.some((e) => e.data && e.data.source && e.data.source.kind !== 'user'))
+  const on = convertChatgptJson(JSON.stringify([conv]), { importSystemPrompt: true })
+  const c1 = on.conversations[0]
+  const first = c1.events.find((e) => e.type === 'user/message')
+  assert.equal(first.data.source.kind, 'plugin')
+  assert.equal(first.data.source.plugin, 'chat-import')
+  assert.ok(first.data.content[0].text.includes('You are a helpful assistant.'))
+  assert.ok(first.seq < c1.events.find((e) => e.type === 'turn/start').seq)
 })
 
 test('convertChatgptJson: tool 节点降级为文本块，不再产生孤儿 tool/result', () => {

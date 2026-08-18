@@ -9,6 +9,28 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
+## [Unreleased]
+
+### Added
+
+- **Preset mode for imported sessions** — session creation now resolves the
+  default agent preset id and writes it to `SessionHeader.agentPreset` (and
+  passes it to `agentPresets.mount`), so imported sessions show the same
+  "preset mode" chip as normal sessions instead of an empty one; `resolve()`
+  failure (no roster / no default) keeps the previous tool-visible behavior
+  without recording a preset.
+- **Optional "import system prompt" setting (default off)** — a new
+  "Session Import" tab in the settings Plugins section toggles importing the
+  source transcript's `system` / `developer` prompt as a "context injection"
+  (`user/message` with `source.kind='plugin'`, `plugin='chat-import'`),
+  prefixed with a note that the environment changed and tools / permissions /
+  instructions now follow DSH. Wired for the sources that store one (Codex,
+  ChatGPT, Grok Build, Hermes, ZCode); Claude Code transcripts do not persist
+  a system prompt, so the toggle is a no-op there. The `chat-import` settings
+  namespace is registered host-side via `ctx.settings`
+  (`@deepseek-ai/schemastery` peer) and read during import, degrading to off
+  when the settings service is absent.
+
 ## [0.6.0] - 2026-08-17
 
 ### Added

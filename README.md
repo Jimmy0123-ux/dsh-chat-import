@@ -83,6 +83,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 | Handoff summaries | `/resume-claude` / `/resume-codex` | Treats external transcripts as untrusted history and injects a handoff summary into the current session |
 | Read-only audit / checkup | `verify_session` / `doctor` / CLI `dsh-chat-import doctor` | Structural audit and migration health check |
 | Idempotency & protection | All import tools | `expectedHash` / `restamp` / context-budget protection; unchanged sources skip, grown sources append |
+| Preset mode + system prompt | Settings tab in the Plugins section | Imported sessions record the default preset; optional "import system prompt" as a context injection (off by default) |
 
 ---
 
@@ -133,6 +134,8 @@ Full per-tool / per-command usage lives in **[docs/USAGE.md](docs/USAGE.md)**.
 - **Read-only import** — source transcripts and databases are never rewritten; imported DSH history is append-only.
 - **Idempotent + incremental** — unchanged sources skip without re-reading; grown sources append only new turns; shrinking is detected and reported.
 - **Auto workspace grouping** — sessions land in the workspace of their source `cwd` (authoritative mapping → slug decode → home-directory sandbox guard; falls back to the source file's directory when the path does not exist locally).
+- **Preset mode** — imported sessions mount the default preset scope via `agents.create` and write the default preset id back to `SessionHeader.agentPreset`, so the UI shows the preset-mode chip exactly like a normal session.
+- **System prompt (optional, off by default)** — the "Import system prompt" setting (a tab in the settings Plugins section) preserves the source transcript's `system` / `developer` prompt as a "context injection" collapsed row, prefixed with a note that the environment changed and tools / permissions / instructions now follow DSH. Claude Code transcripts do not persist a system prompt, so the toggle is a no-op for that source.
 - **Fail loudly** — malformed lines, suspected secrets, format limitations and export degradations are all reported; every persisted session gets a structural self-check.
 - **Sandbox** — reading sources or writing exports outside the workspace requires the session sandbox to allow that path.
 

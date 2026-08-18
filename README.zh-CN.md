@@ -83,6 +83,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 | 交接摘要 | `/resume-claude` / `/resume-codex` | 外部 transcript 当不可信历史，生成交接摘要注入当前会话 |
 | 只读审计 / 体检 | `verify_session` / `doctor` / CLI `dsh-chat-import doctor` | 结构审计与迁移健康检查 |
 | 幂等与保护 | 所有导入工具 | `expectedHash` / `restamp` / 上下文预算保护；未变跳过、增长只追加 |
+| 预设模式 + 系统提示词 | 设置页「插件」分区 TAB | 导入会话补录默认预设模式；可选「导入系统提示词」作为上下文注入（默认关） |
 
 ---
 
@@ -133,6 +134,8 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl", format: "claude" })
 - **只读导入** — 源转录与数据库绝不改写；导入的 DSH 历史 append-only。
 - **幂等 + 增量** — 未变源不重读直接跳过；增长只追加新增轮次；截断检测并上报。
 - **自动归组** — 按源 `cwd` 归入工作区（权威映射 → slug 解码 → 主目录沙箱防护；本机路径不存在时回退源文件目录）。
+- **预设模式** — 导入会话经 `agents.create` 挂默认 preset scope，并把默认 preset id 写回 `SessionHeader.agentPreset`，UI 上照常显示「预设模式」chip（与正常会话一致）。
+- **系统提示词（可选，默认关）** — 设置页「插件」分区里的「会话导入」TAB 提供「导入系统提示词」开关；开启后把源 transcript 的 `system` / `developer` 提示词作为「上下文注入」折叠行保留，正文前置环境变更免责声明（工具 / 权限 / 执行指令以 DSH 当前会话为准）。Claude Code 的转录不落 system prompt，此开关对 Claude 源无效果。
 - **失败要大声** — 畸形行、疑似敏感信息、格式无法保留的部分、导出有损项，全部显式上报；每次落盘会话自动结构自检。
 - **沙箱** — 读取工作区外的源文件或写工作区外的导出目标，需要会话沙箱放行该路径。
 
