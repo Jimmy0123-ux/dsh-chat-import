@@ -90,7 +90,7 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   `~/.kimi-code/sessions` by default and both layouts remain under the
   `kimi` format / `import_kimi` tool.
 
-## [Unreleased]
+## [0.6.1] - 2026-08-18
 
 ### Fixed
 
