@@ -9,7 +9,7 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
-## [Unreleased]
+## [0.6.2] - 2026-08-19
 
 ### Fixed
 
@@ -61,6 +61,26 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   namespace is registered host-side via `ctx.settings`
   (`@deepseek-ai/schemastery` peer) and read during import, degrading to off
   when the settings service is absent.
+
+## [0.6.1] - 2026-08-18
+
+### Fixed
+
+- **YAML-escaped skill descriptions (issue #13)** — `skillFrontmatter` now
+  single-quotes the `description` value (escaping `'` as `''`), so skills whose
+  descriptions contain `: ` (e.g. `Deploy: production helper`) no longer
+  produce invalid YAML plain scalars that made DSH silently drop the SKILL.md.
+- **MCP mirror plan hardening (issue #14)** — `renderMcpPlan` now single-quotes
+  env values (no more broken YAML from `: ` / `#`, and no silent secret
+  inlining), generates unique component ids as `mcp-mirror-<source>-<name>`
+  with a numeric suffix for collisions, and adds file-header notes telling users
+  to verify `dsh-mcp-client` is installed and to replace copied env secrets with
+  `${VAR}` references before merging.
+- **YAML-parse frontmatter scalars (issue #13 follow-up)** — `parseFrontmatter`
+  now understands quoted scalars (`'...'` / `"..."`) and block scalars (`|` /
+  `>`), so a source SKILL.md whose `description` uses quotes or a folded block no
+  longer carries the quote characters or block markers into the migrated value.
+  Test vectors borrowed from sjh9714/dsh-movein's skill-vanish shape list (MIT).
 
 ## [0.6.0] - 2026-08-17
 
@@ -142,26 +162,6 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   `state.json` providing `cwd` and title metadata. `scan_discover` includes
   `~/.kimi-code/sessions` by default and both layouts remain under the
   `kimi` format / `import_kimi` tool.
-
-## [0.6.1] - 2026-08-18
-
-### Fixed
-
-- **YAML-escaped skill descriptions (issue #13)** — `skillFrontmatter` now
-  single-quotes the `description` value (escaping `'` as `''`), so skills whose
-  descriptions contain `: ` (e.g. `Deploy: production helper`) no longer
-  produce invalid YAML plain scalars that made DSH silently drop the SKILL.md.
-- **MCP mirror plan hardening (issue #14)** — `renderMcpPlan` now single-quotes
-  env values (no more broken YAML from `: ` / `#`, and no silent secret
-  inlining), generates unique component ids as `mcp-mirror-<source>-<name>`
-  with a numeric suffix for collisions, and adds file-header notes telling users
-  to verify `dsh-mcp-client` is installed and to replace copied env secrets with
-  `${VAR}` references before merging.
-- **YAML-parse frontmatter scalars (issue #13 follow-up)** — `parseFrontmatter`
-  now understands quoted scalars (`'...'` / `"..."`) and block scalars (`|` /
-  `>`), so a source SKILL.md whose `description` uses quotes or a folded block no
-  longer carries the quote characters or block markers into the migrated value.
-  Test vectors borrowed from sjh9714/dsh-movein's skill-vanish shape list (MIT).
 
 ## [0.5.1] - 2026-08-16
 
