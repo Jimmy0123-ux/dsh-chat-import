@@ -517,6 +517,40 @@ test('convertCodexJsonl: 空输入不产生事件', () => {
   assert.equal(out.turns.length, 0)
 })
 
+test('convertCodexJsonl: 子代理 rollout 跳过（issue #17），fork 会话保留', () => {
+  // source.subagent.thread_spawn（issue #17 复现形态）→ 跳过不建独立会话
+  const subagentRaw = [
+    '{"timestamp":"t0","type":"session_meta","payload":{"session_id":"parent-1","id":"sub-1","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-1","depth":1}}}}}',
+    '{"timestamp":"t1","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"subagent work"}]}}',
+    '{"timestamp":"t2","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}',
+  ].join('\n')
+  const out = convertCodexJsonl(subagentRaw)
+  assert.equal(out.meta, null)
+  assert.equal(out.turns.length, 0)
+  assert.equal(out.events.length, 0)
+  assert.ok(out.skipReason && out.skipReason.includes('subagent'))
+
+  // thread_source='subagent' 权威标记同样命中
+  const altRaw = [
+    '{"timestamp":"t0","type":"session_meta","payload":{"id":"sub-2","thread_source":"subagent"}}',
+    '{"timestamp":"t1","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}}',
+  ].join('\n')
+  const alt = convertCodexJsonl(altRaw)
+  assert.equal(alt.meta, null)
+  assert.ok(alt.skipReason && alt.skipReason.includes('subagent'))
+
+  // fork 会话（forked_from_id 但无 subagent 标记）仍是可独立继续的新主会话，导入保留
+  const forkRaw = [
+    '{"timestamp":"t0","type":"session_meta","payload":{"id":"fork-1","forked_from_id":"parent-1"}}',
+    '{"timestamp":"t1","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fork continued"}]}}',
+    '{"timestamp":"t2","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}',
+  ].join('\n')
+  const fork = convertCodexJsonl(forkRaw)
+  assert.ok(fork.meta)
+  assert.equal(fork.turns.length, 1)
+  assert.equal(fork.meta.sourceId, 'fork-1')
+})
+
 // ---- REQ-44: codex custom_tool_call JS 参数 → 标准 JSON（保真度） ----
 
 // 合成含一个 custom_tool_call 的单轮 codex rollout（用 JSON.stringify 生成行，
