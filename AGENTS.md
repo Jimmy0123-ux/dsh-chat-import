@@ -1,19 +1,20 @@
 # AGENTS.md
 
-`dsh-chat-import` 是 DeepSeek Harness 的 Host 插件：把 Claude Code / Codex / ChatGPT 的外部聊天记录 **全保真**导入为**可继续（resume）**的 DSH 会话。DSH 的哲学是 **everything is a plugin**——本仓库只做插件，不碰引擎。改代码前先读 `README.md`（对外契约）与 `test/`（现有行为）。
+`dsh-chat-import` 是 DeepSeek Harness（DSH） 的插件。
 
-## 仓库布局：发布面 / 本地工程面
+它将多个Agent工具的外部聊天记录**全保真**导入为**可继续**的 DSH 会话。
+
+DSH 的哲学是 **everything is a plugin**——本仓库只做插件，不碰引擎。
+
+改代码前先读 `README.md`（对外契约）与 `test/`（现有行为）。
+
+## 仓库布局
 
 根目录只放发布到 GitHub / npm 的文件；本地工程文件一律收进 `dev/`（gitignore，永不提交）。
 
 ```
-index.mjs        插件入口（薄组合层，host 面）：只做组装——registerTools（lib/tools.mjs 注册 16 个
-                 导入工具（15 个来源 + import_local_jsonl） + scan_discover + export_claude + sync_to_claude + list_imported_sessions +
-                 retract_import）+ ctx.inject(['webServer']) 延迟挂载面板路由
-                 （POST /api-import/sessions 发现、POST /api-import/import 面板导入、
-                 GET/POST /api-import/sync 双向增量控制台）
-index.d.ts       类型面（手写维护，随工具 schema 同步）：Cordis 入口 apply/inject/name + ToolSurface
-                 覆盖 22 个工具的参数/返回；package.json types 与 exports 的 types 条件引用，进 npm 包
+index.mjs        插件入口
+index.d.ts       类型面，覆盖 22 个工具的参数/返回；
 tsconfig.json    TS 工具链最小配置（仅 include index.d.ts；零构建、不进 npm 包）
 lib/             导入/同步驱动（按职责拆分，均消费 ctx、非纯函数）：imports.mjs（幂等 registry）、
                  backfill.mjs（sync_to_claude 写回）、discovery.mjs（15 格式统一发现 + 30s TTL / 持久化
