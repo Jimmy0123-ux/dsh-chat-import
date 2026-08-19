@@ -11,6 +11,26 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Session-start scan no longer recurses into `node_modules` (#16)** — the
+  migration hint triggered on `agent/session-start` called `discoverSessions`
+  with `path: cwd`, whose recursive walkers (`walkFiles` /
+  `walkGrokbuildSessions` / `walkKimiSessions`) had no directory blacklist,
+  no depth limit, and no concurrent dedup. Under pnpm's symlinked
+  `node_modules` the walk descended into the `.pnpm` store via hundreds of
+  alias paths and never terminated — every session pinned ~1 CPU core
+  permanently (2 sessions ≈ 270%, 4 cores saturated). All three walkers now
+  skip `node_modules` / `.git` / `.venv` / `dist` / `build` / `.next` /
+  `.turbo` / `.cache` / `target` / `out` / `.idea` / `.vscode` /
+  `__pycache__` etc. (`WALK_SKIP_DIRS`) and cap depth at 12
+  (`WALK_MAX_DEPTH`, legitimate chat roots are ≤5 levels). `discoverSessions`
+  additionally dedups concurrent same-key scans via an in-flight Promise map
+  (`inflightScans`) so multiple sessions starting at once share one scan
+  instead of stacking. The existing 30s TTL cache and persistent
+  mtime/size bookmarks are unchanged; `DSH_IMPORT_SESSION_HINT=0` remains
+  the emergency off switch.
+
 ### Added
 
 - **MiMo Code source (`import_mimocode`)** — MiMo Code (XiaomiMiMo/MiMo-Code,

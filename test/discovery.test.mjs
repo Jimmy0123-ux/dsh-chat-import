@@ -9,12 +9,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
-  discoverSessions, createScanCache, clearScanCache, FORMATS, TITLE_MAX_LEN,
+  discoverSessions, createScanCache, clearScanCache, clearInflightScans,
+  FORMATS, TITLE_MAX_LEN,
   isInjectedTitle, normalizeTitle, layoutProject, resolveImportStatus,
 } from '../lib/discovery.mjs'
 
 beforeEach(() => {
   clearScanCache()
+  clearInflightScans()
 })
 
 // 合成 home（不存在，默认根扫描确定性为空）
@@ -657,4 +659,83 @@ test('git 状态：cwd 为 git 仓库（纯 JS 解析 .git/HEAD）→ 分支正�
   } finally {
     rmSync(repo, { recursive: true, force: true })
   }
+})
+
+// ── issue #16：扫描不进入 node_modules / 限深 / 并发去重 ───────────────────────
+// 回归：会话创建触发的迁移提示扫描（path=cwd）递归进入 node_modules 在 pnpm 符号链接
+// 结构下永不结束、占满 CPU。修复 = walkFiles / walkGrokbuildSessions / walkKimiSessions
+// 跳过 node_modules 等目录 + 限深；discoverSessions 并发同 key 共享进行中 Promise。
+
+test('issue #16：walkFiles 跳过 node_modules / .git / dist 等目录', async () => {
+  const root = join(HOME, '.claude', 'projects', 'proj-16')
+  const real = join(root, 'sess-real.jsonl')
+  // node_modules 下放一个「诱饵」jsonl：walkFiles 不应进入，故不发现
+  const bait = join(root, 'node_modules', 'some-pkg', 'sess-bait.jsonl')
+  // .git 下放一个诱饵：同样不发现
+  const gitBait = join(root, '.git', 'sess-git.jsonl')
+  const files = new Map([
+    [root, { type: 'dir' }],
+    [real, { type: 'file', mtimeMs: 1786000002000, text: [
+      j({ sessionId: 'sess-real', type: 'user', cwd: 'D:\\demo', message: { role: 'user', content: '真实会话' } }),
+    ].join('\n') }],
+    [join(root, 'node_modules'), { type: 'dir' }],
+    [join(root, 'node_modules', 'some-pkg'), { type: 'dir' }],
+    [bait, { type: 'file', mtimeMs: 1, text: j({ sessionId: 'sess-bait', type: 'user', message: { role: 'user', content: '诱饵' } }) }],
+    [join(root, '.git'), { type: 'dir' }],
+    [gitBait, { type: 'file', mtimeMs: 1, text: j({ sessionId: 'sess-git', type: 'user', message: { role: 'user', content: 'git 诱饵' } }) }],
+  ])
+  const host = mockHost(files)
+  const { sessions, total } = await discoverSessions({ path: root, format: 'claude', host, imports: {}, cache: createScanCache() })
+  assert.equal(total, 1, '只发现真实会话，不进入 node_modules / .git')
+  assert.equal(sessions[0].sessionId, 'sess-real')
+  // 确认诱饵未被读取（readHead/readText 未被调用）
+  assert.equal(host.counters.reads, 1, '只读了真实会话文件头')
+})
+
+test('issue #16：walkFiles 限深切断病态深递归（>12 层不进入）', async () => {
+  const root = join(HOME, '.claude', 'projects', 'deep-16')
+  // 构造 15 层深的诱饵目录链，末尾放 jsonl——合法根最多 5 层，15 层必为病态路径
+  let dir = root
+  const files = new Map([[dir, { type: 'dir' }]])
+  for (let i = 0; i < 15; i++) {
+    dir = join(dir, 'd' + i)
+    files.set(dir, { type: 'dir' })
+  }
+  const deepFile = join(dir, 'sess-deep.jsonl')
+  files.set(deepFile, { type: 'file', mtimeMs: 1, text: j({ sessionId: 'sess-deep', type: 'user', message: { role: 'user', content: '深诱饵' } }) })
+  // 真实会话在首层
+  const real = join(root, 'sess-real.jsonl')
+  files.set(real, { type: 'file', mtimeMs: 1, text: j({ sessionId: 'sess-real', type: 'user', message: { role: 'user', content: '真实' } }) })
+
+  const { total } = await discoverSessions({ path: root, format: 'claude', host: mockHost(files), imports: {}, cache: createScanCache() })
+  assert.equal(total, 1, '限深切断病态深递归，只发现首层真实会话')
+})
+
+test('issue #16：并发同 key 扫描共享进行中 Promise（不叠加全量扫描）', async () => {
+  const root = join(HOME, '.claude', 'projects', 'conc-16')
+  const f = join(root, 'sess.jsonl')
+  const files = new Map([
+    [root, { type: 'dir' }],
+    [f, { type: 'file', mtimeMs: 1786000002000, text: j({ sessionId: 'sess', type: 'user', cwd: 'D:\\demo', message: { role: 'user', content: 'hi' } }) }],
+  ])
+  // 慢速 readDir：第一次扫描延迟 50ms，验证并发调用不触发第二次 readDir
+  let dirCalls = 0
+  const host = mockHost(files)
+  const origReadDir = host.readDir.bind(host)
+  host.readDir = async (path) => {
+    dirCalls++
+    if (dirCalls === 1) await new Promise((r) => setTimeout(r, 50))
+    return origReadDir(path)
+  }
+  const cache = createScanCache()
+  // 两个并发 discoverSessions（模拟两个会话同时 agent/session-start）
+  const [a, b] = await Promise.all([
+    discoverSessions({ path: root, format: 'claude', host, imports: {}, cache }),
+    discoverSessions({ path: root, format: 'claude', host, imports: {}, cache }),
+  ])
+  assert.equal(a.total, 1)
+  assert.equal(b.total, 1)
+  // readDir 在扫描完成后已被调用一次（root 目录）；并发去重使其不会重复全量扫描
+  // —— 验证第二次 discoverSessions 命中 inflight 或 TTL，不再重复 readDir root
+  assert.ok(dirCalls <= 1, '并发同 key 扫描共享 Promise，不叠加全量 readDir（实际 ' + dirCalls + ' 次）')
 })
