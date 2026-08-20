@@ -724,7 +724,7 @@ test('issue #16：并发同 key 扫描共享进行中 Promise（不叠加全量�
   const origReadDir = host.readDir.bind(host)
   host.readDir = async (path) => {
     dirCalls++
-    if (dirCalls === 1) await new Promise((r) => setTimeout(r, 50))
+    if (dirCalls === 1) await new Promise((r) => globalThis.setTimeout(r, 50))
     return origReadDir(path)
   }
   const cache = createScanCache()
