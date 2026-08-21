@@ -62,7 +62,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 
 2. **续聊** — 刷新会话列表，打开导入的会话，从源记录停下的地方继续对话。
 3. **发现与批量** — `scan_discover()` 先只读预览；侧边栏「导入会话」面板按工作区浏览、多选导入；`/import-all` 一键批量。
-4. **同步（可选）** — 面板「同步」页提供双向增量同步（外部 → DSH、DSH → 外部），默认关闭。
+4. **同步（可选）** — 面板「同步」页提供双向增量同步（外部 → DSH、DSH → 外部），默认关闭。子代理对话默认双向过滤；`excludeDirs` 排除列表可按方向跳过指定工作区目录。
 
 > 卸载：从 profile 的 bundles 移除 `import-claude` insert 行并重启 dsh；已导入会话保留，插件绝不自动删。
 
@@ -77,6 +77,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 | 矩阵导出 | `export_claude` / `export_codex` / `export_kimi` | DSH 会话序列化回 Claude / Codex / Kimi 格式，有损项逐条报告 |
 | 便携备份 | `export_bundle` / `restore_bundle` | SHA-256 双指纹的 interchange bundle，可跨机器还原 |
 | 增量写回 | `sync_to_claude` | 新增完整轮次追加回 Claude Code 文件，带守卫绝不覆盖 |
+| 双向同步 | 面板「同步」页 | Claude / Codex / Grok 双向增量同步；子代理对话默认过滤；`excludeDirs` 按目录排除 |
 | Agent 资产迁移 | `import_agents` | pi / opencode / Claude / Codex 的 agent、prompt、skill、指令转成 DSH skills |
 | MCP 镜像计划 | `import_mcp` / `/mcp-status` | 读取 Claude / Codex MCP server，生成可审阅的 DSH MCP client YAML 片段 |
 | 配置翻译建议 | `import_settings` / `/settings-suggest` | Claude settings / Codex config 转 DSH 迁移建议（只读） |

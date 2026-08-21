@@ -9,6 +9,27 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
+## [Unreleased]
+
+### Added
+
+- **双向同步按工作区排除（`excludeDirs`，issue #19）** — 同步配置新增
+  `inbound.excludeDirs` / `outbound.excludeDirs` 排除目录列表（绝对路径，归一
+  `\`→`/` 并去尾斜杠），入站按会话 `cwd`（缺失回退源文件目录）前缀匹配、出站按
+  DSH 会话 `cwd` 前缀匹配，命中目录及其子目录的会话不参与同步；面板「同步」页
+  入站/出站各加一个排除目录输入框（逗号/换行分隔）。默认空列表、行为不变。
+
+### Changed
+
+- **子代理对话默认双向过滤（issue #19）** — 入站发现层默认跳过子代理 transcript：
+  Codex 子代理 rollout（`session_meta.payload.thread_source='subagent'` /
+  `source.subagent`，此前只在导入转换层跳过、仍出现在 `scan_discover` 与入站
+  `scanned` 计数）与 Reasonix 子代理会话（`subagent-*`，此前被当作独立会话导入）
+  现在在发现层与转换层统一跳过并给 `skipReason`；出站同步默认不写回 DSH 子代理
+  会话（`SessionHeader.origin='subagent'` 或 `delegationDepth>0`），单独计入
+  `subagentSkipped` 保持可见。Claude `agent-*`、Qoder/Kimi `subagents/` 等既有
+  过滤不变。
+
 ## [0.6.2] - 2026-08-19
 
 ### Fixed

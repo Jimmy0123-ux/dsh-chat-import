@@ -232,6 +232,89 @@ test('出站写回：原生 DSH 会话落到 Codex 副本，再增量追加', as
   assert.ok(nextText.length > firstText.length)
 })
 
+test('出站默认过滤子代理：delegationDepth>0 / origin=subagent 不写回', async () => {
+  const home = process.env.DSH_HOME
+  const outRoot = join(home, 'codex-out')
+  mkdirSync(outRoot, { recursive: true })
+  const { ctx, persistence } = makeRealCtx(home)
+  const events = sampleEvents()
+  // 子代理会话（subagent/subagent_fork 产出的 child）
+  await persistence.create({ id: 'native-subagent', createdAt: 1_700_000_000_000, cwd: join(home, 'proj'), delegationDepth: 1, origin: 'subagent' })
+  await persistence.append('native-subagent', events)
+  // 顶层会话（对照：应正常写回）
+  await persistence.create({ id: 'native-top', createdAt: 1_700_000_000_000, cwd: join(home, 'proj'), delegationDepth: 0 })
+  await persistence.append('native-top', events)
+  const registryDir = join(home, 'dsh-chat-import')
+  await saveSyncConfig(registryDir, {
+    inbound: { enabled: false, formats: ['claude'] },
+    outbound: { enabled: true, targets: ['codex'], roots: { codex: outRoot } },
+  })
+  const out = await runSyncOnce(ctx, registryDir)
+  assert.equal(out.ok, true)
+  assert.equal(out.outbound.sessions, 2)
+  assert.equal(out.outbound.synced, 1) // 只有顶层会话写回
+  assert.equal(out.outbound.subagentSkipped, 1) // 子代理单独计数，不静默
+  const mapping = JSON.parse(readFileSync(join(registryDir, 'outbound.json'), 'utf8'))
+  assert.ok(mapping.mappings['native-top'], '顶层会话应有写回映射')
+  assert.ok(!mapping.mappings['native-subagent'], '子代理会话不应有写回映射')
+})
+
+test('入站按目录排除：cwd 命中 excludeDirs 的会话不导入', async () => {
+  const home = process.env.DSH_HOME
+  const srcDir = join(home, 'claude-src')
+  mkdirSync(srcDir, { recursive: true })
+  const excluded = join(home, 'proj-excluded')
+  const file = join(srcDir, 'sess-exclude-001.jsonl')
+  writeFileSync(file, [
+    JSON.stringify({ sessionId: 'sess-exclude-001', type: 'user', cwd: join(excluded, 'sub'), message: { role: 'user', content: '该被排除' } }),
+    JSON.stringify({ sessionId: 'sess-exclude-001', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '答' }] } }),
+  ].join('\n') + '\n')
+  const { ctx, sessions } = makeRealCtx(home)
+  const registryDir = join(home, 'dsh-chat-import')
+  await saveSyncConfig(registryDir, {
+    inbound: { enabled: true, formats: ['claude'], excludeDirs: [excluded] },
+    outbound: { enabled: false, targets: ['claude'] },
+  })
+  const out = await runSyncOnce(ctx, registryDir, { path: srcDir })
+  assert.equal(out.ok, true)
+  assert.equal(out.inbound.scanned, 0) // 排除后不进 scanned
+  assert.equal(out.inbound.excludedDirs, 1) // 单独计数不静默
+  assert.equal(sessions.size, 0) // 未落任何会话
+})
+
+test('出站按目录排除：cwd 命中 excludeDirs 的 DSH 会话不写回', async () => {
+  const home = process.env.DSH_HOME
+  const outRoot = join(home, 'codex-out')
+  mkdirSync(outRoot, { recursive: true })
+  const { ctx, persistence } = makeRealCtx(home)
+  await persistence.create({ id: 'native-excluded', createdAt: 1_700_000_000_000, cwd: join(home, 'proj-excluded') })
+  await persistence.append('native-excluded', sampleEvents())
+  await persistence.create({ id: 'native-kept', createdAt: 1_700_000_000_000, cwd: join(home, 'proj-kept') })
+  await persistence.append('native-kept', sampleEvents())
+  const registryDir = join(home, 'dsh-chat-import')
+  await saveSyncConfig(registryDir, {
+    inbound: { enabled: false, formats: ['claude'] },
+    outbound: { enabled: true, targets: ['codex'], roots: { codex: outRoot }, excludeDirs: [join(home, 'proj-excluded')] },
+  })
+  const out = await runSyncOnce(ctx, registryDir)
+  assert.equal(out.ok, true)
+  assert.equal(out.outbound.sessions, 2)
+  assert.equal(out.outbound.synced, 1) // 只有 proj-kept 写回
+  assert.equal(out.outbound.excludedDirs, 1)
+  const mapping = JSON.parse(readFileSync(join(registryDir, 'outbound.json'), 'utf8'))
+  assert.ok(mapping.mappings['native-kept'])
+  assert.ok(!mapping.mappings['native-excluded'])
+})
+
+test('排除目录归一化：反斜杠/尾斜杠/去重 后仍能命中', async () => {
+  const { normalizeDirPath } = await import('../lib/sync-config.mjs')
+  assert.equal(normalizeDirPath('C:\\demo\\proj\\'), 'C:/demo/proj')
+  assert.equal(normalizeDirPath('C:/demo//proj/'), 'C:/demo/proj')
+  assert.equal(normalizeDirPath(' /mnt/d/Build/ '), '/mnt/d/Build')
+  assert.equal(normalizeDirPath('/'), '/')
+  assert.equal(normalizeDirPath(''), '')
+})
+
 test('/api-import/sync GET 返回默认关闭状态', async () => {
   const { ctx, webRoutes } = makeRealCtx(process.env.DSH_HOME)
   const registryDir = join(process.env.DSH_HOME, 'dsh-chat-import')

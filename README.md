@@ -62,7 +62,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 
 2. **Resume** — refresh the session list, open the imported session, and keep chatting from where the source left off.
 3. **Discover & batch** — `scan_discover()` previews read-only; the sidebar "Import sessions" panel browses by workspace and supports multi-select import; `/import-all` batch-imports everything.
-4. **Sync (optional)** — the panel's "Sync" tab offers bidirectional incremental sync (external → DSH, DSH → external), default off.
+4. **Sync (optional)** — the panel's "Sync" tab offers bidirectional incremental sync (external → DSH, DSH → external), default off. Sub-agent conversations are filtered out by default in both directions, and `excludeDirs` deny-lists let you skip specific workspace directories per direction.
 
 > Uninstall: remove the `import-claude` insert line from your profile's bundles and restart dsh; imported sessions stay untouched and the plugin never auto-deletes.
 
@@ -77,6 +77,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 | Matrix export | `export_claude` / `export_codex` / `export_kimi` | Serialize DSH sessions back to Claude / Codex / Kimi formats; every lossy item is reported |
 | Portable backup | `export_bundle` / `restore_bundle` | Interchange bundle with dual SHA-256 fingerprints, restorable across machines |
 | Incremental write-back | `sync_to_claude` | Appends new complete turns back to a Claude Code file — guarded, never overwriting |
+| Bidirectional sync | panel "Sync" tab | Incremental inbound/outbound sync across Claude / Codex / Grok; sub-agent conversations filtered by default; per-directory `excludeDirs` deny-list |
 | Agent asset migration | `import_agents` | Converts pi / opencode / Claude / Codex agents, prompts, skills, instructions into persistent DSH skills |
 | MCP mirror plan | `import_mcp` / `/mcp-status` | Reads Claude / Codex MCP servers and generates a reviewable DSH MCP client YAML snippet |
 | Settings translation | `import_settings` / `/settings-suggest` | Turns Claude settings / Codex config into DSH migration suggestions (read-only) |
