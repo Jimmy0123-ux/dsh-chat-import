@@ -136,7 +136,36 @@ test('codex：session_meta 签名、注入过滤标题、项目名（cwd basenam
   assert.equal(b.project, '2026/03') // 无 cwd → sessions/YYYY/MM 布局回退
 })
 
-test('reasonix：desktop-* 发现、projects/<slug> 项目名、伴生排除', async () => {
+test('codex：子代理 rollout（thread_source=subagent / source.subagent）默认过滤', async () => {
+  const root = join(HOME, '.codex', 'sessions')
+  const day = join(root, '2026', '03', '12')
+  const main = join(day, 'rollout-main-019e3b3f-636d-7cb3-aaab-0255eb45ad6f.jsonl')
+  const subThreadSource = join(day, 'rollout-sub-019e3b3f-636d-7cb3-aaab-0255eb45ad7f.jsonl')
+  const subSource = join(day, 'rollout-sub2-019e3b3f-636d-7cb3-aaab-0255eb45ad8f.jsonl')
+  const files = new Map([
+    [root, { type: 'dir' }], [join(root, '2026'), { type: 'dir' }],
+    [join(root, '2026', '03'), { type: 'dir' }], [day, { type: 'dir' }],
+    [main, { type: 'file', text: [
+      j({ type: 'session_meta', payload: { id: '019e3b3f-636d-7cb3-aaab-0255eb45ad6f' } }),
+      j({ type: 'response_item', payload: { type: 'message', role: 'user', content: '主会话提问' } }),
+    ].join('\n') }],
+    [subThreadSource, { type: 'file', text: [
+      j({ type: 'session_meta', payload: { id: '019e3b3f-636d-7cb3-aaab-0255eb45ad7f', thread_source: 'subagent' } }),
+      j({ type: 'response_item', payload: { type: 'message', role: 'user', content: '子代理工作' } }),
+    ].join('\n') }],
+    [subSource, { type: 'file', text: [
+      j({ type: 'session_meta', payload: { id: '019e3b3f-636d-7cb3-aaab-0255eb45ad8f', source: { subagent: { thread_spawn: { parent_thread_id: '019e3b3f-636d-7cb3-aaab-0255eb45ad6f', depth: 1 } } } } }),
+      j({ type: 'response_item', payload: { type: 'message', role: 'user', content: '子代理工作2' } }),
+    ].join('\n') }],
+  ])
+  const host = mockHost(files)
+
+  const { sessions, total } = await discoverSessions({ path: root, format: 'codex', host, imports: {} })
+  assert.equal(total, 1)
+  assert.equal(sessions[0].sessionId, '019e3b3f-636d-7cb3-aaab-0255eb45ad6f')
+})
+
+test('reasonix：desktop-* 发现、projects/<slug> 项目名、伴生排除、subagent 默认过滤', async () => {
   const root = join(HOME, '.reasonix', 'projects', 'demo-proj')
   const main = join(root, 'desktop-202603101200-1.jsonl')
   const sub = join(root, 'subagent-sub-5-202603101201.jsonl')
@@ -156,12 +185,12 @@ test('reasonix：desktop-* 发现、projects/<slug> 项目名、伴生排除', a
   const host = mockHost(files)
 
   const { sessions, total } = await discoverSessions({ path: root, format: 'reasonix', host, imports: {} })
-  assert.equal(total, 2)
+  assert.equal(total, 1)
   const a = sessions.find((s) => s.sessionId === 'desktop-202603101200-1')
   assert.equal(a.title, '帮我写个排序函数')
   assert.equal(a.project, 'demo-proj')
   assert.equal(a.createdAt, 1786000000000)
-  assert.ok(sessions.some((s) => s.sessionId === 'subagent-sub-5-202603101201'))
+  assert.ok(!sessions.some((s) => s.sessionId === 'subagent-sub-5-202603101201'), 'subagent 子代理应默认过滤')
 })
 
 test('grokbuild：summary.json 标题/时间、sessions/<project> 项目名', async () => {

@@ -1071,6 +1071,13 @@ test('convertGeminiJson: 非法 JSON / 非会话结构返回空并 skipped', () 
 
 // ---- Reasonix ----
 
+test('convertReasonixJsonl: subagent-* 子代理默认过滤（skipReason，不建会话）', () => {
+  const out = convertReasonixJsonl(load('reasonix-v1.jsonl'), { reasonixId: 'subagent-sub-5-202606020721', sourcePath: 'D:\\demo\\reasonix\\subagent-sub-5-202606020721.jsonl' })
+  assert.equal(out.meta, null)
+  assert.equal(out.events.length, 0)
+  assert.ok(out.skipReason && out.skipReason.includes('subagent'), '应给出子代理跳过原因')
+})
+
 test('convertReasonixJsonl: v1 嵌套 tool_calls + tool_call_id 配对 + reasoning', () => {
   const out = convertReasonixJsonl(load('reasonix-v1.jsonl'), { reasonixId: 'desktop-202606020721-1', sourcePath: 'D:\\demo\\reasonix\\desktop-a.jsonl' })
   assert.equal(out.turns.length, 1)
