@@ -30,6 +30,15 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   `subagentSkipped` 保持可见。Claude `agent-*`、Qoder/Kimi `subagents/` 等既有
   过滤不变。
 
+### Fixed
+
+- **`doctor` 等四个工具补 `output.render`（issue #20）** — 宿主 `@deepseek-ai/dsh-tools`
+  更新后 `defineTool()` 恒暴露 `output.render(args, value)`（内部调用捕获的
+  `userRender`），未提供 `render` 的工具渲染输出即抛 `userRender is not a function`。
+  `doctor` / `import_agents` / `import_mcp` / `import_settings` 四个直接 `defineTool`
+  注册、此前漏写 `render` 的工具现补上人类可读文本渲染（`doctor` 报 checks/issues、
+  其余报预览/落盘/计划摘要），工具恢复可用。
+
 ## [0.6.2] - 2026-08-19
 
 ### Fixed

@@ -283,6 +283,34 @@ test('apply 注册三十一个工具（17 导入 + import_agents + doctor + impo
   }
 })
 
+// issue #20：DSH 更新后 defineTool 恒暴露 output.render（内部调用 userRender），
+// 缺 render 的工具渲染输出即抛 `userRender is not a function`。回归断言四个直接
+// defineTool 注册、曾漏 render 的工具现均可渲染（返回文本块、不抛错）。
+test('issue #20：doctor/import_agents/import_mcp/import_settings 的 output.render 可用', () => {
+  const { ctx } = makeCtx({})
+  apply(ctx)
+  const doctor = registeredDef(ctx, 'doctor')
+  assert.match(
+    doctor.output.render({}, { ok: true, checks: [{ name: 'registry', ok: true, detail: '1 条' }], issues: [], totals: { records: 1, sessions: 0, missingSessions: 0, skills: 0 } }).map((b) => b.text).join('\n'),
+    /doctor: ok=true/,
+  )
+  const agents = registeredDef(ctx, 'import_agents')
+  assert.match(
+    agents.output.render({ apply: false }, { total: 2, planned: 2, applied: 0, skipped: 0, results: [] }).map((b) => b.text).join('\n'),
+    /预览（dry-run，未落盘）/,
+  )
+  const mcp = registeredDef(ctx, 'import_mcp')
+  assert.match(
+    mcp.output.render({}, { total: 0, servers: [], planText: '# No MCP servers found\n', writtenTo: null }).map((b) => b.text).join('\n'),
+    /MCP 镜像计划/,
+  )
+  const settings = registeredDef(ctx, 'import_settings')
+  assert.match(
+    settings.output.render({}, { total: 0, suggestions: [], sources: [] }).map((b) => b.text).join('\n'),
+    /配置建议：0 条/,
+  )
+})
+
 test('scan_discover：目录探测 claude、注入过滤、schema 稳定、零副作用、缓存命中不重读', async () => {
   const root = 'D:\\demo\\claude\\projects'
   const tree = {
