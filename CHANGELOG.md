@@ -32,6 +32,14 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Fixed
 
+- **设置页「导入系统提示词」开关打不开** — Browser 侧 `settings.plugins.tab` 槽由
+  `ui-settings-plugins` 声明，而它依赖的 `settingsScope`（又依赖 `connection` /
+  `remote`）与 `locale` 都是晚挂载服务；本插件客户端此前只 `inject: ["slots"]`，
+  `apply` 期 `ctx.get('settingsScope')` 拿到 `undefined`，整段 TAB 注册被跳过——
+  设置页里根本没有「会话导入」TAB，开关自然打不开。现把 `locale` 声明进客户端
+  `inject`（面板 i18n 同步修复），并在 `slots.inject("settings.plugins.tab")` 回调内
+  resolve `settingsScope`（槽声明时该服务已就绪），TAB 正常注册、开关可读写。
+
 - **`doctor` 等四个工具补 `output.render`（issue #20）** — 宿主 `@deepseek-ai/dsh-tools`
   更新后 `defineTool()` 恒暴露 `output.render(args, value)`（内部调用捕获的
   `userRender`），未提供 `render` 的工具渲染输出即抛 `userRender is not a function`。
