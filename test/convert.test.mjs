@@ -1954,6 +1954,21 @@ test('validateSessionEvents：未知类型 / surface 缺 surfaceOp / sourceEvent
   assert.ok(badRef.problems.some((p) => p.kind === 'source-event-seqs-not-call'))
 })
 
+test('validateSessionEvents：宿主运行时/状态事件类型不再误报 unknown-type（issue #20 附注）', () => {
+  // 原生 DSH 会话含运行时/状态事件（issue #20 附注点名的 6 种 + 代表性扩展），
+  // 白名单对齐宿主词汇表后应 0 告警，而不是被判 unknown-type。
+  const runtimeTypes = [
+    'permission/preset', 'sandbox/mode', 'approval/policy', 'agent/inbox/spliced',
+    'request/header', 'assistant/chunk',
+    'todo/write', 'request/context', 'session/end-seed', 'tool/code-dispatch',
+    'compaction/start', 'plan/mode', 'team/task', 'tool-workflow/run-start',
+    'web/deepseek-search-llm-request',
+  ]
+  const r = validateSessionEvents(runtimeTypes.map((type, i) => ev(i, type)))
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.problems, [])
+})
+
 test('validateSessionEvents：指向集合外的 sourceEventSeqs 合法（append 尾片跨轮引用）', () => {
   // 尾片从 fromSeq 重编号，引用前段事件（不在集合内）——不报错
   const tail = [
