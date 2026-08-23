@@ -565,7 +565,7 @@ test('目录批量导入：subagent 辅助 transcript 跳过，主 transcript �
   assert.equal(persistence.sessions.size, 1)
   const saved = persistence.sessions.get('import-sess-simple-001')
   assert.ok(saved)
-  assert.equal(saved.events.filter((e) => e.type === 'user/message').length, 1)
+  assert.equal(saved.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user').length, 1)
   assert.equal(saved.events.filter((e) => e.type === 'assistant/message').length, 1)
   assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
 })
@@ -1309,7 +1309,7 @@ test('import_opencode fullHistory：true 导入全量历史', async () => {
   assert.equal(value.imported, 1)
   const saved = persistence.sessions.get('import-ses-comp')
   assert.ok(saved)
-  assert.equal(saved.events.filter((e) => e.type === 'user/message').length, 2) // c1 + c3（c5 无正文被跳过）
+  assert.equal(saved.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user').length, 2) // c1 + c3（c5 无正文被跳过）
   assert.equal(saved.events.filter((e) => e.type === 'assistant/message').length, 3) // c2 + c4 + c6
 })
 
@@ -2382,9 +2382,9 @@ test('export_claude 落盘：import → export 闭环、路径 <outputDir>/<slug
   assert.equal(value.slug, 'D--demo-proj') // D:\demo\proj → ':'、'\'、'\' 各一个 '-'
   assert.equal(value.cwd, 'D:\\demo\\proj')
   assert.match(value.sessionId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
-  assert.equal(value.recordCount, 4) // mode + permission-mode + user + assistant
+  assert.equal(value.recordCount, 4) // mode + permission-mode + user + assistant（环境变更声明被跳过）
   assert.equal(value.mapping.turns, 1)
-  assert.equal(value.mapping.messages, 2)
+  assert.equal(value.mapping.messages, 3) // 环境变更声明 + user + assistant（原样计数，导出时跳过）
   assert.equal(value.mapping.toolCalls, 0)
   assert.equal(value.mapping.toolResults, 0)
   assert.equal(value.dryRun, false)
@@ -3260,7 +3260,7 @@ test('REQ-36 守卫：源文件被外部修改（size/version 变化）→ skipp
   const v = await syncClaudeSession(ctx, { sessionId: 'import-sync-sess-001' }, { registryDir: resolveRegistryDir() })
   assert.equal(v.status, 'skipped')
   assert.equal(v.conflictDetected, 'source-modified-externally')
-  assert.equal(v.writeback.lastWrittenSeq, 7)
+  assert.equal(v.writeback.lastWrittenSeq, 8) // 环境变更声明 + 1 轮（session/imported + 6 回合事件）
 })
 
 test('REQ-36 守卫：源文件缩小 → skipped + sourceShrunk', async () => {
@@ -3331,7 +3331,7 @@ test('REQ-36 CAS 竞态：写入瞬间版本失配 → write-version-mismatch，
   assert.equal(v.conflictDetected, 'write-version-mismatch')
   assert.ok(!tree[src].includes('竞态提问')) // 尾行未写入
   const reg = await loadImports(resolveRegistryDir())
-  assert.equal(reg.imports[src].writeback.lastWrittenSeq, 7) // 水印未推进
+  assert.equal(reg.imports[src].writeback.lastWrittenSeq, 8) // 水印未推进（环境变更声明 + 1 轮）
 })
 
 test('REQ-36 预检失败回滚：目标文件不符合严格布局（无 mode 头）→ 写后回滚，水印不推进', async () => {
@@ -3354,7 +3354,7 @@ test('REQ-36 预检失败回滚：目标文件不符合严格布局（无 mode �
   assert.equal(tree[src], before) // 回滚：文件恢复为写前内容
   assert.equal(writes.length, wCount + 2) // 前向写 + 回滚写
   const reg = await loadImports(resolveRegistryDir())
-  assert.equal(reg.imports[src].writeback.lastWrittenSeq, 7) // 水印未推进
+  assert.equal(reg.imports[src].writeback.lastWrittenSeq, 8) // 水印未推进（环境变更声明 + 1 轮）
 })
 
 test('REQ-36 写回后重导幂等：sync 后 import_claude → already-imported 无重复 append', async () => {
@@ -3442,7 +3442,7 @@ test('REQ-36 dryRun：完整计算 + 预检但不写盘、不更新 registry', a
   assert.equal(v.status, 'synced')
   assert.equal(v.dryRun, true)
   assert.equal(v.appendedTurns, 1)
-  assert.equal(v.writeback.lastWrittenSeq, 13) // 将写入的水印（未持久化）
+  assert.equal(v.writeback.lastWrittenSeq, 14) // 将写入的水印（未持久化；环境变更声明 + 2 轮）
   assert.equal(tree[src], before) // 不写盘
   const reg = await loadImports(resolveRegistryDir())
   assert.equal(reg.imports[src].writeback, undefined) // 不更新 registry
@@ -3548,7 +3548,7 @@ test('REQ-37 超长会话导入：预算环境变量覆盖 → 三层保护生�
       .map((b) => b.text)
     assert.ok(!texts.some((t) => t.startsWith('回答' + '字'.repeat(1500))))
     // 开头锚点（最早 3 条 user 文本）保留
-    const userTexts = saved.events.filter((e) => e.type === 'user/message').map((e) => e.data.content[0].text)
+    const userTexts = saved.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user').map((e) => e.data.content[0].text)
     assert.ok(userTexts[0].startsWith('问题1'))
     assert.ok(userTexts[1].startsWith('问题2'))
     assert.ok(userTexts[2].startsWith('问题3'))

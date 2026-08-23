@@ -67,7 +67,13 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.equal(ev.data.sourcePath, sourcePath)
   assert.equal(typeof ev.data.importedAt, 'number')
   assert.ok(ev.data.importedAt > 0)
-  assert.equal(events[1].type, 'turn/start')
+  // 环境变更声明（总是注入）：标记之后、首个 turn 之前，source.kind='plugin'
+  const env = events[1]
+  assert.equal(env.type, 'user/message')
+  assert.equal(env.data.source.kind, 'plugin')
+  assert.equal(env.data.source.plugin, 'chat-import')
+  assert.ok(env.data.content[0].text.includes('DeepSeek Harness'))
+  assert.equal(events[2].type, 'turn/start')
 }
 
 // 合成 wire.jsonl：首行 metadata + 记录（timestamp 秒级递增）。
@@ -103,7 +109,7 @@ test('convertKimiWire: 简单问答（TurnBegin/StepBegin/TextPart/TurnEnd）、
   assert.ok(!out.events.some((e) => e.type === 'session/title'))
   const types = out.events.map((e) => e.type)
   assert.deepEqual(types, [
-    'session/imported', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end',
+    'session/imported', 'user/message', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end',
   ])
   out.events.forEach((e, i) => assert.equal(e.seq, i))
   assertImportedMarker(out.events, { tool: 'kimi', sourceId: 'sess-001', sourcePath: SRC })
@@ -203,7 +209,7 @@ test('convertKimiWire: SteerInput 开新轮（每条用户输入一轮）', () =
     ev('TurnEnd'),
   ]), { sourcePath: SRC, kimiId: 'sess-001' })
   assert.equal(out.turns.length, 2)
-  const users = out.events.filter((e) => e.type === 'user/message').map((e) => e.data.content[0].text)
+  const users = out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user').map((e) => e.data.content[0].text)
   assert.deepEqual(users, ['第一个问题', '第二个问题'])
   const starts = out.events.filter((e) => e.type === 'turn/start')
   assert.equal(starts.length, 2)
@@ -302,7 +308,7 @@ test('convertKimiWire: 畸形行计数、records、多轮切分', () => {
   assert.equal(out.skipped, 1) // 畸形行只计 skipped
   assert.equal(out.records, 5) // 成功解析的行数（含 metadata）
   assert.equal(out.turns.length, 2)
-  const users = out.events.filter((e) => e.type === 'user/message').map((e) => e.data.content[0].text)
+  const users = out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user').map((e) => e.data.content[0].text)
   assert.deepEqual(users, ['问题一', '问题二'])
 })
 
@@ -313,7 +319,7 @@ test('convertKimiWire: user_input 为 ContentPart 数组（图片占位等）取
     ev('TextPart', { text: '好的' }),
     ev('TurnEnd'),
   ]), { sourcePath: SRC, kimiId: 'sess-001' })
-  const user = out.events.find((e) => e.type === 'user/message').data
+  const user = out.events.find((e) => e.type === 'user/message' && e.data.source.kind === 'user').data
   assert.equal(user.content[0].text, '看这张图')
 })
 
@@ -384,7 +390,7 @@ test('convertKimiWire: 空 user_input 的 TurnBegin 不建轮（后续内容挂�
     ev('TurnEnd'),
   ]), { sourcePath: SRC, kimiId: 'sess-001' })
   assert.equal(out.turns.length, 1)
-  const users = out.events.filter((e) => e.type === 'user/message')
+  const users = out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user')
   assert.equal(users.length, 1)
   assert.equal(users[0].data.content[0].text, '真实问题')
 })
@@ -437,7 +443,7 @@ test('convertKimiWire: 新 Kimi Code tool.call/tool.result 配对；turn.prompt 
   ]), { sourcePath: SRC, kimiId: 'sess-001' })
   assert.equal(out.turns.length, 1)
   assert.equal(out.toolCalls, 1)
-  assert.equal(out.events.filter((e) => e.type === 'user/message').length, 1) // append_message 不重复建轮
+  assert.equal(out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user').length, 1) // append_message 不重复建轮
   const call = out.events.find((e) => e.type === 'tool/call')
   assert.equal(call.data.arguments, '{"command":"npm test"}') // 对象 args → JSON 字符串
   const result = out.events.find((e) => e.type === 'tool/result')
@@ -456,7 +462,7 @@ test('convertKimiWire: 新 wire 无 turn.prompt 时 context.append_message 兜�
     newEv('turn.ended', { turnId: 0, reason: 'completed' }),
   ]), { sourcePath: SRC, kimiId: 'sess-001' })
   assert.equal(out.turns.length, 1)
-  const users = out.events.filter((e) => e.type === 'user/message')
+  const users = out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user')
   assert.equal(users.length, 1)
   assert.equal(users[0].data.content[0].text, '只有 append_message')
 })

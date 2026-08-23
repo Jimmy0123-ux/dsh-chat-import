@@ -157,5 +157,7 @@ test('session/imported 内部标记钉在日志头（REQ-32）', () => {
   assert.equal(ev.data.tool, 'qoder')
   assert.equal(ev.data.sourceId, SID)
   assert.equal(ev.data.sourcePath, '/home/u/.qoder/projects/p/' + SID + '.jsonl')
-  assert.equal(out.events[1].type, 'turn/start')
+  assert.equal(out.events[1].type, 'user/message') // 环境变更声明（总是注入）
+  assert.equal(out.events[1].data.source.kind, 'plugin')
+  assert.equal(out.events[2].type, 'turn/start')
 })

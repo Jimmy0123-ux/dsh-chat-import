@@ -30,6 +30,15 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   `subagentSkipped` 保持可见。Claude `agent-*`、Qoder/Kimi `subagents/` 等既有
   过滤不变。
 
+- **导入会话总是注入环境变更声明** — 此前「迁移到 DSH，工具 / 权限 / 执行指令以
+  当前会话为准」的免责声明只在开启「导入系统提示词」开关时随源提示词一并注入；
+  默认关时继续会话会缺少该声明，模型可能沿用源环境的旧工具名 / 旧命令（如 Claude
+  的 `Bash` / `Read`、Codex 的 `shell`），导致工具调用失败。现把环境变更声明与
+  源系统提示词解耦：**每个导入会话**都在首个回合前钉一条「上下文注入」折叠行声明
+  环境已迁移；`importSystemPrompt` 开关只决定是否附上源 `system` / `developer`
+  提示词正文。声明不计入「消息数」（`messages` 只统计真实 source 消息），导出
+  `export_claude` 时按 `source.kind='plugin'` 跳过不串写回 Claude。
+
 ### Fixed
 
 - **设置页「导入系统提示词」开关打不开** — Browser 侧 `settings.plugins.tab` 槽由

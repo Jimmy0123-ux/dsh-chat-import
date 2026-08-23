@@ -281,7 +281,7 @@ test('convertZcodeJson: 简单问答、元数据、平衡回合', () => {
   assertImportedMarker(out.events, { tool: 'zcode', sourceId: 'zcs-a', sourcePath: 'E:/demo/zcode/db.sqlite' })
   const types = out.events.map((e) => e.type)
   assert.deepEqual(types, [
-    'session/imported', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end', 'session/title',
+    'session/imported', 'user/message', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end', 'session/title',
   ])
   out.events.forEach((e, i) => assert.equal(e.seq, i))
   for (const e of out.events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result')) {
@@ -359,7 +359,7 @@ test('convertZcodeJson: <system-reminder> 注入 user 消息整条过滤', () =>
   })
   const out = convertZcodeJson(raw)
   assert.equal(out.turns.length, 1)
-  const users = out.events.filter((e) => e.type === 'user/message')
+  const users = out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user')
   assert.equal(users.length, 1)
   assert.equal(users[0].data.content[0].text, '真实提问')
 })
@@ -611,7 +611,7 @@ test('import_zcode compaction：摘要还原为上下文 reasoning、0 skipped',
   assert.equal(reasoning[0].text, '此前对话的压缩摘要。')
   // compaction 结构块不产生内容；摘要消息不产生空回合
   assert.ok(!saved.events.some((e) => e.data && e.data.message && e.data.message.content.some((c) => c.type === 'compaction')))
-  assert.equal(saved.events.filter((e) => e.type === 'user/message').length, 1)
+  assert.equal(saved.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user').length, 1)
 })
 
 test('import_zcode sessionIds 过滤：只导指定源会话', async () => {
@@ -663,7 +663,7 @@ test('import_zcode db 缺失回退 transcript.jsonl：不报错、0 skipped', as
   assert.equal(saved.meta.cwd, 'E:/demo/zcode-old') // metadata.json 的 cwd
   assertImportedMarker(saved.events, { tool: 'zcode', sourceId: basename(dirname(txPath)), sourcePath: txPath })
   // 注入 user 被过滤（不产生回合）；工具调用成对
-  assert.equal(saved.events.filter((e) => e.type === 'user/message').length, 1)
+  assert.equal(saved.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user').length, 1)
   const call = saved.events.find((e) => e.type === 'tool/call')
   const result = saved.events.find((e) => e.type === 'tool/result')
   assert.equal(call.data.name, 'search_files')

@@ -68,7 +68,13 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.equal(ev.data.sourcePath, sourcePath)
   assert.equal(typeof ev.data.importedAt, 'number')
   assert.ok(ev.data.importedAt > 0)
-  assert.equal(events[1].type, 'turn/start')
+  // 环境变更声明（总是注入）：标记之后、首个 turn 之前，source.kind='plugin'
+  const env = events[1]
+  assert.equal(env.type, 'user/message')
+  assert.equal(env.data.source.kind, 'plugin')
+  assert.equal(env.data.source.plugin, 'chat-import')
+  assert.ok(env.data.content[0].text.includes('DeepSeek Harness'))
+  assert.equal(events[2].type, 'turn/start')
 }
 
 // 合成 summary.json（Grok Build 字段；JSON.stringify 会丢弃 undefined 键）
@@ -106,7 +112,7 @@ test('convertGrokbuildJson: 简单问答、元数据、显式标题、平衡回�
   // 显式标题 → 钉 session/title 事件（最后，不破坏回合平衡）
   const types = out.events.map((e) => e.type)
   assert.deepEqual(types, [
-    'session/imported', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end', 'session/title',
+    'session/imported', 'user/message', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end', 'session/title',
   ])
   assert.equal(out.events.at(-1).data.title, 'Grok 会话标题')
   out.events.forEach((e, i) => assert.equal(e.seq, i))
@@ -151,7 +157,7 @@ test('convertGrokbuildJson: tool_result 块随 user 记录到达（Claude 风格
     { type: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_02', content: [{ type: 'text', text: 'A 内容' }] }] },
   ]))
   assert.equal(out.turns.length, 1)
-  assert.equal(out.events.filter((e) => e.type === 'user/message').length, 1) // 结果消息不占轮
+  assert.equal(out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user').length, 1) // 结果消息不占轮
   const result = out.events.find((e) => e.type === 'tool/result')
   assert.equal(result.data.message.content[0].content[0].text, 'A 内容')
   assertToolPairing(out.events)
@@ -167,7 +173,7 @@ test('convertGrokbuildJson: string content 记录（无块）与顶层 tool_use_
   ]))
   assert.equal(out.turns.length, 1)
   assert.equal(out.events.filter((e) => e.type === 'assistant/message').length, 2) // 两步
-  const user = out.events.find((e) => e.type === 'user/message').data
+  const user = out.events.find((e) => e.type === 'user/message' && e.data.source.kind === 'user').data
   assert.equal(user.content[0].text, 'hello')
   const result = out.events.find((e) => e.type === 'tool/result')
   assert.equal(result.data.message.content[0].content[0].text, 'README.md\nsrc')
@@ -179,7 +185,7 @@ test('convertGrokbuildJson: input_text/output_text 块归一到 text', () => {
     { type: 'user', content: [{ type: 'input_text', text: '第一个问题' }] },
     { type: 'assistant', content: [{ type: 'output_text', text: '第一个回答' }] },
   ]))
-  const user = out.events.find((e) => e.type === 'user/message').data
+  const user = out.events.find((e) => e.type === 'user/message' && e.data.source.kind === 'user').data
   assert.equal(user.content[0].text, '第一个问题')
   const asst = out.events.find((e) => e.type === 'assistant/message').data.message
   assert.equal(asst.content[0].text, '第一个回答')
@@ -285,7 +291,7 @@ test('convertGrokbuildJson: 多轮切分、畸形行计数', () => {
   assert.equal(out.turns.length, 2)
   const starts = out.events.filter((e) => e.type === 'turn/start')
   assert.equal(starts.length, 2)
-  const users = out.events.filter((e) => e.type === 'user/message').map((e) => e.data.content[0].text)
+  const users = out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user').map((e) => e.data.content[0].text)
   assert.deepEqual(users, ['第一个问题', '第二个问题'])
 })
 
@@ -305,7 +311,7 @@ test('convertGrokbuildJson: 后置 tool 记录挂回 call 所属 step（不落�
   assert.equal(result.data.step, 1)
   assert.deepEqual(result.sourceEventSeqs, [call.seq])
   const msgs = assertMessageOrderLegal(out.events)
-  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant'])
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'user', 'assistant', 'tool', 'assistant'])
 })
 
 test('convertGrokbuildJson: 纯文本 tool 记录（无 id）→ 唯一未覆盖调用兜底；多候选丢弃', () => {
@@ -341,7 +347,7 @@ test('convertGrokbuildJson: 无前序 user 的 assistant 记录忽略（转录�
     { type: 'assistant', content: '好的' },
   ]))
   assert.equal(out.turns.length, 1)
-  const users = out.events.filter((e) => e.type === 'user/message')
+  const users = out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user')
   assert.equal(users.length, 1)
   assert.equal(users[0].data.content[0].text, '现在开始')
 })

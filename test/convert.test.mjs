@@ -77,8 +77,14 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.equal(ev.data.sourcePath, sourcePath)
   assert.equal(typeof ev.data.importedAt, 'number')
   assert.ok(ev.data.importedAt > 0)
-  // 标记之后才进入回合事件
-  assert.equal(events[1].type, 'turn/start')
+  // 环境变更声明（总是注入）：标记之后、首个 turn 之前，source.kind='plugin'
+  const env = events[1]
+  assert.equal(env.type, 'user/message')
+  assert.equal(env.data.source.kind, 'plugin')
+  assert.equal(env.data.source.plugin, 'chat-import')
+  assert.ok(env.data.content[0].text.includes('DeepSeek Harness'))
+  // 环境声明之后才进入回合事件
+  assert.equal(events[2].type, 'turn/start')
 }
 
 test('convertClaudeJsonl: 简单问答合成平衡回合', () => {
@@ -94,7 +100,7 @@ test('convertClaudeJsonl: 简单问答合成平衡回合', () => {
 
   const types = out.events.map((e) => e.type)
   assert.deepEqual(types, [
-    'session/imported', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end',
+    'session/imported', 'user/message', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end',
   ])
   // seq 连续从 0 开始；首事件是内部标记
   out.events.forEach((e, i) => assert.equal(e.seq, i))
@@ -149,8 +155,8 @@ test('convertClaudeJsonl: 多步回合（一步一个 assistant 消息）', () =
   assert.equal(messages.length, 2)
   assert.equal(messages[0].data.step, 1)
   assert.equal(messages[1].data.step, 2)
-  // user/message 只在第一步出现
-  const users = out.events.filter((e) => e.type === 'user/message')
+  // user/message 只在第一步出现（环境变更声明不计入真实 user 消息）
+  const users = out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user')
   assert.equal(users.length, 1)
   assertMessageOrderLegal(out.events)
 })
@@ -177,7 +183,7 @@ test('convertClaudeJsonl: 未回答的提问也成回合', () => {
   assert.equal(out.turns.length, 1)
   assert.equal(out.messages, 1)
   const types = out.events.map((e) => e.type)
-  assert.deepEqual(types, ['session/imported', 'turn/start', 'user/message', 'turn/end'])
+  assert.deepEqual(types, ['session/imported', 'user/message', 'turn/start', 'user/message', 'turn/end'])
 })
 
 test('convertClaudeJsonl: sessionId 覆盖参数生效', () => {
@@ -187,7 +193,8 @@ test('convertClaudeJsonl: sessionId 覆盖参数生效', () => {
   assert.equal(out.meta.sourceId, 'sess-simple-001')
   assert.equal(out.events[0].data.sourceId, 'sess-simple-001')
   const ids = out.events.filter((e) => e.type === 'user/message').map((e) => e.data.id)
-  assert.ok(ids[0].startsWith('import:custom-id:u1'))
+  // 首条是环境变更声明（import:custom-id:env），真实提问在其后
+  assert.ok(ids.some((id) => id.startsWith('import:custom-id:u1')))
 })
 
 test('convertClaudeJsonl: 空输入不产生事件', () => {
@@ -257,7 +264,7 @@ test('convertClaudeJsonl: 后置的 tool/result 挂到 call 所属 step（不落
   assert.equal(result.surfaceOp, 'append')
   // 投影顺序：user → assistant(带 tool-call) → tool → assistant，合法
   const msgs = assertMessageOrderLegal(out.events)
-  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant'])
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'user', 'assistant', 'tool', 'assistant'])
 })
 
 test('convertClaudeJsonl: 中断的 tool_use（无 tool_result）补发空 tool/result', () => {
@@ -297,7 +304,7 @@ test('convertClaudeJsonl: assistant 连续 tool_use、结果后置 → 投影顺
   assert.equal(out.toolCalls, 2)
   assert.equal(out.droppedToolResults, 0)
   const msgs = assertMessageOrderLegal(out.events)
-  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant', 'tool'])
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'user', 'assistant', 'tool', 'assistant', 'tool'])
   // 每条 tool 消息与其 call 的 assistant 同 step
   const calls = out.events.filter((e) => e.type === 'tool/call')
   const results = out.events.filter((e) => e.type === 'tool/result')
@@ -386,7 +393,7 @@ test('convertCodexJsonl: 简单问答合成平衡回合（元数据来自 sessio
 
   const types = out.events.map((e) => e.type)
   assert.deepEqual(types, [
-    'session/imported', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end',
+    'session/imported', 'user/message', 'turn/start', 'step/start', 'user/message', 'assistant/message', 'step/end', 'turn/end',
   ])
   // seq 连续从 0 开始；最后一个事件是 turn/end（平衡）
   out.events.forEach((e, i) => assert.equal(e.seq, i))
@@ -429,7 +436,7 @@ test('convertCodexJsonl: 注入块被过滤、reasoning 加密被跳过、custom
   const out = convertCodexJsonl(load('codex-custom-tool.jsonl'))
   assert.equal(out.turns.length, 1)
   // 注入的 <environment_context> 不进入 prompt
-  const user = out.events.find((e) => e.type === 'user/message').data
+  const user = out.events.find((e) => e.type === 'user/message' && e.data.source.kind === 'user').data
   assert.equal(user.content[0].text, '帮我修这个 bug')
   // 加密 reasoning 不产生 reasoning 块
   assert.equal(out.events.filter((e) => e.type === 'assistant/message').length, 2)
@@ -456,11 +463,13 @@ test('convertCodexJsonl: importSystemPrompt 开关收集 developer 为上下文�
     '{"timestamp":"2026-05-18T13:21:30.754Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}',
     '{"timestamp":"2026-05-18T13:21:31.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}}',
   ].join('\n')
-  // 默认关：developer 过滤，仅一条真实 user/message、无注入
+  // 默认关：developer 过滤；环境变更声明始终注入 → 2 条 user/message（声明 + 真实提问）
   const off = convertCodexJsonl(raw, { sessionId: 'codex-sp' })
-  assert.equal(off.events.filter((e) => e.type === 'user/message').length, 1)
-  assert.ok(!off.events.some((e) => e.data && e.data.source && e.data.source.kind !== 'user'))
-  // 开：developer 作为上下文注入 user/message（source.kind='plugin'，plugin='chat-import'）钉在最前
+  assert.equal(off.events.filter((e) => e.type === 'user/message').length, 2)
+  const offPlugin = off.events.filter((e) => e.data && e.data.source && e.data.source.kind === 'plugin')
+  assert.equal(offPlugin.length, 1)
+  assert.ok(!offPlugin[0].data.content[0].text.includes('You are Codex.'))
+  // 开：developer 作为上下文注入附在环境变更声明之后（source.kind='plugin'，plugin='chat-import'）钉在最前
   const on = convertCodexJsonl(raw, { sessionId: 'codex-sp', importSystemPrompt: true })
   const first = on.events.find((e) => e.type === 'user/message')
   assert.equal(first.data.source.kind, 'plugin')
@@ -496,7 +505,7 @@ test('convertCodexJsonl: event_msg 重复消息不重复计数、多轮正确切
   assert.equal(out.messages, 4) // 每轮 user + assistant（event_msg 重复不计）
   const starts = out.events.filter((e) => e.type === 'turn/start')
   assert.equal(starts.length, 2)
-  const users = out.events.filter((e) => e.type === 'user/message')
+  const users = out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user')
   assert.equal(users.length, 2)
   assert.equal(users[0].data.content[0].text, '第一个问题')
   assert.equal(users[1].data.content[0].text, '第二个问题')
@@ -728,7 +737,10 @@ test('convertChatgptJson: importSystemPrompt 开关收集 system 角色为上下
   }
   const off = convertChatgptJson(JSON.stringify([conv]))
   assert.equal(off.conversations.length, 1)
-  assert.ok(!off.conversations[0].events.some((e) => e.data && e.data.source && e.data.source.kind !== 'user'))
+  // 默认关：system 过滤；环境变更声明始终注入（唯一 plugin 注入，不含 system 原文）
+  const offPlugin = off.conversations[0].events.filter((e) => e.data && e.data.source && e.data.source.kind === 'plugin')
+  assert.equal(offPlugin.length, 1)
+  assert.ok(!offPlugin[0].data.content[0].text.includes('You are a helpful assistant.'))
   const on = convertChatgptJson(JSON.stringify([conv]), { importSystemPrompt: true })
   const c1 = on.conversations[0]
   const first = c1.events.find((e) => e.type === 'user/message')
@@ -933,7 +945,7 @@ test('convertCursorJsonl: 简单问答、user_query 剥离、平衡回合', () =
   assert.equal(types.filter((t) => t === 'turn/end').length, 1)
   out.events.forEach((e, i) => assert.equal(e.seq, i))
   // user_query 标签被剥离
-  const user = out.events.find((e) => e.type === 'user/message').data
+  const user = out.events.find((e) => e.type === 'user/message' && e.data.source.kind === 'user').data
   assert.equal(user.content[0].text, 'Create a basic python interpreter in rust.')
   // provider
   const asst = out.events.find((e) => e.type === 'assistant/message').data.message
@@ -995,7 +1007,7 @@ test('convertGeminiJson: 简单会话、元数据、平衡回合', () => {
   assert.equal([...types].reverse().find((t) => t !== 'session/title'), 'turn/end')
   out.events.forEach((e, i) => assert.equal(e.seq, i))
   // 用户 parts 数组 → prompt
-  const user = out.events.find((e) => e.type === 'user/message').data
+  const user = out.events.find((e) => e.type === 'user/message' && e.data.source.kind === 'user').data
   assert.equal(user.content[0].text, 'Create a basic python interpreter in rust.')
   // thoughts → reasoning；真实 model
   const asst = out.events.find((e) => e.type === 'assistant/message').data.message
@@ -1056,7 +1068,7 @@ test('convertGeminiJson: 多轮切分、kind 缺失兼容', () => {
   assert.equal(out.turns.length, 2)
   const starts = out.events.filter((e) => e.type === 'turn/start')
   assert.equal(starts.length, 2)
-  const users = out.events.filter((e) => e.type === 'user/message')
+  const users = out.events.filter((e) => e.type === 'user/message' && e.data.source.kind === 'user')
   assert.equal(users.length, 2)
 })
 
@@ -1359,7 +1371,7 @@ test('convertOpencodeJson: 简单问答、元数据、平衡回合', () => {
   for (const e of out.events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message' || e.type === 'tool/result')) {
     assert.equal(e.surfaceOp, 'append')
   }
-  const user = out.events.find((e) => e.type === 'user/message').data
+  const user = out.events.find((e) => e.type === 'user/message' && e.data.source.kind === 'user').data
   assert.equal(user.content[0].text, '帮我看看构建失败的原因')
   // 消息级 model（字符串）优先于会话级 model
   const asst = out.events.find((e) => e.type === 'assistant/message').data.message
@@ -1471,7 +1483,8 @@ test('convertOpencodeJson: sessionId 覆盖参数生效、空 messages 不产生
   const out = convertOpencodeJson(load('opencode-simple.json'), { sessionId: 'custom-opencode' })
   assert.equal(out.meta.id, 'custom-opencode')
   const ids = out.events.filter((e) => e.type === 'user/message').map((e) => e.data.id)
-  assert.ok(ids[0].startsWith('import:custom-opencode:u1'))
+  // 首条是环境变更声明（import:custom-opencode:env），真实提问在其后
+  assert.ok(ids.some((id) => id.startsWith('import:custom-opencode:u1')))
   // 无 messages → 空事件，由 index 层计 skipped
   const empty = convertOpencodeJson('{"id":"ses_empty","createdAt":1,"messages":[]}')
   assert.equal(empty.turns.length, 0)
