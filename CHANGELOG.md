@@ -39,13 +39,16 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   注册、此前漏写 `render` 的工具现补上人类可读文本渲染（`doctor` 报 checks/issues、
   其余报预览/落盘/计划摘要），工具恢复可用。
 
-- **`verify_session` 事件白名单对齐宿主（issue #20 附注）** — 白名单此前只列导入
-  保留的 10 种 durable 事件，对原生 DSH 会话的运行时/状态事件（`permission/preset`、
-  `sandbox/mode`、`assistant/chunk`、`request/header`、`approval/policy`、
-  `agent/inbox/spliced` 等）误报 `unknown-type`。现将 `SESSION_EVENT_TYPES` 扩充为
-  宿主 `@deepseek-ai/dsh-session` 的 `KNOWN_SESSION_EVENT_TYPES`（0.1.1-rc.2，48 种）
-  + 本插件自产 `session/imported` 标记（共 49 种），只对真正未知的类型报警；导入
-  保留的 durable 类型仍由 `convert/dsh.mjs` 的 `DURABLE` 集合独立控制。
+- **`verify_session` 结构校验对齐原生 DSH 会话语义（issue #20 附注）** — 校验此前
+  按「导入会话」语义过严，对原生 DSH 会话产生三类误报：① 事件类型白名单只列 10 种
+  durable 事件，把 `permission/preset`、`sandbox/mode`、`assistant/chunk`、
+  `request/header`、`approval/policy`、`agent/inbox/spliced` 等运行时/状态事件误报
+  `unknown-type`；② `sourceEventSeqs` 一律要求指向 `tool/call`，但原生会话
+  `assistant/message` 可引用 `assistant/chunk`（消息重建）；③ `surfaceOp` 只认
+  `'append'`，但 compaction 的 `{ op: 'replace' }` 是合法形态。现改为：白名单对齐
+  宿主 `KNOWN_SESSION_EVENT_TYPES`（0.1.1-rc.2，48 种）+ 自产 `session/imported` 标记；
+  `sourceEventSeqs` 指向校验只作用于 `tool/result`；`surfaceOp` 仅判缺失。导入保留
+  的 durable 类型仍由 `convert/dsh.mjs` 的 `DURABLE` 集合独立控制。
 
 ## [0.6.2] - 2026-08-19
 

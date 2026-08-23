@@ -1969,6 +1969,28 @@ test('validateSessionEvents：宿主运行时/状态事件类型不再误报 unk
   assert.deepEqual(r.problems, [])
 })
 
+test('validateSessionEvents：原生会话 sourceEventSeqs/surfaceOp 语义不再误报（issue #20 附注）', () => {
+  // assistant/message 在原生会话可引用 assistant/chunk（消息重建），不应判 source-event-seqs-not-call
+  const assistantRef = validateSessionEvents([
+    ev(0, 'assistant/chunk'),
+    ev(1, 'assistant/message', { surfaceOp: 'append', sourceEventSeqs: [0] }),
+  ])
+  assert.equal(assistantRef.ok, true)
+
+  // compaction 的 replace surfaceOp 是合法形态，不应判 missing-surface-op
+  const replaceOp = validateSessionEvents([
+    ev(0, 'assistant/message', { surfaceOp: { op: 'replace', start: 0, end: 0 } }),
+  ])
+  assert.equal(replaceOp.ok, true)
+
+  // tool/result 指向非 tool/call 仍报 source-event-seqs-not-call（回归不变）
+  const toolResultBadRef = validateSessionEvents([
+    ev(0, 'assistant/chunk'),
+    ev(1, 'tool/result', { surfaceOp: 'append', sourceEventSeqs: [0] }),
+  ])
+  assert.ok(toolResultBadRef.problems.some((p) => p.kind === 'source-event-seqs-not-call'))
+})
+
 test('validateSessionEvents：指向集合外的 sourceEventSeqs 合法（append 尾片跨轮引用）', () => {
   // 尾片从 fromSeq 重编号，引用前段事件（不在集合内）——不报错
   const tail = [
