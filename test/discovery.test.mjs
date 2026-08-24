@@ -5,8 +5,8 @@
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   discoverSessions, createScanCache, clearScanCache, clearInflightScans,
@@ -652,7 +652,24 @@ test('FORMATS 与工具 schema enum 一致（16 种）', () => {
 
 // ── git 状态（REQ-58）──────────────────────────────────────────────────────
 
-test('git 状态：cwd 为 git 仓库（纯 JS 解析 .git/HEAD）→ 分支正确；非仓库目录 → null 不报错', async () => {
+// 向上找最近的 .git（与 findGitDir 同口径）：探测路径的上级链若存在 git 仓库
+//（如本机把 $HOME 纳入版本管理的 dotfiles 快照工具），「无仓库 fixture」无法构造。
+function enclosingGitRepo(probe) {
+  let dir = resolve(probe)
+  for (;;) {
+    try {
+      const st = statSync(join(dir, '.git'))
+      if (st.isDirectory() || st.isFile()) return dir
+    } catch {
+      // 继续向上找
+    }
+    const parent = dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
+}
+
+test('git 状态：cwd 为 git 仓库（纯 JS 解析 .git/HEAD）→ 分支正确；非仓库目录 → null 不报错', async (t) => {
   const repo = mkdtempSync(join(tmpdir(), 'dsh-git-'))
   try {
     // 手写 .git 目录结构（无需调用 git 命令——路线 A 已移除 child_process）
@@ -676,15 +693,23 @@ test('git 状态：cwd 为 git 仓库（纯 JS 解析 .git/HEAD）→ 分支正�
     assert.equal(detached.sessions[0].gitBranch, 'abc1234')
     assert.equal(detached.sessions[0].gitDirty, null)
 
-    // 仓库外的不存在目录（mock 树服务即可，无需真实存在）→ 字段 null、不报错
+    // 仓库外的不存在目录（mock 树服务即可，无需真实存在）→ 字段 null、不报错。
+    // 探针是真实路径、git 探测向上穿透：本机若上级链存在 git 仓库（如 $HOME 被
+    // dotfiles 快照工具纳入版本管理），该 fixture 无法构造「无上层仓库」，跳过
+    // 该断言并说明（CI / 无上层仓库环境正常断言）。
     const plainCwd = join(dirname(repo), 'dsh-missing-project')
     const files2 = new Map([
       [plainCwd, { type: 'dir' }],
       [join(plainCwd, 'sess2.jsonl'), { type: 'file', text: j({ sessionId: 'sess2', type: 'user', cwd: plainCwd, message: { role: 'user', content: 'hi' } }), mtimeMs: 1 }],
     ])
     const plain = await discoverSessions({ path: plainCwd, format: 'claude', host: mockHost(files2), imports: {}, cache: createScanCache() })
-    assert.equal(plain.sessions[0].gitBranch, null)
-    assert.equal(plain.sessions[0].gitDirty, null)
+    const enclosing = enclosingGitRepo(plainCwd)
+    if (enclosing) {
+      t.skip('环境：' + plainCwd + ' 的上级存在 git 仓库（' + enclosing + '），无法构造无仓库 fixture')
+    } else {
+      assert.equal(plain.sessions[0].gitBranch, null)
+      assert.equal(plain.sessions[0].gitDirty, null)
+    }
   } finally {
     rmSync(repo, { recursive: true, force: true })
   }
