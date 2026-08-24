@@ -78,6 +78,8 @@ list_imported_sessions()
 retract_import({ sessionId: "import-019f5f27-…" })
 ```
 
+> **Ghost sessions after retract (#22)** — the DSH host has no delete/forget API: after `retract_import` and manual artifact deletion, the session id may still occupy the host's in-memory index (it stays visible in the session list until dsh restarts, and re-importing the same source used to fail with `session "…" already exists in this backend`). This is now self-healed: re-import detects the stale entry (still listed but log unreadable, or `create` rejecting the id) and **automatically mints a suffixed new session id** (`import-<id>-1`) with a clear `staleGhost: { previous, current }` report instead of failing; `retract_import`'s `manualDelete` guidance also notes that the ghost only fully disappears after a dsh restart.
+
 ### export_claude / export_codex / export_kimi — DSH → target format
 
 `export_claude({ sessionId })` serializes an existing DSH session (imported or native) into a Claude Code JSONL transcript, ready for `--resume`. It is written to `<outputDir>/<slug>/<uuid>.jsonl` (default `~/.claude/projects`), with a fresh UUID v4 file name — an existing file is never overwritten. `export_codex` and `export_kimi` write Codex rollout JSONL and Kimi `wire.jsonl` respectively (default `~/.dsh/exports`) — completing the DSH↔Claude↔Codex↔Kimi matrix (the import edges already exist). Every export lists its **lossy items** in a `degradations` field (orphan tool results, skipped injections, skipped attachments) — nothing is silently dropped:

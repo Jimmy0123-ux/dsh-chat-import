@@ -21,6 +21,15 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
   无法解析的 user content 计入 `droppedUserPrompts`，0 轮 + 有丢弃时显式标注
   `skipReason`「0 轮导入…内容丢失」，绝不静默成功。
 
+- **retract_import 后宿主残留幽灵会话，同源重导被 already exists 拒绝（issue #22）** —
+  DSH 宿主内存会话索引无 delete/forget 面：撤回并手动删除工件后，会话 id 仍占内存
+  索引（GUI 列表可见、重启才消失），同源重导抛 `session "<id>" already exists in
+  this backend`（或幂等跳过），只能换新 id 或重启服务器。现两层自愈：决策层识别
+  「list 仍暴露但日志不可读」的幽灵条目，自动另铸后缀新 id（`import-<id>-1`）完整
+  重导并报告 `staleGhost: { previous, current }`；落盘层 create 撞 already exists
+  时同样另铸新 id 重试一次，registry 记录 / 批量结果同步到新 id。`retract_import`
+  的 `manualDelete` 引导补充「彻底消失需重启 dsh」说明。
+
 ## [0.7.0] - 2026-08-23
 
 ### Added

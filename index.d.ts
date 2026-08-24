@@ -156,6 +156,9 @@ export interface SingleImportResult {
   droppedBoundaryResults?: number
   trimmed?: TrimReport | null
   forceImported?: { previous: string; current: string }
+  /** issue #22：宿主内存残留幽灵会话（retract 后工件已删）时重导自动另铸后缀新 id，
+   * previous = 幽灵原 id、current = 新落盘 id。 */
+  staleGhost?: { previous: string; current: string }
   validation?: ValidationReport
 }
 
@@ -178,6 +181,8 @@ export interface BatchItemResult {
   backfilled?: boolean
   trimmed?: TrimReport | null
   forceImported?: { previous: string; current: string }
+  /** issue #22：同 SingleImportResult.staleGhost（批量条目）。 */
+  staleGhost?: { previous: string; current: string }
   validation?: ValidationReport
 }
 
