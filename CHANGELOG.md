@@ -9,6 +9,18 @@ Every entry maps to commits in the repository history
 npm publish timestamp (cross-checked with `npm view dsh-chat-import time`).
 Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
+## [Unreleased]
+
+### Fixed
+
+- **Claude Code 数组格式 user 消息导入 0 轮（issue #21）** — 新版 Claude Code 对直接
+  提问也写数组格式 `content`（`content:[{type:'text',...}]`），此前这类消息落入
+  tool_result 分支被静默丢弃：全数组提问的转录导入成 0 轮空会话、混合转录（字符串 +
+  数组提问）丢提问且无任何提示。现把无 `tool_result` 块的数组 user 消息视为直连提问
+  开新轮（text 块按换行拼接为 prompt）；含 `tool_result` 块的数组继续走工具结果分支。
+  无法解析的 user content 计入 `droppedUserPrompts`，0 轮 + 有丢弃时显式标注
+  `skipReason`「0 轮导入…内容丢失」，绝不静默成功。
+
 ## [0.7.0] - 2026-08-23
 
 ### Added

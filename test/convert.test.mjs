@@ -186,6 +186,67 @@ test('convertClaudeJsonl: 未回答的提问也成回合', () => {
   assert.deepEqual(types, ['session/imported', 'user/message', 'turn/start', 'user/message', 'turn/end'])
 })
 
+test('convertClaudeJsonl: 数组格式 user content（纯文本块）开新轮（issue #21 复现）', () => {
+  // Claude Code 新版对直接提问也写 content:[{type:"text",...}]；此前落入 tool_result
+  // 分支被静默丢弃 → 0 轮导入，整段对话丢失
+  const raw = [
+    '{"type":"user","sessionId":"t","cwd":"/tmp","timestamp":"2026-08-01T00:00:00Z","uuid":"u1","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}',
+    '{"type":"assistant","sessionId":"t","cwd":"/tmp","timestamp":"2026-08-01T00:00:01Z","uuid":"u2","message":{"model":"claude","content":[{"type":"text","text":"hi"}]}}',
+  ].join('\n')
+  const out = convertClaudeJsonl(raw, { fileStem: 't' })
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.turns[0].prompt, 'hello')
+  assert.equal(out.messages, 2)
+  assert.equal(out.droppedUserPrompts, 0)
+  assert.equal(out.skipReason, undefined)
+  assertMessageOrderLegal(out.events)
+  const userMsg = out.events.find((e) => e.type === 'user/message' && e.data.source.kind === 'user')
+  assert.equal(userMsg.data.content[0].text, 'hello')
+})
+
+test('convertClaudeJsonl: 多 text 块数组拼接为 prompt（换行分隔）', () => {
+  const raw = [
+    '{"type":"user","sessionId":"t","message":{"role":"user","content":[{"type":"text","text":"第一段"},{"type":"text","text":"第二段"}]}}',
+    '{"type":"assistant","sessionId":"t","message":{"role":"assistant","content":[{"type":"text","text":"回答"}]}}',
+  ].join('\n')
+  const out = convertClaudeJsonl(raw, { fileStem: 't' })
+  assert.equal(out.turns.length, 1)
+  assert.equal(out.turns[0].prompt, '第一段\n第二段')
+})
+
+test('convertClaudeJsonl: 混合转录——字符串/数组提问开轮，tool_result 数组仍走工具结果（issue #21 文件 B 形态）', () => {
+  // 与 issue #21 实测文件 B 同构：字符串提问 + 数组提问 + tool_result 载体混合，
+  // 此前数组提问（11 条）被静默丢弃
+  const raw = [
+    JSON.stringify({ type: 'user', sessionId: 's', message: { role: 'user', content: '字符串提问' } }),
+    JSON.stringify({ type: 'assistant', sessionId: 's', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'call-1', name: 'Bash', input: { command: 'ls' } }] } }),
+    JSON.stringify({ type: 'user', sessionId: 's', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-1', content: '{"type":"text","text":"out"}' }] } }),
+    JSON.stringify({ type: 'assistant', sessionId: 's', message: { role: 'assistant', content: [{ type: 'text', text: '回答1' }] } }),
+    JSON.stringify({ type: 'user', sessionId: 's', message: { role: 'user', content: [{ type: 'text', text: '数组提问' }] } }),
+    JSON.stringify({ type: 'assistant', sessionId: 's', message: { role: 'assistant', content: [{ type: 'text', text: '回答2' }] } }),
+  ].join('\n')
+  const out = convertClaudeJsonl(raw, { fileStem: 's' })
+  assert.equal(out.turns.length, 2)
+  assert.equal(out.turns[0].prompt, '字符串提问')
+  assert.equal(out.turns[1].prompt, '数组提问')
+  assert.equal(out.messages, 6) // 2 提问 + 3 回答（含 tool_use 条）+ 1 tool_result
+  assert.equal(out.toolCalls, 1)
+  assert.equal(out.droppedUserPrompts, 0)
+  assert.equal(out.droppedToolResults, 0)
+  assertMessageOrderLegal(out.events)
+})
+
+test('convertClaudeJsonl: 无法解析的 user content 计数并在 0 轮时显式标注丢失（issue #21）', () => {
+  const raw = [
+    '{"type":"user","sessionId":"t","message":{"role":"user","content":123}}',
+    '{"type":"assistant","sessionId":"t","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}',
+  ].join('\n')
+  const out = convertClaudeJsonl(raw, { fileStem: 't' })
+  assert.equal(out.turns.length, 0)
+  assert.equal(out.droppedUserPrompts, 1)
+  assert.ok(out.skipReason && out.skipReason.includes('0 轮') && out.skipReason.includes('无法解析'))
+})
+
 test('convertClaudeJsonl: sessionId 覆盖参数生效', () => {
   const out = convertClaudeJsonl(load('sess-simple-001.jsonl'), { sessionId: 'custom-id', sourcePath: 'D:\\demo\\proj\\sess-simple-001.jsonl' })
   assert.equal(out.meta.id, 'custom-id')
