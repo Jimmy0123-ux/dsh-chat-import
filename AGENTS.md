@@ -34,7 +34,7 @@ lib/             导入/同步驱动（按职责拆分，均消费 ctx、非纯�
                  memory/CLAUDE.md/skills 桥进 scoped systemPrompt/skills，默认关 env 开关）、opencode.mjs / zcode.mjs / hermes.mjs
                  （SQLite 读取，node:sqlite）、convert/（转换核心按源拆分）、export/（反向序列化按目标
                  格式拆分：claude.mjs / codex.mjs / grokbuild.mjs）
-convert.mjs      转换核心 re-export shim（已按源拆到 lib/convert/{core,claude,codex,chatgpt,cursor,gemini,reasonix,opencode,zcode,grokbuild,openclaw,hermes,pi,kimi,qoder,dsh,local-jsonl}.mjs，纯函数、零 DSH 依赖、可独立单测）
+convert.mjs      转换核心 re-export shim（已按源拆到 lib/convert/{core,claude,codex,chatgpt,cursor,gemini,reasonix,opencode,zcode,grokbuild,openclaw,hermes,pi,kimi,qoder,workbuddy,dsh,local-jsonl}.mjs，纯函数、零 DSH 依赖、可独立单测）
 export.mjs       反向导出序列化器 re-export shim（实体在 lib/export/claude.mjs——DSH 会话日志 → Claude
                  Code JSONL，纯函数、零 DSH 依赖；`exports["./export.mjs"]` 子路径契约保持不变）
 cordis.patch.yml bundle 声明（insert import-claude）
