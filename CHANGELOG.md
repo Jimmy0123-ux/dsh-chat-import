@@ -24,6 +24,13 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ### Fixed
 
+- **WorkBuddy 中途孤儿 function_call_result 误挂 lastStep（PR #23 审查发现）** —
+  孤儿结果（无匹配 `function_call`：转录从中途开始 / 调用被过滤，但存在当前步）
+  此前经 `|| lastStep` 误挂到最近一步，产出**无对应 `tool/call` 的孤儿
+  `tool/result` 事件**——恢复会话时模型 API 拒绝（与 claude 转换器同款纪律：
+  孤儿结果一律丢弃，绝不挂 lastStep）。现只按 `callId` 配对，孤儿结果丢弃并计入
+  `droppedOrphanResults`。
+
 - **Claude Code 数组格式 user 消息导入 0 轮（issue #21）** — 新版 Claude Code 对直接
   提问也写数组格式 `content`（`content:[{type:'text',...}]`），此前这类消息落入
   tool_result 分支被静默丢弃：全数组提问的转录导入成 0 轮空会话、混合转录（字符串 +

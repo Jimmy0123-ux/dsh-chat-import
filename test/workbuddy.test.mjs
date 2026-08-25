@@ -122,6 +122,28 @@ test('孤儿 function_call_result（无匹配调用且无当前步）丢弃', ()
   assert.equal(out.toolCalls, 0)
   assert.equal(out.turns.length, 0)
   assert.equal(out.skipped, 0)
+  assert.equal(out.droppedOrphanResults, 1)
+})
+
+test('中途孤儿 function_call_result（有当前步但无匹配调用）丢弃并计数，不误挂 lastStep', () => {
+  // 正常 call/result 配对之后来一条无匹配 function_call 的孤儿结果：此前会经
+  // `|| lastStep` 误挂到最近一步，产出无 tool/call 的孤儿 tool/result 事件
+  //（恢复会话时模型 API 拒绝）——现一律丢弃
+  const raw = wb([
+    userRec('<user_query>跑一下测试</user_query>'),
+    assistantRec('我用命令跑。'),
+    callRec('call_1', 'Bash', JSON.stringify({ command: 'npm test' })),
+    resultRec('call_1', 'ok 42 passed'),
+    resultRec('call_ghost', '孤儿结果'),
+  ])
+  const out = convertWorkbuddyJsonl(raw, { sourcePath: '/p/' + SID + '.jsonl' })
+  assert.equal(out.toolCalls, 1)
+  assert.equal(out.droppedOrphanResults, 1)
+  assertToolPairing(out.events)
+  // 日志里没有无 call 的孤儿 tool/result
+  const resultIds = out.events.filter((e) => e.type === 'tool/result')
+    .map((e) => e.data.message.content[0].toolCallId)
+  assert.deepEqual(resultIds, ['call_1'])
 })
 
 test('打断/草稿 function_call（isPartialAborted/discard）跳过，不补空结果', () => {
