@@ -26,6 +26,7 @@
 <div align="center">
 
 <img src="./assets/qoder.png" alt="Qoder CLI" width="600" />
+<img src="./assets/wb.png" alt="WorkBuddy" width="600" />
 
 **更新日志（英文）：** [CHANGELOG.md](CHANGELOG.md) · **路线图：** [ROADMAP.md](ROADMAP.md) · **互转协议：** [docs/INTERCHANGE.md](docs/INTERCHANGE.md)
 

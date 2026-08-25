@@ -26,6 +26,7 @@
 <div align="center">
 
 <img src="./assets/qoder.png" alt="Qoder CLI" width="600" />
+<img src="./assets/wb.png" alt="WorkBuddy" width="600" />
 
 **Changelog:** [CHANGELOG.md](CHANGELOG.md) · **Roadmap:** [ROADMAP.md](ROADMAP.md) · **Interchange protocol:** [docs/INTERCHANGE.md](docs/INTERCHANGE.md)
 
