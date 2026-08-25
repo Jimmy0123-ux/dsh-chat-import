@@ -25,7 +25,7 @@
 
 <div align="center">
 
-<img src="./assets/qoder.png" alt="Qoder CLI" width="600" />
+<img src="./assets/wb.png" alt="WorkBuddy" width="600" />
 
 **更新日志（英文）：** [CHANGELOG.md](CHANGELOG.md) · **路线图：** [ROADMAP.md](ROADMAP.md) · **互转协议：** [docs/INTERCHANGE.md](docs/INTERCHANGE.md)
 
@@ -35,7 +35,7 @@
 
 ## 💡 简介
 
-`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、MiMo Code、ZCode、Grok Build、OpenClaw、Pi Coding Agent、Hermes、Kimi CLI / Kimi Code、Qoder CLI 与 DSH 会话日志** 导入聊天历史，将工具调用、思考过程一并导入，成为无缝继续的 DeepSeek Harness 会话。源文件只读读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区。
+`dsh-chat-import` 从 **Claude Code、Codex、ChatGPT、Cursor、Gemini、Reasonix、opencode、MiMo Code、ZCode、Grok Build、OpenClaw、Pi Coding Agent、Hermes、Kimi CLI / Kimi Code、Qoder CLI、WorkBuddy 与 DSH 会话日志** 导入聊天历史，将工具调用、思考过程一并导入，成为无缝继续的 DeepSeek Harness 会话。源文件只读读取（绝不改写），不碰 DSH 引擎；每次导入都成为一条全新会话，并按源 `cwd` 归入对应工作区。
 
 同样支持导出和同步：`export_claude` 把 DSH 会话序列化回 Claude Code JSONL，Claude Code 可用 `--resume` 加载续聊；`sync_to_claude` 再把会话新增轮次增量写回 Claude Code 文件——带守卫、绝不静默覆盖；同一矩阵延伸到 **Codex rollout**（`export_codex`）与 **Kimi wire**（`export_kimi`），外加带 SHA-256 指纹与跨机器还原的**便携 interchange bundle**（`export_bundle` / `restore_bundle`）。
 
@@ -72,7 +72,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 
 | 能力 | 入口 | 说明 |
 | --- | --- | --- |
-| 批量导入 16+ 源 | `import_*`（17 个工具）· `scan_discover` · 侧边栏面板 · `/import` | 单个文件、目录或整个数据库，每段对话成为独立会话 |
+| 批量导入 17+ 源 | `import_*`（18 个工具）· `scan_discover` · 侧边栏面板 · `/import` | 单个文件、目录或整个数据库，每段对话成为独立会话 |
 | 全保真续聊 | 导入即 DSH 会话 | 工具调用/结果、思考、标题、模型、时间戳原样保留，按源 `cwd` 归组工作区 |
 | 矩阵导出 | `export_claude` / `export_codex` / `export_kimi` | DSH 会话序列化回 Claude / Codex / Kimi 格式，有损项逐条报告 |
 | 便携备份 | `export_bundle` / `restore_bundle` | SHA-256 双指纹的 interchange bundle，可跨机器还原 |
@@ -108,6 +108,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 | **Hermes** | `~/.hermes/`（Windows `%LOCALAPPDATA%\hermes`） | `import_hermes` |
 | **Kimi CLI / Kimi Code** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` · `~/.kimi-code/sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl` | `import_kimi` |
 | **Qoder CLI** | `~/.qoder/projects/<encoded-project>/<sessionId>.jsonl`（子代理在 `<sessionId>/subagents/*.jsonl`） | `import_qoder` |
+| **WorkBuddy**（腾讯 AI 编码应用） | `~/.workbuddy/projects/<project-hash>/<session-uuid>.jsonl` | `import_workbuddy` |
 | **DSH 会话日志** | `~/.dsh/sessions/<encoded-workspace>/<sessionId>/session.jsonl(.zstd)` | `import_dsh` |
 | **任意本地 JSONL** | 任意 `.jsonl` 文件 / 目录（自动识别格式） | `import_local_jsonl` |
 
@@ -122,6 +123,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 ```
 import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl" })
 import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
+import_workbuddy({ path: "C:\Users\<you>\.workbuddy\projects" })
 import_local_jsonl({ path: "D:\downloads\session.jsonl", format: "claude" })
 ```
 

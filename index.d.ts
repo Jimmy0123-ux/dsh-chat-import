@@ -47,6 +47,7 @@ export interface ToolSurface {
   import_hermes(options: ImportOptions): Promise<ImportResult>
   import_kimi(options: ImportOptions): Promise<ImportResult>
   import_qoder(options: ImportOptions): Promise<ImportResult>
+  import_workbuddy(options: ImportOptions): Promise<ImportResult>
   import_dsh(options: ImportOptions): Promise<ImportResult>
   import_local_jsonl(options: ImportOptions & { format?: LocalJsonlFormat }): Promise<ImportResult>
   import_agents(options?: AgentsImportOptions): Promise<AgentsImportResult>
@@ -501,7 +502,7 @@ export interface RetractResult {
 export type ScanFormat =
   | 'claude' | 'codex' | 'cursor' | 'gemini' | 'reasonix' | 'opencode'
   | 'zcode' | 'grokbuild' | 'openclaw' | 'pi' | 'hermes' | 'kimi'
-  | 'qoder' | 'chatgpt' | 'dsh'
+  | 'qoder' | 'chatgpt' | 'workbuddy' | 'dsh'
 
 export type ImportStatusLabel = 'imported' | 'partial' | 'not-imported' | 'archived'
 
