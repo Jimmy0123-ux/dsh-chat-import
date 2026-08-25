@@ -11,6 +11,17 @@ Release dates are the npm publish timestamps in Asia/Shanghai (UTC+8).
 
 ## [Unreleased]
 
+### Added
+
+- **WorkBuddy（腾讯 AI 编码应用）导入支持** — 新增 `import_workbuddy` 工具与
+  `workbuddy` 格式。WorkBuddy 每个会话一个 transcript
+  `~/.workbuddy/projects/<project-hash>/<session-uuid>.jsonl`，逐行事件 JSON：
+  `message`（user 提问从 `<user_query>` 提取、assistant 文本）、`reasoning`、成对
+  `function_call` / `function_call_result`（按 `callId` 配对，孤儿/打断草稿丢弃）、
+  运行期 `file-history-snapshot` 跳过。`scan_discover` 默认扫
+  `~/.workbuddy/projects`，标题取首条真实提问（注入过滤），cwd 取记录内值；
+  `FORMATS` / `/import` 来源名 / 面板 / `index.d.ts` 全链路接线。
+
 ### Fixed
 
 - **Claude Code 数组格式 user 消息导入 0 轮（issue #21）** — 新版 Claude Code 对直接

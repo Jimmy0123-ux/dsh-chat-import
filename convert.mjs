@@ -100,6 +100,10 @@ export {
 } from './lib/convert/qoder.mjs'
 
 export {
+  convertWorkbuddyJsonl,
+} from './lib/convert/workbuddy.mjs'
+
+export {
   convertDshJsonl,
 } from './lib/convert/dsh.mjs'
 

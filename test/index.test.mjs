@@ -260,12 +260,12 @@ function assertImportedMarker(events, { tool, sourceId, sourcePath }) {
   assert.ok(ev.data.importedAt > 0)
 }
 
-test('apply 注册三十一个工具（17 导入 + import_agents + doctor + import_mcp + import_settings + scan_discover + export_claude/codex/kimi + sync_to_claude + REQ-33 识别/撤回 + REQ-56 bundle 导出/还原 + verify_session）', () => {
+test('apply 注册三十二个工具（18 导入 + import_agents + doctor + import_mcp + import_settings + scan_discover + export_claude/codex/kimi + sync_to_claude + REQ-33 识别/撤回 + REQ-56 bundle 导出/还原 + verify_session）', () => {
   const { ctx, registered } = makeCtx({})
   apply(ctx)
-  assert.equal(registered.length, 31)
+  assert.equal(registered.length, 32)
   const names = registered.map((d) => d.name).sort()
-  assert.deepEqual(names, ['doctor', 'export_bundle', 'export_claude', 'export_codex', 'export_kimi', 'import_agents', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_dsh', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_local_jsonl', 'import_mcp', 'import_mimocode', 'import_openclaw', 'import_opencode', 'import_pi', 'import_qoder', 'import_reasonix', 'import_settings', 'import_zcode', 'list_imported_sessions', 'restore_bundle', 'retract_import', 'scan_discover', 'sync_to_claude', 'verify_session'])
+  assert.deepEqual(names, ['doctor', 'export_bundle', 'export_claude', 'export_codex', 'export_kimi', 'import_agents', 'import_chatgpt', 'import_claude', 'import_codex', 'import_cursor', 'import_dsh', 'import_gemini', 'import_grokbuild', 'import_hermes', 'import_kimi', 'import_local_jsonl', 'import_mcp', 'import_mimocode', 'import_openclaw', 'import_opencode', 'import_pi', 'import_qoder', 'import_reasonix', 'import_settings', 'import_workbuddy', 'import_zcode', 'list_imported_sessions', 'restore_bundle', 'retract_import', 'scan_discover', 'sync_to_claude', 'verify_session'])
   for (const def of registered) {
     if (['doctor', 'import_mcp', 'import_settings', 'export_claude', 'export_codex', 'export_kimi', 'export_bundle', 'restore_bundle', 'sync_to_claude', 'scan_discover', 'list_imported_sessions', 'retract_import', 'verify_session'].includes(def.name)) {
       // doctor / MCP / settings / 导出 / bundle / 写回 / 发现 / 识别 / 撤回 / 校验工具：单对象输出 schema（非 oneOf）
@@ -654,6 +654,99 @@ test('import_codex 幂等：重复导入同一文件已存在则跳过', async (
   const def = registeredDef(ctx, 'import_codex')
   const first = await def.execute({ path: 'D:\\demo\\codex\\a.jsonl' })
   const second = await def.execute({ path: 'D:\\demo\\codex\\a.jsonl' })
+  assert.equal(first.alreadyImported, false)
+  assert.equal(second.alreadyImported, true)
+  assert.equal(persistence.sessions.size, 1)
+})
+
+// ---- import_workbuddy 集成 ----
+
+// 合成 WorkBuddy transcript（事件词汇对齐 lib/convert/workbuddy.mjs）。
+const WB_SID = 'wb-sess-0001'
+const WB_CWD = 'D:\\demo\\workbuddy-proj'
+const WB_TS = 1787131157250
+function wbUser(text) {
+  return { id: 'u', timestamp: WB_TS, type: 'message', role: 'user', content: [{ type: 'input_text', text: '<user_query>' + text + '</user_query>' }], sessionId: WB_SID, cwd: WB_CWD }
+}
+function wbAssistant(text) {
+  return { id: 'a', timestamp: WB_TS + 1, type: 'message', role: 'assistant', content: [{ type: 'output_text', text }], sessionId: WB_SID, cwd: WB_CWD }
+}
+function wbReas(text) {
+  return { id: 'r', timestamp: WB_TS + 2, type: 'reasoning', rawContent: [{ type: 'reasoning_text', text }], sessionId: WB_SID, cwd: WB_CWD }
+}
+function wbCall(callId, name, args) {
+  return { id: 'c', timestamp: WB_TS + 3, type: 'function_call', callId, name, arguments: JSON.stringify(args), status: 'completed', sessionId: WB_SID, cwd: WB_CWD }
+}
+function wbResult(callId, text) {
+  return { id: 'x', timestamp: WB_TS + 4, type: 'function_call_result', callId, name: 'Bash', status: 'completed', output: { type: 'text', text }, sessionId: WB_SID, cwd: WB_CWD }
+}
+function wbTranscript(recs) {
+  return recs.map((r) => JSON.stringify(r)).join('\n')
+}
+
+test('import_workbuddy 单文件导入：落盘、归组、返回值符合 schema', async () => {
+  const src = 'D:\\demo\\workbuddy\\' + WB_SID + '.jsonl'
+  const { ctx, persistence, attached } = makeCtx({ [src]: wbTranscript([
+    wbUser('帮我看看这个项目'),
+    wbReas('先读结构再答'),
+    wbAssistant('好的，我先读一下结构。'),
+  ]) })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_workbuddy')
+  const value = await def.execute({ path: src })
+
+  assert.equal(value.mode, 'single')
+  assert.equal(value.sessionId, 'import-' + WB_SID)
+  assert.equal(value.turns, 1)
+  assert.equal(value.messages, 2) // user + assistant（环境变更声明不计）
+  assert.equal(value.toolCalls, 0)
+  assert.equal(value.alreadyImported, false)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get('import-' + WB_SID)
+  assert.ok(saved)
+  assert.equal(saved.meta.cwd, WB_CWD)
+  assert.equal(saved.meta.sourceId, WB_SID)
+  assert.equal(saved.events.at(-1).type, 'turn/end')
+  assert.ok(saved.events.every((e, i) => e.seq === i))
+  assertImportedMarker(saved.events, { tool: 'workbuddy', sourceId: WB_SID, sourcePath: src })
+  assert.equal(attached.length, 1)
+  assert.equal(attached[0].id, 'import-' + WB_SID)
+})
+
+test('import_workbuddy 工具历史：tool/result 带 sourceEventSeqs 且 output 落盘', async () => {
+  const src = 'D:\\demo\\workbuddy\\' + WB_SID + '.jsonl'
+  const { ctx, persistence } = makeCtx({ [src]: wbTranscript([
+    wbUser('跑一下测试'),
+    wbReas('用命令跑'),
+    wbAssistant('我用命令跑。'),
+    wbCall('call_1', 'Bash', { command: 'npm test' }),
+    wbResult('call_1', 'ok 42 passed'),
+  ]) })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_workbuddy')
+  const value = await def.execute({ path: src })
+  assert.equal(value.mode, 'single')
+  assert.equal(value.toolCalls, 1)
+  assert.deepEqual(validateJsonSchemaValue(def.output.schema, value), [])
+
+  const saved = persistence.sessions.get(value.sessionId)
+  const result = saved.events.find((e) => e.type === 'tool/result')
+  assert.ok(result)
+  assert.deepEqual(result.sourceEventSeqs, [saved.events.find((e) => e.type === 'tool/call').seq])
+  assert.equal(result.data.message.content[0].content[0].text, 'ok 42 passed')
+})
+
+test('import_workbuddy 幂等：重复导入同一文件已存在则跳过', async () => {
+  const src = 'D:\\demo\\workbuddy\\' + WB_SID + '.jsonl'
+  const { ctx, persistence } = makeCtx({ [src]: wbTranscript([
+    wbUser('第一问'),
+    wbAssistant('一答'),
+  ]) })
+  apply(ctx)
+  const def = registeredDef(ctx, 'import_workbuddy')
+  const first = await def.execute({ path: src })
+  const second = await def.execute({ path: src })
   assert.equal(first.alreadyImported, false)
   assert.equal(second.alreadyImported, true)
   assert.equal(persistence.sessions.size, 1)
@@ -3907,16 +4000,16 @@ test('REQ-41 apply 注册 webServer 路由（POST /api-import/sessions + /api-im
   assert.equal(imp.kind, 'exact')
   assert.equal(typeof sessions.handler, 'function')
   assert.equal(typeof imp.handler, 'function')
-  // 只加路由，不加工具：17 导入 + import_agents + doctor + import_mcp + import_settings + scan/export×3/sync/list/retract + bundle 导出/还原 + verify = 31，注册数不变
-  assert.equal(registered.length, 31)
+  // 只加路由，不加工具：18 导入 + import_agents + doctor + import_mcp + import_settings + scan/export×3/sync/list/retract + bundle 导出/还原 + verify = 32，注册数不变
+  assert.equal(registered.length, 32)
 })
 
-test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、31 工具照常注册、无路由', () => {
+test('REQ-41 webServer 可选：headless（无 webServer）apply 不抛错、32 工具照常注册、无路由', () => {
   const { ctx, webRoutes, registered } = makeCtx({}, { noWebServer: true })
   apply(ctx)
   // 缺 webServer 只是不注册面板路由，导入工具不受影响（CI headless 冒烟场景）
   assert.equal(webRoutes.length, 0)
-  assert.equal(registered.length, 31)
+  assert.equal(registered.length, 32)
 })
 
 test('REQ-41 /api-import/sessions handler：合成夹具经 discoverSessions 返回会话、未知来源 400', async () => {

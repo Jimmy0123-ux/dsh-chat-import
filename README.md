@@ -2,7 +2,7 @@
 
 # 📥 DSH Chat Import
 
-**Import 15+ external agent conversation histories into DeepSeek Harness as full-fidelity, resumable sessions — and export / sync back to Claude Code, Codex, Kimi, or a portable interchange bundle.**
+**Import 17+ external agent conversation histories into DeepSeek Harness as full-fidelity, resumable sessions — and export / sync back to Claude Code, Codex, Kimi, or a portable interchange bundle.**
 
 [![English](https://img.shields.io/badge/lang-English-blue.svg)](#) [![简体中文](https://img.shields.io/badge/lang-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red.svg)](README.zh-CN.md)
 
@@ -35,7 +35,7 @@
 
 ## 💡 Intro
 
-`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, MiMo Code, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes, Kimi CLI / Kimi Code, Qoder CLI and DSH session logs** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd`.
+`dsh-chat-import` imports conversation histories from **Claude Code, Codex, ChatGPT, Cursor, Gemini, Reasonix, opencode, MiMo Code, ZCode, Grok Build, OpenClaw, Pi Coding Agent, Hermes, Kimi CLI / Kimi Code, Qoder CLI, WorkBuddy and DSH session logs** — tool calls, reasoning and all — as **full-fidelity, resumable DeepSeek Harness sessions**. Source files are read **read-only** (never rewritten), the DSH engine is never touched, and every import becomes a fresh session grouped into the workspace of its source `cwd`.
 
 The reverse direction is covered too: `export_claude` serializes a DSH session back into a Claude Code JSONL transcript that Claude Code can load with `--resume` (read-only — your DSH log is never modified), `sync_to_claude` incrementally appends a session's new turns back to a Claude Code file — guarded, never silently overwriting — and the same matrix extends to **Codex rollouts** (`export_codex`) and **Kimi wire files** (`export_kimi`), plus a **portable interchange bundle** (`export_bundle` / `restore_bundle`) with SHA-256 fingerprints and cross-machine restore.
 
@@ -72,7 +72,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 
 | Capability | Entry points | Description |
 | --- | --- | --- |
-| Batch import from 16+ sources | `import_*` (17 tools) · `scan_discover` · sidebar panel · `/import` | A file, a directory or a whole database — each conversation becomes its own session |
+| Batch import from 17+ sources | `import_*` (18 tools) · `scan_discover` · sidebar panel · `/import` | A file, a directory or a whole database — each conversation becomes its own session |
 | Full-fidelity resume | Imported sessions | Tool calls & results, reasoning, titles, models and timestamps carry over; sessions group into the source `cwd` workspace |
 | Matrix export | `export_claude` / `export_codex` / `export_kimi` | Serialize DSH sessions back to Claude / Codex / Kimi formats; every lossy item is reported |
 | Portable backup | `export_bundle` / `restore_bundle` | Interchange bundle with dual SHA-256 fingerprints, restorable across machines |
@@ -108,6 +108,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 | **Hermes** | `~/.hermes/` (Windows `%LOCALAPPDATA%\hermes`) | `import_hermes` |
 | **Kimi CLI / Kimi Code** | `~/.kimi/sessions/<workdir-md5>/<sessionId>/wire.jsonl` · `~/.kimi-code/sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl` | `import_kimi` |
 | **Qoder CLI** | `~/.qoder/projects/<encoded-project>/<sessionId>.jsonl` (subagents in `<sessionId>/subagents/*.jsonl`) | `import_qoder` |
+| **WorkBuddy** (Tencent AI coding app) | `~/.workbuddy/projects/<project-hash>/<session-uuid>.jsonl` | `import_workbuddy` |
 | **DSH session logs** | `~/.dsh/sessions/<encoded-workspace>/<sessionId>/session.jsonl(.zstd)` | `import_dsh` |
 | **Any local JSONL** | any `.jsonl` file / directory (auto-detected) | `import_local_jsonl` |
 
