@@ -21,7 +21,7 @@
 
 </div>
 
-> **16+ agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, matrix interop / backup / handoff on the way out.
+> **17+ agent sources, one plugin** — full-fidelity import into DeepSeek Harness, seamless resume, matrix interop / backup / handoff on the way out.
 
 <div align="center">
 
@@ -123,6 +123,7 @@ All `import_*` tools share the same `path` semantics: a single file becomes one 
 ```
 import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl" })
 import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
+import_workbuddy({ path: "C:\Users\<you>\.workbuddy\projects" })
 import_local_jsonl({ path: "D:\downloads\session.jsonl", format: "claude" })
 ```
 

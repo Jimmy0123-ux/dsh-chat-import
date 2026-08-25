@@ -123,6 +123,7 @@ import_local_jsonl({ path: "D:\downloads\session.jsonl" })
 ```
 import_claude({ path: "C:\Users\<you>\.claude\projects\<slug>\<sessionId>.jsonl" })
 import_opencode({ path: "C:\Users\<you>\.local\share\opencode\opencode.db" })
+import_workbuddy({ path: "C:\Users\<you>\.workbuddy\projects" })
 import_local_jsonl({ path: "D:\downloads\session.jsonl", format: "claude" })
 ```
 
